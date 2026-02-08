@@ -491,6 +491,9 @@ pub fn initialize_workspace(
         initialize_panels(prompt_builder.clone(), window, cx);
         register_actions(app_state.clone(), workspace, window, cx);
 
+        // Show pinned Dashboard tab for every workspace
+        dashboard::show_dashboard(workspace, window, cx);
+
         workspace.focus_handle(cx).focus(window, cx);
     })
     .detach();

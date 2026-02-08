@@ -1,11 +1,12 @@
 use gpui::{
     actions, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window,
+    IntoElement, ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled,
+    WeakEntity, Window,
 };
 use task::{RevealStrategy, SpawnInTerminal, TaskId};
 use ui::{
-    prelude::*, ButtonLike, Divider, DividerColor, Icon, IconName, IconSize, Label, LabelSize,
-    Headline, HeadlineSize,
+    prelude::*, ButtonLike, Divider, DividerColor, Headline, HeadlineSize, Icon, IconName,
+    IconSize, Label, LabelSize, WithScrollbar as _,
 };
 use workspace::{
     item::{Item, ItemEvent},
@@ -384,6 +385,8 @@ pub struct Dashboard {
     // Delivery status
     delivery_status: DeliveryStatus,
     _delivery_scan_task: gpui::Task<()>,
+    // Scroll
+    scroll_handle: ScrollHandle,
 }
 
 impl Dashboard {
@@ -473,6 +476,7 @@ impl Dashboard {
                 pasta_ativa,
                 delivery_status: DeliveryStatus::default(),
                 _delivery_scan_task: delivery_scan_task,
+                scroll_handle: ScrollHandle::new(),
             }
         })
     }
@@ -776,7 +780,7 @@ impl Dashboard {
 // ---------------------------------------------------------------------------
 
 impl Render for Dashboard {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let pt_count = TOOLS
             .iter()
             .filter(|t| t.category == ToolCategory::ProTools)
@@ -802,11 +806,14 @@ impl Render for Dashboard {
                     .child(
                         v_flex()
                             .id("dashboard-scroll")
-                            .flex_1()
+                            .size_full()
+                            .min_w_0()
                             .pt_8()
+                            .pb_8()
                             .max_w_128()
                             .gap_6()
                             .overflow_y_scroll()
+                            .track_scroll(&self.scroll_handle)
                             // Header
                             .child(
                                 h_flex()
@@ -849,7 +856,8 @@ impl Render for Dashboard {
                             ))
                             // Delivery status
                             .child(self.render_delivery_status(cx)),
-                    ),
+                    )
+                    .vertical_scrollbar_for(&self.scroll_handle, window, cx),
             )
     }
 }
