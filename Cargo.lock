@@ -13120,7 +13120,6 @@ dependencies = [
  "client",
  "clock",
  "codestral",
- "collab_ui",
  "collections",
  "command_palette",
  "component",

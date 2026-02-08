@@ -803,9 +803,8 @@ impl Render for Dashboard {
                         v_flex()
                             .id("dashboard-scroll")
                             .flex_1()
-                            .justify_center()
+                            .pt_8()
                             .max_w_128()
-                            .mx_auto()
                             .gap_6()
                             .overflow_y_scroll()
                             // Header
