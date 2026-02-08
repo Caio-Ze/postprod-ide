@@ -60,7 +60,7 @@ actions!(
         OpenServerSettings,
         /// Quits the application.
         Quit,
-        /// Shows information about Zed.
+        /// Shows information about ProTools Studio.
         About,
         /// Opens the documentation website.
         OpenDocs,

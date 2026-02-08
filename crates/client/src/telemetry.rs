@@ -606,51 +606,24 @@ impl Telemetry {
     }
 
     pub async fn flush_events_inner(self: &Arc<Self>) -> Result<()> {
-        let (json_bytes, request_body) = {
-            let mut state = self.state.lock();
-            state.first_event_date_time = None;
-            let events = mem::take(&mut state.events_queue);
-            state.flush_events_task.take();
-            if events.is_empty() {
-                return Ok(());
+        // ProTools Studio: telemetry disabled — only write to local log file, never send to server
+        let mut state = self.state.lock();
+        state.first_event_date_time = None;
+        let events = mem::take(&mut state.events_queue);
+        state.flush_events_task.take();
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let mut json_bytes = Vec::new();
+
+        if let Some(file) = &mut state.log_file {
+            for event in &events {
+                json_bytes.clear();
+                serde_json::to_writer(&mut json_bytes, event)?;
+                file.write_all(&json_bytes)?;
+                file.write_all(b"\n")?;
             }
-
-            let mut json_bytes = Vec::new();
-
-            if let Some(file) = &mut state.log_file {
-                for event in &events {
-                    json_bytes.clear();
-                    serde_json::to_writer(&mut json_bytes, event)?;
-                    file.write_all(&json_bytes)?;
-                    file.write_all(b"\n")?;
-                }
-            }
-
-            (
-                json_bytes,
-                EventRequestBody {
-                    system_id: state.system_id.as_deref().map(Into::into),
-                    installation_id: state.installation_id.as_deref().map(Into::into),
-                    session_id: state.session_id.clone(),
-                    metrics_id: state.metrics_id.as_deref().map(Into::into),
-                    is_staff: state.is_staff,
-                    app_version: state.app_version.clone(),
-                    os_name: state.os_name.clone(),
-                    os_version: state.os_version.clone(),
-                    architecture: state.architecture.to_string(),
-
-                    release_channel: state
-                        .release_channel
-                        .map(|channel| channel.display_name().to_owned()),
-                    events,
-                },
-            )
-        };
-
-        let request = self.build_request(json_bytes, &request_body)?;
-        let response = self.http_client.send(request).await?;
-        if response.status() != 200 {
-            log::error!("Failed to send events: HTTP {:?}", response.status());
         }
 
         anyhow::Ok(())

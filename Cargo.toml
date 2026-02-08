@@ -47,6 +47,7 @@ members = [
     "crates/credentials_provider",
     "crates/dap",
     "crates/dap_adapters",
+    "crates/dashboard",
     "crates/db",
     "crates/debug_adapter_extension",
     "crates/debugger_tools",
@@ -294,6 +295,7 @@ credentials_provider = { path = "crates/credentials_provider" }
 crossbeam = "0.8.4"
 dap = { path = "crates/dap" }
 dap_adapters = { path = "crates/dap_adapters" }
+dashboard = { path = "crates/dashboard" }
 db = { path = "crates/db" }
 debug_adapter_extension = { path = "crates/debug_adapter_extension" }
 debugger_tools = { path = "crates/debugger_tools" }
