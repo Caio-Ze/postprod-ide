@@ -15,4 +15,5 @@ path = "src/dashboard.rs"
 gpui.workspace = true
 task.workspace = true
 ui.workspace = true
+util.workspace = true
 workspace.workspace = true

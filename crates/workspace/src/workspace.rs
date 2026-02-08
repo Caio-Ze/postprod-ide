@@ -968,6 +968,12 @@ struct GlobalAppState(Weak<AppState>);
 
 impl Global for GlobalAppState {}
 
+/// Pro Tools session name, set by the Dashboard's polling task.
+/// Used by `update_window_title` to append the active session to the title bar.
+pub struct ProToolsSessionName(pub String);
+
+impl Global for ProToolsSessionName {}
+
 pub struct WorkspaceStore {
     workspaces: HashSet<WindowHandle<Workspace>>,
     client: Arc<Client>,
@@ -5010,7 +5016,15 @@ impl Workspace {
         }
 
         if title.is_empty() {
-            title = "empty project".to_string();
+            title = "ProTools Studio".to_string();
+        }
+
+        // Append Pro Tools session name if available
+        if let Some(session) = cx.try_global::<ProToolsSessionName>() {
+            if !session.0.is_empty() {
+                title.push_str(" — ");
+                title.push_str(&session.0);
+            }
         }
 
         if let Some(path) = self.active_item(cx).and_then(|item| item.project_path(cx)) {

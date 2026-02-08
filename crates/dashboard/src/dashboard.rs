@@ -1,6 +1,6 @@
 use gpui::{
-    actions, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, SharedString, Styled, WeakEntity, Window,
+    actions, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, WeakEntity, Window,
 };
 use task::{RevealStrategy, SpawnInTerminal, TaskId};
 use ui::{
@@ -9,10 +9,11 @@ use ui::{
 };
 use workspace::{
     item::{Item, ItemEvent},
-    with_active_or_new_workspace, Workspace,
+    with_active_or_new_workspace, ProToolsSessionName, Workspace,
 };
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------
 // Action
@@ -255,6 +256,118 @@ const TOOLS: &[ToolCard] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// Delivery status
+// ---------------------------------------------------------------------------
+
+#[derive(Default, Clone)]
+struct DeliveryStatus {
+    tv_count: usize,
+    net_count: usize,
+    spot_count: usize,
+    mp3_count: usize,
+    warnings: Vec<String>,
+}
+
+fn suite_root() -> PathBuf {
+    util::paths::home_dir().join("ProTools_Suite")
+}
+
+fn scan_delivery_folder() -> DeliveryStatus {
+    let dir = suite_root().join("4_Finalizados");
+    let mut status = DeliveryStatus::default();
+
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return status;
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_lowercase();
+
+        if path.is_dir() {
+            // Scan subdirectories named TV/, NET/, SPOT/
+            let subdir_name = name.as_str();
+            if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                let count = sub_entries
+                    .flatten()
+                    .filter(|e| e.path().is_file())
+                    .count();
+                match subdir_name {
+                    "tv" => status.tv_count += count,
+                    "net" => status.net_count += count,
+                    "spot" => status.spot_count += count,
+                    _ => {}
+                }
+            }
+        } else if path.is_file() {
+            // Classify by filename pattern
+            if name.contains("_tv") {
+                status.tv_count += 1;
+            }
+            if name.contains("_net") {
+                status.net_count += 1;
+            }
+            if name.contains("_spot") {
+                status.spot_count += 1;
+            }
+            if name.ends_with(".mp3") {
+                status.mp3_count += 1;
+            }
+        }
+    }
+
+    // Generate warnings
+    let has_any = status.tv_count > 0
+        || status.net_count > 0
+        || status.spot_count > 0
+        || status.mp3_count > 0;
+
+    if has_any {
+        if status.tv_count == 0 {
+            status.warnings.push("Falta: arquivos TV".to_string());
+        }
+        if status.net_count == 0 {
+            status.warnings.push("Falta: arquivos NET".to_string());
+        }
+        if status.spot_count == 0 {
+            status.warnings.push("Falta: arquivos SPOT".to_string());
+        }
+        if status.tv_count > 0 && status.net_count > 0 && status.tv_count != status.net_count {
+            status.warnings.push(format!(
+                "TV ({}) != NET ({})",
+                status.tv_count, status.net_count
+            ));
+        }
+    }
+
+    status
+}
+
+// ---------------------------------------------------------------------------
+// Pasta ativa helpers
+// ---------------------------------------------------------------------------
+
+fn pasta_ativa_file() -> PathBuf {
+    suite_root().join(".pasta_ativa")
+}
+
+fn read_pasta_ativa() -> Option<PathBuf> {
+    std::fs::read_to_string(pasta_ativa_file())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+}
+
+fn write_pasta_ativa(path: &Path) {
+    let _ = std::fs::write(pasta_ativa_file(), path.to_string_lossy().as_bytes());
+}
+
+// ---------------------------------------------------------------------------
 // Dashboard struct
 // ---------------------------------------------------------------------------
 
@@ -262,6 +375,15 @@ pub struct Dashboard {
     workspace: WeakEntity<Workspace>,
     focus_handle: FocusHandle,
     runtime_path: PathBuf,
+    // Session polling
+    session_path: Option<String>,
+    session_name: Option<String>,
+    _session_poll_task: gpui::Task<()>,
+    // Pasta ativa
+    pasta_ativa: Option<PathBuf>,
+    // Delivery status
+    delivery_status: DeliveryStatus,
+    _delivery_scan_task: gpui::Task<()>,
 }
 
 impl Dashboard {
@@ -274,22 +396,111 @@ impl Dashboard {
                 )
             });
 
-        cx.new(|cx| Self {
-            workspace: workspace.weak_handle(),
-            focus_handle: cx.focus_handle(),
-            runtime_path,
+        let pasta_ativa = read_pasta_ativa();
+
+        cx.new(|cx| {
+            // Spawn session polling task (every 5 seconds)
+            let poll_binary = runtime_path
+                .join("bin/Session_Monitor/bin/get_session_path");
+            let session_poll_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
+                loop {
+                    let binary = poll_binary.clone();
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            std::process::Command::new(&binary)
+                                .output()
+                                .ok()
+                                .filter(|o| o.status.success())
+                                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                                .filter(|s| !s.is_empty())
+                        })
+                        .await;
+
+                    let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                        let name = result.as_ref().map(|p| {
+                            Path::new(p)
+                                .file_name()
+                                .unwrap_or_default()
+                                .to_string_lossy()
+                                .to_string()
+                        });
+                        dashboard.session_path = result;
+                        dashboard.session_name = name;
+
+                        // Update the global for window title
+                        let global_name = dashboard
+                            .session_name
+                            .clone()
+                            .unwrap_or_default();
+                        cx.set_global(ProToolsSessionName(global_name));
+
+                        cx.notify();
+                    });
+
+                    cx.background_executor()
+                        .timer(Duration::from_secs(5))
+                        .await;
+                }
+            });
+
+            // Spawn delivery scan task (every 15 seconds)
+            let delivery_scan_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
+                loop {
+                    let status = cx
+                        .background_executor()
+                        .spawn(async { scan_delivery_folder() })
+                        .await;
+
+                    let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                        dashboard.delivery_status = status;
+                        cx.notify();
+                    });
+
+                    cx.background_executor()
+                        .timer(Duration::from_secs(15))
+                        .await;
+                }
+            });
+
+            Self {
+                workspace: workspace.weak_handle(),
+                focus_handle: cx.focus_handle(),
+                runtime_path,
+                session_path: None,
+                session_name: None,
+                _session_poll_task: session_poll_task,
+                pasta_ativa,
+                delivery_status: DeliveryStatus::default(),
+                _delivery_scan_task: delivery_scan_task,
+            }
         })
     }
 
     fn spawn_tool(
         tool: &ToolCard,
         runtime_path: &PathBuf,
+        pasta_ativa: &Option<PathBuf>,
         workspace: &mut Workspace,
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
-        let cwd = runtime_path.join(tool.cwd);
-        let command = cwd.join(tool.binary).to_string_lossy().to_string();
+        // Standalone tools use pasta_ativa as cwd when set
+        let is_standalone = matches!(tool.category, ToolCategory::Audio | ToolCategory::File);
+        let cwd = if is_standalone {
+            if let Some(pa) = &pasta_ativa {
+                pa.clone()
+            } else {
+                runtime_path.join(tool.cwd)
+            }
+        } else {
+            runtime_path.join(tool.cwd)
+        };
+        let command = runtime_path
+            .join(tool.cwd)
+            .join(tool.binary)
+            .to_string_lossy()
+            .to_string();
 
         let spawn = SpawnInTerminal {
             id: TaskId(format!("dashboard-{}", tool.id)),
@@ -310,6 +521,164 @@ impl Dashboard {
         workspace.spawn_in_terminal(spawn, window, cx).detach();
     }
 
+    fn pick_pasta_ativa(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: None,
+        });
+
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                if let Some(path) = paths.into_iter().next() {
+                    write_pasta_ativa(&path);
+                    let _ = this.update(cx, |this, cx| {
+                        this.pasta_ativa = Some(path);
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    // -- Rendering helpers --
+
+    fn render_session_status(&self, cx: &App) -> impl IntoElement {
+        let (dot_color, label_text) = match &self.session_name {
+            Some(name) => (Color::Created, format!("Pro Tools: {}", name)),
+            None => (Color::Muted, "Pro Tools: Desconectado".to_string()),
+        };
+
+        let dot_hsla = dot_color.color(cx);
+
+        h_flex()
+            .w_full()
+            .px_2()
+            .py_1()
+            .gap_2()
+            .child(
+                div()
+                    .size(px(8.))
+                    .rounded_full()
+                    .bg(dot_hsla),
+            )
+            .child(
+                Label::new(label_text)
+                    .size(LabelSize::Small)
+                    .color(dot_color),
+            )
+    }
+
+    fn render_pasta_ativa(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let display = match &self.pasta_ativa {
+            Some(p) => p
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string(),
+            None => "(nenhuma)".to_string(),
+        };
+
+        let label_color = if self.pasta_ativa.is_some() {
+            Color::Default
+        } else {
+            Color::Muted
+        };
+
+        ButtonLike::new("pasta-ativa-btn")
+            .full_width()
+            .size(ButtonSize::Medium)
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_2()
+                    .child(
+                        Icon::new(IconName::Folder)
+                            .color(Color::Accent)
+                            .size(IconSize::Small),
+                    )
+                    .child(
+                        v_flex()
+                            .child(
+                                Label::new("Pasta Ativa")
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            )
+                            .child(Label::new(display).color(label_color)),
+                    ),
+            )
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.pick_pasta_ativa(cx);
+            }))
+    }
+
+    fn render_delivery_status(&self, _cx: &App) -> impl IntoElement {
+        let status = &self.delivery_status;
+        let has_any = status.tv_count > 0
+            || status.net_count > 0
+            || status.spot_count > 0
+            || status.mp3_count > 0;
+
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(
+                h_flex()
+                    .px_1()
+                    .mb_2()
+                    .gap_2()
+                    .child(
+                        Label::new("ENTREGA")
+                            .color(Color::Muted)
+                            .size(LabelSize::XSmall),
+                    )
+                    .child(Divider::horizontal().color(DividerColor::BorderVariant)),
+            )
+            .when(!has_any, |el| {
+                el.child(
+                    h_flex()
+                        .px_2()
+                        .child(
+                            Label::new("Nenhum arquivo em 4_Finalizados/")
+                                .color(Color::Muted)
+                                .size(LabelSize::Small),
+                        ),
+                )
+            })
+            .when(has_any, |el| {
+                el.child(
+                    h_flex()
+                        .px_2()
+                        .gap_4()
+                        .child(Self::delivery_badge("TV", status.tv_count, status.tv_count > 0))
+                        .child(Self::delivery_badge("NET", status.net_count, status.net_count > 0))
+                        .child(Self::delivery_badge("SPOT", status.spot_count, status.spot_count > 0))
+                        .child(Self::delivery_badge("MP3", status.mp3_count, status.mp3_count > 0)),
+                )
+                .children(status.warnings.iter().map(|w| {
+                    h_flex()
+                        .px_2()
+                        .child(
+                            Label::new(format!("  {}", w))
+                                .color(Color::Warning)
+                                .size(LabelSize::XSmall),
+                        )
+                }))
+            })
+    }
+
+    fn delivery_badge(label: &str, count: usize, ok: bool) -> impl IntoElement {
+        let indicator = if ok { " OK" } else { " --" };
+        let color = if ok { Color::Created } else { Color::Muted };
+
+        h_flex()
+            .gap_1()
+            .child(Label::new(format!("{}: {}", label, count)).size(LabelSize::Small))
+            .child(Label::new(indicator).size(LabelSize::XSmall).color(color))
+    }
+
     fn render_section(
         &self,
         category: ToolCategory,
@@ -321,6 +690,7 @@ impl Dashboard {
 
         let runtime_path = self.runtime_path.clone();
         let workspace = self.workspace.clone();
+        let pasta_ativa = self.pasta_ativa.clone();
 
         v_flex()
             .w_full()
@@ -341,6 +711,7 @@ impl Dashboard {
                 move |(idx, tool)| {
                     let runtime_path = runtime_path.clone();
                     let workspace = workspace.clone();
+                    let pasta_ativa = pasta_ativa.clone();
                     let tool_id = tool.id;
                     let tool_label = tool.label;
                     let tool_description = tool.description;
@@ -374,6 +745,7 @@ impl Dashboard {
                         )
                         .on_click(move |_, window, cx| {
                             let runtime_path = runtime_path.clone();
+                            let pasta_ativa = pasta_ativa.clone();
                             let _ = workspace.update(cx, |workspace, cx| {
                                 let card = ToolCard {
                                     id: tool_id,
@@ -384,7 +756,14 @@ impl Dashboard {
                                     cwd: tool_cwd,
                                     category: tool_category,
                                 };
-                                Self::spawn_tool(&card, &runtime_path, workspace, window, cx);
+                                Self::spawn_tool(
+                                    &card,
+                                    &runtime_path,
+                                    &pasta_ativa,
+                                    workspace,
+                                    window,
+                                    cx,
+                                );
                             });
                         })
                 },
@@ -429,6 +808,7 @@ impl Render for Dashboard {
                             .mx_auto()
                             .gap_6()
                             .overflow_y_scroll()
+                            // Header
                             .child(
                                 h_flex()
                                     .w_full()
@@ -456,13 +836,20 @@ impl Render for Dashboard {
                                             ),
                                     ),
                             )
+                            // Session status bar
+                            .child(self.render_session_status(cx))
+                            // Pasta ativa
+                            .child(self.render_pasta_ativa(cx))
+                            // Tool sections
                             .child(self.render_section(ToolCategory::ProTools, 0, cx))
                             .child(self.render_section(ToolCategory::Audio, pt_count, cx))
                             .child(self.render_section(
                                 ToolCategory::File,
                                 pt_count + audio_count,
                                 cx,
-                            )),
+                            ))
+                            // Delivery status
+                            .child(self.render_delivery_status(cx)),
                     ),
             )
     }

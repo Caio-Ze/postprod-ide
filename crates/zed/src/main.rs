@@ -15,7 +15,6 @@ use collab_ui::channel_view::ChannelView;
 use collections::HashMap;
 use crashes::InitCrashHandler;
 use db::kvp::{GLOBAL_KEY_VALUE_STORE, KEY_VALUE_STORE};
-use editor::Editor;
 use extension::ExtensionHostProxy;
 use fs::{Fs, RealFs};
 use futures::{StreamExt, channel::oneshot, future};
@@ -1372,12 +1371,26 @@ async fn restore_or_create_workspace(app_state: Arc<AppState>, cx: &mut AsyncApp
     } else if matches!(KEY_VALUE_STORE.read_kvp(FIRST_OPEN), Ok(None)) {
         cx.update(|cx| show_onboarding_view(app_state, cx)).await?;
     } else {
-        cx.update(|cx| {
-            workspace::open_new(
-                Default::default(),
+        // Ensure ~/ProTools_Suite/ folder structure exists
+        let suite_root = util::paths::home_dir().join("ProTools_Suite");
+        for sub in [
+            "1_Sessões",
+            "2_Imports",
+            "3_Processamento",
+            "4_Finalizados",
+            "5_Arquivo",
+        ] {
+            let _ = std::fs::create_dir_all(suite_root.join(sub));
+        }
+
+        // Open workspace with ProTools_Suite as worktree root
+        let task = cx.update(|cx| {
+            Workspace::new_local(
+                vec![suite_root],
                 app_state,
-                cx,
-                |workspace, window, cx| {
+                None,
+                None,
+                Some(Box::new(|workspace, window, cx| {
                     let restore_on_startup = WorkspaceSettings::get_global(cx).restore_on_startup;
                     match restore_on_startup {
                         workspace::RestoreOnStartupBehavior::Launchpad => {}
@@ -1385,10 +1398,11 @@ async fn restore_or_create_workspace(app_state: Arc<AppState>, cx: &mut AsyncApp
                             dashboard::show_dashboard(workspace, window, cx);
                         }
                     }
-                },
+                })),
+                cx,
             )
-        })
-        .await?;
+        });
+        task.await?;
     }
 
     Ok(())

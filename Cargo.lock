@@ -4638,6 +4638,7 @@ dependencies = [
  "gpui",
  "task",
  "ui",
+ "util",
  "workspace",
 ]
 
