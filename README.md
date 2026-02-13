@@ -2,6 +2,8 @@
 
 A native macOS audio post-production IDE built on top of [Zed](https://github.com/zed-industries/zed). ProTools Studio keeps everything Zed offers — a GPU-accelerated editor, integrated terminal, AI chat, LSP, and git — and adds a dashboard purpose-built for audio workflows with Avid Pro Tools.
 
+![ProTools Studio Dashboard](DOCS/dashboard-screenshot.png)
+
 ## What makes this different
 
 Most Pro Tools automation tools are either proprietary plugins, fragile AppleScript wrappers, or scattered shell scripts. ProTools Studio takes a different approach:
