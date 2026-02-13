@@ -161,7 +161,7 @@ The application is in active daily use for real audio post-production work on ma
 - Code signing for macOS distribution
 - Installer and first-launch experience
 
-For developers interested in the architecture: see [DOCS/PROJECT_OVERVIEW.md](DOCS/PROJECT_OVERVIEW.md) for a detailed development log, and the companion [PROTOOLS_SDK_PTSL](https://github.com/Caio-Ze/PROTOOLS_SDK_PTSL) repository for the tool binaries.
+For developers interested in the tool binaries: see the companion [PROTOOLS_SDK_PTSL](https://github.com/Caio-Ze/PROTOOLS_SDK_PTSL) repository.
 
 ## License
 

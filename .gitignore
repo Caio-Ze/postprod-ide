@@ -22,6 +22,7 @@
 .vscode
 .wrangler
 .perf-runs
+/private/
 /assets/*licenses.*
 /crates/collab/seed.json
 /crates/theme/schemas/theme.json
