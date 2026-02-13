@@ -17,8 +17,6 @@ Audio post-production has a few automation options today, each with trade-offs:
 | **Session awareness** | Live polling (5s) | Via SFX framework | Manual | Manual | Manual |
 | **System-wide hotkeys** | Yes (CGEventTap) | Yes (MIDI/OSC/keys) | Yes | No | No |
 | **Custom tool authoring** | Rust, edit + rebuild in-app | JavaScript | GUI macro builder | Python | Any language |
-| **Cost** | Free / open source | Free tier, $12-20/mo for Pro | $36 one-time | Free / open source | Free |
-| **Open source** | Yes (GPL-3.0) | No | No | Yes (BSD) | Varies |
 
 ### What SoundFlow does well
 
@@ -49,8 +47,6 @@ ProTools Studio is not trying to replace SoundFlow's macro library. It solves a 
 - **Native gRPC, not GUI simulation** — Like py-ptsl, ProTools Studio talks to Pro Tools over the official PTSL gRPC protocol. Unlike Keyboard Maestro (which simulates mouse clicks and keystrokes and [breaks when Avid changes the UI](https://duc.avid.com/showthread.php?t=428108)), gRPC commands are stable across Pro Tools versions.
 
 - **The tools are the project** — The 31 CLI tools are Rust binaries that live in the same workspace. You can open a tool's source, fix a bug, `cargo build` in the integrated terminal, and immediately re-run it from the dashboard. The IDE and the runtime are one thing. No other audio tool offers this.
-
-- **No subscription** — SoundFlow's Pro tier costs $12-20/month. Keyboard Maestro is $36. ProTools Studio is free and open source. You own every line of code and can modify anything.
 
 ## Current state
 
@@ -140,4 +136,6 @@ The tool binaries that the dashboard invokes live in a separate repo:
 
 ## License
 
-This project is a fork of [Zed](https://github.com/zed-industries/zed). The original Zed code is licensed under AGPL-3.0 and Apache-2.0. New code added for ProTools Studio is licensed under GPL-3.0-or-later.
+This repository (the IDE) is a fork of [Zed](https://github.com/zed-industries/zed) and is open source. The original Zed code is licensed under AGPL-3.0 and Apache-2.0. New code added for ProTools Studio is licensed under GPL-3.0-or-later.
+
+The companion tool binaries ([PROTOOLS_SDK_PTSL](https://github.com/Caio-Ze/PROTOOLS_SDK_PTSL)) are distributed separately and are not covered by this license.
