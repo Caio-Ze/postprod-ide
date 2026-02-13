@@ -610,10 +610,28 @@ fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
     let action = RunDashboardTool {
         tool_id: tool_id.to_string(),
     };
-    with_active_or_new_workspace(cx, move |workspace, window, cx| {
-        ensure_dashboard(workspace, window, cx);
-        window.dispatch_action(action.boxed_clone(), cx);
-    });
+
+    // Find an existing workspace window instead of creating a new one.
+    // cx.active_window() returns None when another app is focused,
+    // so we iterate all windows to find an existing Workspace.
+    let workspace_handle = cx
+        .active_window()
+        .and_then(|w| w.downcast::<Workspace>())
+        .or_else(|| {
+            cx.windows()
+                .into_iter()
+                .find_map(|w| w.downcast::<Workspace>())
+        });
+
+    if let Some(workspace) = workspace_handle {
+        cx.activate(true);
+        workspace
+            .update(cx, |workspace, window, cx| {
+                ensure_dashboard(workspace, window, cx);
+                window.dispatch_action(action.boxed_clone(), cx);
+            })
+            .log_err();
+    }
 }
 
 fn save_global_hotkey(keystroke_str: &str, tool_id: &str) {
