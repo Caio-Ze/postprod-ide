@@ -4636,7 +4636,9 @@ name = "dashboard"
 version = "0.1.0"
 dependencies = [
  "gpui",
+ "serde",
  "task",
+ "toml 0.8.23",
  "ui",
  "util",
  "workspace",

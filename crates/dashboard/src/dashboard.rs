@@ -1,8 +1,9 @@
 use gpui::{
-    actions, App, AppContext, AsyncApp, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled,
-    WeakEntity, Window,
+    actions, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, IntoElement, ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString,
+    Styled, WeakEntity, Window,
 };
+use serde::Deserialize;
 use task::{RevealStrategy, SpawnInTerminal, TaskId};
 use ui::{
     prelude::*, ButtonLike, Divider, DividerColor, Headline, HeadlineSize, Icon, IconName,
@@ -10,8 +11,10 @@ use ui::{
 };
 use workspace::{
     item::{Item, ItemEvent},
-    with_active_or_new_workspace, ProToolsSessionName, Workspace,
+    with_active_or_new_workspace, OpenOptions, ProToolsSessionName, Workspace,
 };
+
+use util::ResultExt as _;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -82,6 +85,7 @@ pub fn show_dashboard(workspace: &mut Workspace, window: &mut Window, cx: &mut C
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ToolCategory {
     ProTools,
+    Mixer,
     Audio,
     File,
 }
@@ -90,6 +94,7 @@ impl ToolCategory {
     fn label(self) -> &'static str {
         match self {
             Self::ProTools => "PRO TOOLS",
+            Self::Mixer => "MIXER / AGENT TOOLS",
             Self::Audio => "AUDIO",
             Self::File => "FILE",
         }
@@ -104,10 +109,11 @@ struct ToolCard {
     binary: &'static str,
     cwd: &'static str,
     category: ToolCategory,
+    needs_session: bool,
 }
 
 const TOOLS: &[ToolCard] = &[
-    // --- Pro Tools Actions (PTSL gRPC) ---
+    // --- Pro Tools Actions (PTSL gRPC via runtime) ---
     ToolCard {
         id: "bounceAll",
         label: "Bounce All (TV + NET + SPOT)",
@@ -116,6 +122,7 @@ const TOOLS: &[ToolCard] = &[
         binary: "rust-bounce-to-all-configurable-bin",
         cwd: "bin/Bounce",
         category: ToolCategory::ProTools,
+        needs_session: false,
     },
     ToolCard {
         id: "sessionMonitor",
@@ -125,6 +132,7 @@ const TOOLS: &[ToolCard] = &[
         binary: "session-monitor",
         cwd: "bin/Session_Monitor",
         category: ToolCategory::ProTools,
+        needs_session: false,
     },
     ToolCard {
         id: "importSpotClips",
@@ -134,6 +142,7 @@ const TOOLS: &[ToolCard] = &[
         binary: "import-and-spot-clip-notimelimit",
         cwd: "bin/Session_Monitor/bin",
         category: ToolCategory::ProTools,
+        needs_session: false,
     },
     ToolCard {
         id: "importSfx",
@@ -143,6 +152,7 @@ const TOOLS: &[ToolCard] = &[
         binary: "sfx_workflow_v3_json",
         cwd: "bin/SFX_Workflow_Runtime",
         category: ToolCategory::ProTools,
+        needs_session: false,
     },
     ToolCard {
         id: "saveIncrement",
@@ -152,15 +162,17 @@ const TOOLS: &[ToolCard] = &[
         binary: "save_session_increment",
         cwd: "tools",
         category: ToolCategory::ProTools,
+        needs_session: false,
     },
     ToolCard {
         id: "tvToSpotWorkflow",
-        label: "TV → SPOT Workflow",
+        label: "TV -> SPOT Workflow",
         description: "Full TV to SPOT session conversion pipeline",
         icon: IconName::ForwardArrow,
         binary: "from-tv-to-spot-workflow",
         cwd: "bin/Pro_Tools_Batch_Processing_Runtime/bin",
         category: ToolCategory::ProTools,
+        needs_session: false,
     },
     ToolCard {
         id: "batchProcessing",
@@ -170,6 +182,7 @@ const TOOLS: &[ToolCard] = &[
         binary: "start-scripts-pro-tools-batch-processing",
         cwd: "bin/Pro_Tools_Batch_Processing_Runtime",
         category: ToolCategory::ProTools,
+        needs_session: false,
     },
     ToolCard {
         id: "voiceToText",
@@ -179,6 +192,118 @@ const TOOLS: &[ToolCard] = &[
         binary: "RUST_VOICE_TO_TEXT_CLI",
         cwd: "bin/Session_Monitor/bin",
         category: ToolCategory::ProTools,
+        needs_session: false,
+    },
+    // --- Mixer / Agent Tools (PTSL gRPC via agent-tools) ---
+    ToolCard {
+        id: "agentTransport",
+        label: "Transport (Play/Stop/Status)",
+        description: "Control Pro Tools transport state",
+        icon: IconName::PlayFilled,
+        binary: "agent-transport",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: false,
+    },
+    ToolCard {
+        id: "agentMuteSolo",
+        label: "Mute / Solo",
+        description: "Mute, unmute, solo, or unsolo tracks",
+        icon: IconName::AudioOff,
+        binary: "agent-mute-solo",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: true,
+    },
+    ToolCard {
+        id: "agentTrackVolume",
+        label: "Track Volume",
+        description: "Set track fader volume in dB (automation must be Read mode)",
+        icon: IconName::AudioOn,
+        binary: "agent-track-volume",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: true,
+    },
+    ToolCard {
+        id: "agentManageTracks",
+        label: "Manage Tracks",
+        description: "List, create, hide, inactivate, solo tracks",
+        icon: IconName::ListTree,
+        binary: "agent-manage-tracks",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: true,
+    },
+    ToolCard {
+        id: "agentRenameTrack",
+        label: "Rename Track",
+        description: "Rename a track in the session",
+        icon: IconName::Replace,
+        binary: "agent-rename-track",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: true,
+    },
+    ToolCard {
+        id: "agentRenameClip",
+        label: "Rename Clip",
+        description: "Rename a clip in the open session",
+        icon: IconName::Replace,
+        binary: "agent-rename-clip",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: false,
+    },
+    ToolCard {
+        id: "agentDeleteTracks",
+        label: "Delete Tracks",
+        description: "Delete one or more tracks from session",
+        icon: IconName::Trash,
+        binary: "agent-delete-tracks",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: true,
+    },
+    ToolCard {
+        id: "agentGetClipList",
+        label: "Get Clip List",
+        description: "List all clips in session",
+        icon: IconName::FileDoc,
+        binary: "agent-get-clip-list",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: true,
+    },
+    ToolCard {
+        id: "agentTimelineSelection",
+        label: "Timeline Selection",
+        description: "Get or set timeline in/out points",
+        icon: IconName::SelectAll,
+        binary: "agent-timeline-selection",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: true,
+    },
+    ToolCard {
+        id: "agentSaveSessionAs",
+        label: "Save Session As",
+        description: "Save session under a new name/location",
+        icon: IconName::Check,
+        binary: "agent-save-session-as",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: true,
+    },
+    ToolCard {
+        id: "agentBounceExport",
+        label: "Bounce Export",
+        description: "Bounce current session to WAV or MP3",
+        icon: IconName::AudioOn,
+        binary: "agent-bounce-export",
+        cwd: "",
+        category: ToolCategory::Mixer,
+        needs_session: false,
     },
     // --- Audio Tools (standalone) ---
     ToolCard {
@@ -189,6 +314,7 @@ const TOOLS: &[ToolCard] = &[
         binary: "audio-normalizer-configurable",
         cwd: "bin/Bounce/bin",
         category: ToolCategory::Audio,
+        needs_session: false,
     },
     ToolCard {
         id: "maximizeAudio",
@@ -198,15 +324,17 @@ const TOOLS: &[ToolCard] = &[
         binary: "audio-normalizer-maximize",
         cwd: "tools",
         category: ToolCategory::Audio,
+        needs_session: false,
     },
     ToolCard {
         id: "convertMp3Wav",
-        label: "Convert MP3 ↔ WAV",
+        label: "Convert MP3 / WAV",
         description: "Batch MP3/WAV conversion at 320kbps",
         icon: IconName::Replace,
         binary: "wav_mp3_fix_rust",
         cwd: "bin/Pro_Tools_Batch_Processing_Runtime/bin",
         category: ToolCategory::Audio,
+        needs_session: false,
     },
     ToolCard {
         id: "tvConverter",
@@ -216,6 +344,7 @@ const TOOLS: &[ToolCard] = &[
         binary: "tv_converter",
         cwd: "bin/Bounce/bin",
         category: ToolCategory::Audio,
+        needs_session: false,
     },
     ToolCard {
         id: "reduceVideo",
@@ -225,6 +354,7 @@ const TOOLS: &[ToolCard] = &[
         binary: "video_reducer_remove_audio",
         cwd: "bin/SFX_Workflow_Runtime/bin",
         category: ToolCategory::Audio,
+        needs_session: false,
     },
     // --- File Tools (standalone) ---
     ToolCard {
@@ -235,15 +365,17 @@ const TOOLS: &[ToolCard] = &[
         binary: "carrefour-folder-renamer",
         cwd: "tools",
         category: ToolCategory::File,
+        needs_session: false,
     },
     ToolCard {
         id: "tvToSpotRename",
-        label: "TV → SPOT Rename",
+        label: "TV -> SPOT Rename",
         description: "Rename WAV files (strip prefix/version)",
         icon: IconName::FileRust,
         binary: "tv_to_spot_rename",
         cwd: "bin/Pro_Tools_Batch_Processing_Runtime/bin",
         category: ToolCategory::File,
+        needs_session: false,
     },
     ToolCard {
         id: "createFolderStructure",
@@ -253,8 +385,87 @@ const TOOLS: &[ToolCard] = &[
         binary: "pastas_crf_rust",
         cwd: "bin/Pro_Tools_Batch_Processing_Runtime/bin",
         category: ToolCategory::File,
+        needs_session: false,
     },
 ];
+
+// ---------------------------------------------------------------------------
+// Automations — loaded from TOML at runtime
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Clone)]
+struct AutomationEntry {
+    id: String,
+    label: String,
+    description: String,
+    icon: String,
+    prompt: String,
+}
+
+#[derive(Deserialize)]
+struct AutomationsFile {
+    automation: Vec<AutomationEntry>,
+}
+
+fn automations_toml_path() -> PathBuf {
+    suite_root()
+        .join("1_Sessões")
+        .join("Pro tools_EDITSESSION")
+        .join("agent-skills")
+        .join("AUTOMATIONS.toml")
+}
+
+fn load_automations() -> Vec<AutomationEntry> {
+    let path = automations_toml_path();
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(file) = toml::from_str::<AutomationsFile>(&content) else {
+        return Vec::new();
+    };
+    file.automation
+}
+
+fn icon_for_automation(name: &str) -> IconName {
+    match name {
+        "play" => IconName::PlayFilled,
+        "zap" => IconName::PlayFilled,
+        "mic" => IconName::Mic,
+        "folder" => IconName::Folder,
+        "audio" => IconName::AudioOn,
+        "sparkle" => IconName::Sparkle,
+        "replace" => IconName::Replace,
+        "arrow_up_right" => IconName::ArrowUpRight,
+        _ => IconName::Sparkle,
+    }
+}
+
+fn agent_skills_dir() -> PathBuf {
+    suite_root()
+        .join("1_Sessões")
+        .join("Pro tools_EDITSESSION")
+        .join("agent-skills")
+}
+
+fn ensure_agent_skills_extracted(cx: &App) {
+    let dir = agent_skills_dir();
+    if dir.exists() {
+        return;
+    }
+
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+
+    for (name, asset_path) in [
+        ("SKILL.md", "agent-skills/SKILL.md"),
+        ("AUTOMATIONS.toml", "agent-skills/AUTOMATIONS.toml"),
+    ] {
+        if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
+            std::fs::write(dir.join(name), data.as_ref()).log_err();
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Delivery status
@@ -376,6 +587,7 @@ pub struct Dashboard {
     workspace: WeakEntity<Workspace>,
     focus_handle: FocusHandle,
     runtime_path: PathBuf,
+    agent_tools_path: PathBuf,
     // Session polling
     session_path: Option<String>,
     session_name: Option<String>,
@@ -385,6 +597,9 @@ pub struct Dashboard {
     // Delivery status
     delivery_status: DeliveryStatus,
     _delivery_scan_task: gpui::Task<()>,
+    // Automations (loaded from TOML)
+    automations: Vec<AutomationEntry>,
+    _automations_reload_task: gpui::Task<()>,
     // Scroll
     scroll_handle: ScrollHandle,
 }
@@ -399,7 +614,18 @@ impl Dashboard {
                 )
             });
 
+        let agent_tools_path = std::env::var("PROTOOLS_AGENT_TOOLS_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                PathBuf::from(
+                    "/Users/caio_ze/Documents/Rust_projects/PROTOOLS_SDK_PTSL/target/debug",
+                )
+            });
+
+        ensure_agent_skills_extracted(cx);
+
         let pasta_ativa = read_pasta_ativa();
+        let automations = load_automations();
 
         cx.new(|cx| {
             // Spawn session polling task (every 5 seconds)
@@ -466,16 +692,38 @@ impl Dashboard {
                 }
             });
 
+            // Spawn automations reload task (every 30 seconds)
+            let automations_reload_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_secs(30))
+                        .await;
+
+                    let entries = cx
+                        .background_executor()
+                        .spawn(async { load_automations() })
+                        .await;
+
+                    let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                        dashboard.automations = entries;
+                        cx.notify();
+                    });
+                }
+            });
+
             Self {
                 workspace: workspace.weak_handle(),
                 focus_handle: cx.focus_handle(),
                 runtime_path,
+                agent_tools_path,
                 session_path: None,
                 session_name: None,
                 _session_poll_task: session_poll_task,
                 pasta_ativa,
                 delivery_status: DeliveryStatus::default(),
                 _delivery_scan_task: delivery_scan_task,
+                automations,
+                _automations_reload_task: automations_reload_task,
                 scroll_handle: ScrollHandle::new(),
             }
         })
@@ -483,35 +731,57 @@ impl Dashboard {
 
     fn spawn_tool(
         tool: &ToolCard,
-        runtime_path: &PathBuf,
+        runtime_path: &Path,
+        agent_tools_path: &Path,
+        session_path: &Option<String>,
         pasta_ativa: &Option<PathBuf>,
         workspace: &mut Workspace,
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
-        // Standalone tools use pasta_ativa as cwd when set
+        let is_agent_tool = tool.category == ToolCategory::Mixer;
         let is_standalone = matches!(tool.category, ToolCategory::Audio | ToolCategory::File);
-        let cwd = if is_standalone {
-            if let Some(pa) = &pasta_ativa {
-                pa.clone()
+
+        let (command, cwd) = if is_agent_tool {
+            let cmd = agent_tools_path
+                .join(tool.binary)
+                .to_string_lossy()
+                .to_string();
+            let work_dir = agent_tools_path.to_path_buf();
+            (cmd, work_dir)
+        } else {
+            let cmd = runtime_path
+                .join(tool.cwd)
+                .join(tool.binary)
+                .to_string_lossy()
+                .to_string();
+            let work_dir = if is_standalone {
+                if let Some(pa) = &pasta_ativa {
+                    pa.clone()
+                } else {
+                    runtime_path.join(tool.cwd)
+                }
             } else {
                 runtime_path.join(tool.cwd)
-            }
-        } else {
-            runtime_path.join(tool.cwd)
+            };
+            (cmd, work_dir)
         };
-        let command = runtime_path
-            .join(tool.cwd)
-            .join(tool.binary)
-            .to_string_lossy()
-            .to_string();
+
+        let mut args = vec!["--output-json".to_string()];
+
+        if tool.needs_session {
+            if let Some(session) = session_path {
+                args.insert(0, session.clone());
+                args.insert(0, "--session".to_string());
+            }
+        }
 
         let spawn = SpawnInTerminal {
             id: TaskId(format!("dashboard-{}", tool.id)),
             label: tool.label.to_string(),
             full_label: tool.label.to_string(),
             command: Some(command),
-            args: vec![],
+            args,
             command_label: tool.label.to_string(),
             cwd: Some(cwd),
             use_new_terminal: true,
@@ -523,6 +793,21 @@ impl Dashboard {
         };
 
         workspace.spawn_in_terminal(spawn, window, cx).detach();
+    }
+
+    fn spawn_automation(
+        prompt: &str,
+        session_path: &Option<String>,
+        _window: &mut Window,
+        cx: &mut App,
+    ) {
+        let resolved_prompt = if let Some(session) = session_path {
+            prompt.replace("{session_path}", session)
+        } else {
+            prompt.replace("{session_path}", "<no session open>")
+        };
+
+        cx.write_to_clipboard(ClipboardItem::new_string(resolved_prompt));
     }
 
     fn pick_pasta_ativa(&mut self, cx: &mut Context<Self>) {
@@ -693,8 +978,10 @@ impl Dashboard {
             TOOLS.iter().filter(|t| t.category == category).collect();
 
         let runtime_path = self.runtime_path.clone();
+        let agent_tools_path = self.agent_tools_path.clone();
         let workspace = self.workspace.clone();
         let pasta_ativa = self.pasta_ativa.clone();
+        let session_path = self.session_path.clone();
 
         v_flex()
             .w_full()
@@ -714,8 +1001,10 @@ impl Dashboard {
             .children(tools_in_category.into_iter().enumerate().map(
                 move |(idx, tool)| {
                     let runtime_path = runtime_path.clone();
+                    let agent_tools_path = agent_tools_path.clone();
                     let workspace = workspace.clone();
                     let pasta_ativa = pasta_ativa.clone();
+                    let session_path = session_path.clone();
                     let tool_id = tool.id;
                     let tool_label = tool.label;
                     let tool_description = tool.description;
@@ -723,6 +1012,7 @@ impl Dashboard {
                     let tool_binary = tool.binary;
                     let tool_cwd = tool.cwd;
                     let tool_category = tool.category;
+                    let tool_needs_session = tool.needs_session;
 
                     ButtonLike::new(format!("dashboard-btn-{}", tool_id))
                         .tab_index((tab_offset + idx) as isize)
@@ -749,7 +1039,9 @@ impl Dashboard {
                         )
                         .on_click(move |_, window, cx| {
                             let runtime_path = runtime_path.clone();
+                            let agent_tools_path = agent_tools_path.clone();
                             let pasta_ativa = pasta_ativa.clone();
+                            let session_path = session_path.clone();
                             let _ = workspace.update(cx, |workspace, cx| {
                                 let card = ToolCard {
                                     id: tool_id,
@@ -759,10 +1051,13 @@ impl Dashboard {
                                     binary: tool_binary,
                                     cwd: tool_cwd,
                                     category: tool_category,
+                                    needs_session: tool_needs_session,
                                 };
                                 Self::spawn_tool(
                                     &card,
                                     &runtime_path,
+                                    &agent_tools_path,
+                                    &session_path,
                                     &pasta_ativa,
                                     workspace,
                                     window,
@@ -772,6 +1067,114 @@ impl Dashboard {
                         })
                 },
             ))
+    }
+
+    fn render_automations_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let automations = self.automations.clone();
+        let session_path = self.session_path.clone();
+
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(
+                h_flex()
+                    .px_1()
+                    .mb_2()
+                    .gap_2()
+                    .child(
+                        Label::new("AUTOMATIONS")
+                            .color(Color::Muted)
+                            .size(LabelSize::XSmall),
+                    )
+                    .child(Divider::horizontal().color(DividerColor::BorderVariant)),
+            )
+            .when(automations.is_empty(), |el| {
+                el.child(
+                    h_flex()
+                        .px_2()
+                        .child(
+                            Label::new("No automations found (AUTOMATIONS.toml)")
+                                .color(Color::Muted)
+                                .size(LabelSize::Small),
+                        ),
+                )
+            })
+            .children(automations.into_iter().enumerate().map(move |(idx, entry)| {
+                let session_path = session_path.clone();
+                let icon = icon_for_automation(&entry.icon);
+                let entry_id = entry.id.clone();
+                let entry_label: SharedString = entry.label.clone().into();
+                let entry_description: SharedString = entry.description.clone().into();
+                let entry_prompt = entry.prompt.clone();
+
+                ButtonLike::new(format!("automation-btn-{}-{}", entry_id, idx))
+                    .full_width()
+                    .size(ButtonSize::Medium)
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(
+                                Icon::new(icon)
+                                    .color(Color::Accent)
+                                    .size(IconSize::Small),
+                            )
+                            .child(
+                                v_flex()
+                                    .child(Label::new(entry_label))
+                                    .child(
+                                        Label::new(entry_description)
+                                            .color(Color::Muted)
+                                            .size(LabelSize::XSmall),
+                                    ),
+                            )
+                            .child(
+                                Label::new("(copy prompt)")
+                                    .color(Color::Muted)
+                                    .size(LabelSize::XSmall),
+                            ),
+                    )
+                    .on_click(move |_, window, cx| {
+                        Self::spawn_automation(
+                            &entry_prompt,
+                            &session_path,
+                            window,
+                            cx,
+                        );
+                    })
+            }))
+            .child(
+                ButtonLike::new("edit-automations-btn")
+                    .full_width()
+                    .size(ButtonSize::Medium)
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .child(
+                                Icon::new(IconName::FileToml)
+                                    .color(Color::Muted)
+                                    .size(IconSize::Small),
+                            )
+                            .child(
+                                Label::new("Edit Automations (TOML)")
+                                    .color(Color::Muted)
+                                    .size(LabelSize::Small),
+                            ),
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        let toml_path = automations_toml_path();
+                        let workspace = this.workspace.clone();
+                        cx.spawn_in(window, async move |_this, cx| {
+                            let _ = workspace.update_in(cx, |workspace, window, cx| {
+                                workspace
+                                    .open_abs_path(toml_path, OpenOptions::default(), window, cx)
+                                    .detach();
+                            });
+                        })
+                        .detach();
+                    }))
+            )
     }
 }
 
@@ -784,6 +1187,10 @@ impl Render for Dashboard {
         let pt_count = TOOLS
             .iter()
             .filter(|t| t.category == ToolCategory::ProTools)
+            .count();
+        let mixer_count = TOOLS
+            .iter()
+            .filter(|t| t.category == ToolCategory::Mixer)
             .count();
         let audio_count = TOOLS
             .iter()
@@ -848,12 +1255,19 @@ impl Render for Dashboard {
                             .child(self.render_pasta_ativa(cx))
                             // Tool sections
                             .child(self.render_section(ToolCategory::ProTools, 0, cx))
-                            .child(self.render_section(ToolCategory::Audio, pt_count, cx))
+                            .child(self.render_section(ToolCategory::Mixer, pt_count, cx))
                             .child(self.render_section(
-                                ToolCategory::File,
-                                pt_count + audio_count,
+                                ToolCategory::Audio,
+                                pt_count + mixer_count,
                                 cx,
                             ))
+                            .child(self.render_section(
+                                ToolCategory::File,
+                                pt_count + mixer_count + audio_count,
+                                cx,
+                            ))
+                            // Automations
+                            .child(self.render_automations_section(cx))
                             // Delivery status
                             .child(self.render_delivery_status(cx)),
                     )

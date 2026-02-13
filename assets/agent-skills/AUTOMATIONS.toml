@@ -1,0 +1,127 @@
+## ProTools Studio — Automation Prompts
+## Each [[automation]] block becomes a one-click button on the Dashboard.
+## Edit this file to add/remove/change automations — no recompilation needed.
+## The dashboard re-reads this file periodically.
+##
+## Fields:
+##   id          — unique identifier (no spaces)
+##   label       — button text (short)
+##   description — subtitle shown below the label
+##   icon        — icon name (play, zap, mic, folder, audio, sparkle, replace, arrow_up_right)
+##   prompt      — the prompt template sent to the agent
+##
+## Variables:
+##   {session_path}  — replaced at runtime with the current Pro Tools session path
+
+[[automation]]
+id = "bounce-trilha"
+label = "Bounce TRILHA"
+description = "Select clips, set timeline, bounce to WAV"
+icon = "play"
+prompt = """
+Using the PTSL agent tools:
+1. Open the session at {session_path}
+2. Run select-clips on TRILHA to set the full timeline
+3. Bounce to WAV format
+4. Report the output file path
+"""
+
+[[automation]]
+id = "import-solo-track"
+label = "Import & Solo Track"
+description = "Import tracks from source, solo LOC, verify"
+icon = "sparkle"
+prompt = """
+Using the PTSL agent tools:
+1. Ask me for the source session path
+2. Import all tracks from source into {session_path}
+3. Solo the LOC track (hide+inactivate everything else)
+4. Verify with list that only LOC is active
+"""
+
+[[automation]]
+id = "batch-process"
+label = "Batch Process Sessions"
+description = "Import, solo, bounce all sessions in folder"
+icon = "zap"
+prompt = """
+Using the PTSL agent tools, process all .ptx sessions in /Users/caio_ze/ProTools_Suite/1_Sessões/:
+For each session:
+1. Open the session
+2. List tracks and verify state
+3. Select all clips on LOC to set timeline
+4. Bounce to WAV
+5. Wait 5 seconds before next session
+Report progress after each session.
+"""
+
+[[automation]]
+id = "rename-tracks"
+label = "Rename All Tracks"
+description = "List tracks and rename interactively"
+icon = "replace"
+prompt = """
+Using the PTSL agent tools:
+1. Open the session at {session_path}
+2. List all tracks
+3. Show me the track list and ask which tracks I want to rename
+4. For each track I specify, rename it to the new name I provide
+5. Verify the final track list
+"""
+
+[[automation]]
+id = "export-normalize"
+label = "Export & Normalize"
+description = "Export LOC, normalize -23 LUFS, convert MP3"
+icon = "audio"
+prompt = """
+Using the PTSL agent tools:
+1. Export the LOC track from {session_path}
+2. Normalize the exported WAV to -23 LUFS using agent-bounce-normalize-tv
+3. Convert the normalized file to MP3 using agent-convert-mp3
+4. Report all output file paths
+"""
+
+[[automation]]
+id = "volume-adjust"
+label = "Volume Adjust"
+description = "Set track volume (automation must be Read mode)"
+icon = "audio"
+prompt = """
+Using the PTSL agent tools:
+1. Open the session at {session_path}
+2. List all tracks
+3. Ask me which track and what dB value to set
+4. Set the track volume using agent-track-volume
+Note: Track automation mode must be Read/Touch/Latch for the fader to move.
+"""
+
+[[automation]]
+id = "full-delivery"
+label = "Full Delivery"
+description = "Bounce, normalize, MP3, organize to Finalizados"
+icon = "zap"
+prompt = """
+Using the PTSL agent tools, perform full delivery for {session_path}:
+1. Select all clips on LOC to set timeline
+2. Bounce to WAV
+3. Apply audio filter (agent-apply-audio-filter)
+4. Normalize to -23 LUFS (agent-bounce-normalize-tv)
+5. Convert to MP3 (agent-convert-mp3)
+6. Organize files to ~/ProTools_Suite/4_Finalizados/ (TV/, NET/, MP3/)
+7. Report the final file inventory
+"""
+
+[[automation]]
+id = "compare-texts"
+label = "Compare Texts"
+description = "Transcribe audio, extract reference, compare"
+icon = "mic"
+prompt = """
+Using the PTSL agent tools:
+1. Ask me for the audio file path and the reference document path
+2. Transcribe the audio using agent-transcribe-audio
+3. Extract text from the reference document using agent-extract-text
+4. Compare both texts using agent-compare-texts
+5. Report the differences found
+"""
