@@ -7,7 +7,7 @@ use fs::Fs;
 use futures::channel::mpsc;
 use futures::{Future, StreamExt};
 use gpui::{App, AppContext as _, BackgroundExecutor, Task};
-use http_client::{self, AsyncBody, HttpClient, HttpClientWithUrl, Method, Request};
+use http_client::{self, AsyncBody, HttpClientWithUrl, Method, Request};
 use parking_lot::Mutex;
 use regex::Regex;
 use release_channel::ReleaseChannel;
@@ -38,6 +38,7 @@ use self::event_coalescer::EventCoalescer;
 
 pub struct Telemetry {
     clock: Arc<dyn SystemClock>,
+    #[allow(dead_code)] // kept for future telemetry re-enablement
     http_client: Arc<HttpClientWithUrl>,
     executor: BackgroundExecutor,
     state: Arc<Mutex<TelemetryState>>,
@@ -49,7 +50,9 @@ struct TelemetryState {
     installation_id: Option<Arc<str>>, // Per app installation (different for dev, nightly, preview, and stable)
     session_id: Option<String>,        // Per app launch
     metrics_id: Option<Arc<str>>,      // Per logged-in user
+    #[allow(dead_code)] // kept for future telemetry re-enablement
     release_channel: Option<ReleaseChannel>,
+    #[allow(dead_code)] // kept for future telemetry re-enablement
     architecture: &'static str,
     events_queue: Vec<EventWrapper>,
     flush_events_task: Option<Task<()>>,
@@ -582,6 +585,7 @@ impl Telemetry {
         self.state.lock().is_staff
     }
 
+    #[allow(dead_code)] // kept for future telemetry re-enablement
     fn build_request(
         self: &Arc<Self>,
         // We take in the JSON bytes buffer so we can reuse the existing allocation.

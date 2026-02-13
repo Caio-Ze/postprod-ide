@@ -1,27 +1,35 @@
-use gpui::{
-    actions, App, AppContext, AsyncApp, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, IntoElement, ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString,
-    Styled, WeakEntity, Window,
+use global_hotkey::{
+    hotkey::{Code, HotKey, Modifiers as GHModifiers},
+    GlobalHotKeyEvent, GlobalHotKeyManager as NativeHotKeyManager,
 };
+use gpui::{
+    actions, Action, App, AppContext, AsyncApp, ClipboardItem, Context, DismissEvent, Entity,
+    EventEmitter, FocusHandle, Focusable, IntoElement, Keystroke, KeystrokeEvent, ParentElement,
+    PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription, WeakEntity,
+    Window,
+};
+use schemars::JsonSchema;
 use serde::Deserialize;
 use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
 use ui::{
-    prelude::*, ButtonLike, Divider, DividerColor, Headline, HeadlineSize, Icon, IconName,
-    IconSize, Label, LabelSize, ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple,
+    prelude::*, Button, ButtonLike, ButtonStyle, Divider, DividerColor, Headline, HeadlineSize,
+    Icon, IconButton, IconName, IconSize, KeyBinding, Label, LabelSize, Modal, ModalFooter,
+    ModalHeader, Section, ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip,
     WithScrollbar as _,
 };
 use workspace::{
     item::{Item, ItemEvent},
-    with_active_or_new_workspace, OpenOptions, ProToolsSessionName, Workspace,
+    with_active_or_new_workspace, ModalView, OpenOptions, ProToolsSessionName, Workspace,
 };
 
 use util::ResultExt as _;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
-// Action
+// Actions
 // ---------------------------------------------------------------------------
 
 actions!(
@@ -31,6 +39,18 @@ actions!(
         ShowDashboard
     ]
 );
+
+/// Run a dashboard tool by its `tool_id`. Users can bind keyboard shortcuts
+/// to specific tools by adding entries like:
+/// ```json
+/// { "context": "Dashboard", "bindings": {
+///     "cmd-shift-b": ["dashboard::RunDashboardTool", { "tool_id": "bounceAll" }]
+/// }}
+/// ```
+#[derive(Clone, PartialEq, Deserialize, Default, JsonSchema, Action)]
+pub struct RunDashboardTool {
+    pub tool_id: String,
+}
 
 // ---------------------------------------------------------------------------
 // Init
@@ -89,315 +109,106 @@ pub fn ensure_dashboard(workspace: &mut Workspace, window: &mut Window, cx: &mut
 }
 
 // ---------------------------------------------------------------------------
-// Tool registry
+// TOML-driven tool registry
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ToolCategory {
-    ProTools,
-    Mixer,
-    Audio,
-    File,
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ToolTier {
+    Featured,
+    Standard,
+    Compact,
 }
 
-impl ToolCategory {
+impl ToolTier {
     fn label(self) -> &'static str {
         match self {
-            Self::ProTools => "PRO TOOLS",
-            Self::Mixer => "MIXER / AGENT TOOLS",
-            Self::Audio => "AUDIO",
-            Self::File => "FILE",
+            Self::Featured => "FEATURED TOOLS",
+            Self::Standard => "TOOLS",
+            Self::Compact => "AGENT TOOLS",
         }
     }
 }
 
-struct ToolCard {
-    id: &'static str,
-    label: &'static str,
-    description: &'static str,
-    icon: IconName,
-    binary: &'static str,
-    cwd: &'static str,
-    category: ToolCategory,
+#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ToolSource {
+    Runtime,
+    Agent,
+}
+
+#[derive(Deserialize, Clone)]
+struct ToolEntry {
+    id: String,
+    label: String,
+    description: String,
+    icon: String,
+    binary: String,
+    #[serde(default)]
+    cwd: String,
+    source: ToolSource,
+    tier: ToolTier,
+    #[serde(default)]
     needs_session: bool,
 }
 
-const TOOLS: &[ToolCard] = &[
-    // --- Pro Tools Actions (PTSL gRPC via runtime) ---
-    ToolCard {
-        id: "bounceAll",
-        label: "Bounce All (TV + NET + SPOT)",
-        description: "Multi-format bounce with LUFS normalization",
-        icon: IconName::AudioOn,
-        binary: "rust-bounce-to-all-configurable-bin",
-        cwd: "bin/Bounce",
-        category: ToolCategory::ProTools,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "sessionMonitor",
-        label: "Session Monitor",
-        description: "Real-time session monitoring with script triggers",
-        icon: IconName::ToolTerminal,
-        binary: "session-monitor",
-        cwd: "bin/Session_Monitor",
-        category: ToolCategory::ProTools,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "importSpotClips",
-        label: "Import & Spot Clips",
-        description: "Import audio and spot to timeline",
-        icon: IconName::ListTree,
-        binary: "import-and-spot-clip-notimelimit",
-        cwd: "bin/Session_Monitor/bin",
-        category: ToolCategory::ProTools,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "importSfx",
-        label: "Import SFX (Gemini)",
-        description: "Import SFX folders with Gemini AI integration",
-        icon: IconName::Sparkle,
-        binary: "sfx_workflow_v3_json",
-        cwd: "bin/SFX_Workflow_Runtime",
-        category: ToolCategory::ProTools,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "saveIncrement",
-        label: "Save + Increment",
-        description: "Auto-increment and save Pro Tools session",
-        icon: IconName::Check,
-        binary: "save_session_increment",
-        cwd: "tools",
-        category: ToolCategory::ProTools,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "tvToSpotWorkflow",
-        label: "TV -> SPOT Workflow",
-        description: "Full TV to SPOT session conversion pipeline",
-        icon: IconName::ForwardArrow,
-        binary: "from-tv-to-spot-workflow",
-        cwd: "bin/Pro_Tools_Batch_Processing_Runtime/bin",
-        category: ToolCategory::ProTools,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "batchProcessing",
-        label: "Batch Processing",
-        description: "Interactive batch launcher with fuzzy search",
-        icon: IconName::PlayFilled,
-        binary: "start-scripts-pro-tools-batch-processing",
-        cwd: "bin/Pro_Tools_Batch_Processing_Runtime",
-        category: ToolCategory::ProTools,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "voiceToText",
-        label: "Voice to Text Compare",
-        description: "Voice transcription vs script comparison",
-        icon: IconName::Mic,
-        binary: "RUST_VOICE_TO_TEXT_CLI",
-        cwd: "bin/Session_Monitor/bin",
-        category: ToolCategory::ProTools,
-        needs_session: false,
-    },
-    // --- Mixer / Agent Tools (PTSL gRPC via agent-tools) ---
-    ToolCard {
-        id: "agentTransport",
-        label: "Transport (Play/Stop/Status)",
-        description: "Control Pro Tools transport state",
-        icon: IconName::PlayFilled,
-        binary: "agent-transport",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "agentMuteSolo",
-        label: "Mute / Solo",
-        description: "Mute, unmute, solo, or unsolo tracks",
-        icon: IconName::AudioOff,
-        binary: "agent-mute-solo",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: true,
-    },
-    ToolCard {
-        id: "agentTrackVolume",
-        label: "Track Volume",
-        description: "Set track fader volume in dB (automation must be Read mode)",
-        icon: IconName::AudioOn,
-        binary: "agent-track-volume",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: true,
-    },
-    ToolCard {
-        id: "agentManageTracks",
-        label: "Manage Tracks",
-        description: "List, create, hide, inactivate, solo tracks",
-        icon: IconName::ListTree,
-        binary: "agent-manage-tracks",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: true,
-    },
-    ToolCard {
-        id: "agentRenameTrack",
-        label: "Rename Track",
-        description: "Rename a track in the session",
-        icon: IconName::Replace,
-        binary: "agent-rename-track",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: true,
-    },
-    ToolCard {
-        id: "agentRenameClip",
-        label: "Rename Clip",
-        description: "Rename a clip in the open session",
-        icon: IconName::Replace,
-        binary: "agent-rename-clip",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "agentDeleteTracks",
-        label: "Delete Tracks",
-        description: "Delete one or more tracks from session",
-        icon: IconName::Trash,
-        binary: "agent-delete-tracks",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: true,
-    },
-    ToolCard {
-        id: "agentGetClipList",
-        label: "Get Clip List",
-        description: "List all clips in session",
-        icon: IconName::FileDoc,
-        binary: "agent-get-clip-list",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: true,
-    },
-    ToolCard {
-        id: "agentTimelineSelection",
-        label: "Timeline Selection",
-        description: "Get or set timeline in/out points",
-        icon: IconName::SelectAll,
-        binary: "agent-timeline-selection",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: true,
-    },
-    ToolCard {
-        id: "agentSaveSessionAs",
-        label: "Save Session As",
-        description: "Save session under a new name/location",
-        icon: IconName::Check,
-        binary: "agent-save-session-as",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: true,
-    },
-    ToolCard {
-        id: "agentBounceExport",
-        label: "Bounce Export",
-        description: "Bounce current session to WAV or MP3",
-        icon: IconName::AudioOn,
-        binary: "agent-bounce-export",
-        cwd: "",
-        category: ToolCategory::Mixer,
-        needs_session: false,
-    },
-    // --- Audio Tools (standalone) ---
-    ToolCard {
-        id: "normalizeAudio",
-        label: "Normalize Audio (EBU R128)",
-        description: "EBU R128 loudness normalization",
-        icon: IconName::AudioOn,
-        binary: "audio-normalizer-configurable",
-        cwd: "bin/Bounce/bin",
-        category: ToolCategory::Audio,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "maximizeAudio",
-        label: "Maximize Audio Peaks",
-        description: "Peak normalization to 0dBFS",
-        icon: IconName::ArrowUpRight,
-        binary: "audio-normalizer-maximize",
-        cwd: "tools",
-        category: ToolCategory::Audio,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "convertMp3Wav",
-        label: "Convert MP3 / WAV",
-        description: "Batch MP3/WAV conversion at 320kbps",
-        icon: IconName::Replace,
-        binary: "wav_mp3_fix_rust",
-        cwd: "bin/Pro_Tools_Batch_Processing_Runtime/bin",
-        category: ToolCategory::Audio,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "tvConverter",
-        label: "TV Converter (_TV/_NET)",
-        description: "LUFS normalization with _TV/_NET naming",
-        icon: IconName::AudioOn,
-        binary: "tv_converter",
-        cwd: "bin/Bounce/bin",
-        category: ToolCategory::Audio,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "reduceVideo",
-        label: "Reduce Video (strip audio)",
-        description: "Strip audio and compress video to 480p",
-        icon: IconName::Minimize,
-        binary: "video_reducer_remove_audio",
-        cwd: "bin/SFX_Workflow_Runtime/bin",
-        category: ToolCategory::Audio,
-        needs_session: false,
-    },
-    // --- File Tools (standalone) ---
-    ToolCard {
-        id: "carrefourRenamer",
-        label: "Carrefour Renamer",
-        description: "Rename session folders with dates",
-        icon: IconName::Folder,
-        binary: "carrefour-folder-renamer",
-        cwd: "tools",
-        category: ToolCategory::File,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "tvToSpotRename",
-        label: "TV -> SPOT Rename",
-        description: "Rename WAV files (strip prefix/version)",
-        icon: IconName::FileRust,
-        binary: "tv_to_spot_rename",
-        cwd: "bin/Pro_Tools_Batch_Processing_Runtime/bin",
-        category: ToolCategory::File,
-        needs_session: false,
-    },
-    ToolCard {
-        id: "createFolderStructure",
-        label: "Create Folder Structure (CRF)",
-        description: "Create folder structures from clipboard",
-        icon: IconName::FolderOpen,
-        binary: "pastas_crf_rust",
-        cwd: "bin/Pro_Tools_Batch_Processing_Runtime/bin",
-        category: ToolCategory::File,
-        needs_session: false,
-    },
-];
+#[derive(Deserialize)]
+struct ToolsFile {
+    tool: Vec<ToolEntry>,
+}
+
+fn icon_for_tool(name: &str) -> IconName {
+    match name {
+        "audio_on" => IconName::AudioOn,
+        "audio_off" => IconName::AudioOff,
+        "play_filled" => IconName::PlayFilled,
+        "sparkle" => IconName::Sparkle,
+        "mic" => IconName::Mic,
+        "check" => IconName::Check,
+        "forward_arrow" => IconName::ForwardArrow,
+        "list_tree" => IconName::ListTree,
+        "tool_terminal" => IconName::ToolTerminal,
+        "replace" => IconName::Replace,
+        "trash" => IconName::Trash,
+        "file_doc" => IconName::FileDoc,
+        "file_rust" => IconName::FileRust,
+        "select_all" => IconName::SelectAll,
+        "arrow_up_right" => IconName::ArrowUpRight,
+        "minimize" => IconName::Minimize,
+        "folder" => IconName::Folder,
+        "folder_open" => IconName::FolderOpen,
+        _ => IconName::Sparkle,
+    }
+}
+
+fn load_tools_registry(cx: &App) -> Vec<ToolEntry> {
+    match cx.asset_source().load("tools/TOOLS.toml") {
+        Ok(Some(data)) => {
+            let text = match std::str::from_utf8(&data) {
+                Ok(s) => s,
+                Err(_) => {
+                    log::error!("TOOLS.toml: invalid UTF-8");
+                    return Vec::new();
+                }
+            };
+            match toml::from_str::<ToolsFile>(text) {
+                Ok(file) => file.tool,
+                Err(e) => {
+                    log::error!("TOOLS.toml: parse error: {e}");
+                    Vec::new()
+                }
+            }
+        }
+        Ok(None) => {
+            log::warn!("TOOLS.toml: asset not found (check RustEmbed includes)");
+            Vec::new()
+        }
+        Err(e) => {
+            log::error!("TOOLS.toml: failed to load asset: {e}");
+            Vec::new()
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Automations — loaded from TOML at runtime
@@ -492,6 +303,535 @@ fn ensure_agent_skills_extracted(cx: &App) {
                 std::os::unix::fs::symlink(&skill_target, &skill_link).log_err();
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Global Hotkeys — system-wide shortcuts via CGEventTap
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Clone)]
+struct GlobalHotkeyEntry {
+    keystroke: String,
+    tool_id: String,
+}
+
+#[derive(Deserialize)]
+struct GlobalHotkeysFile {
+    #[serde(default)]
+    hotkey: Vec<GlobalHotkeyEntry>,
+}
+
+fn global_hotkeys_toml_path() -> PathBuf {
+    paths::config_dir().join("global-hotkeys.toml")
+}
+
+fn ensure_global_hotkeys_config() {
+    let path = global_hotkeys_toml_path();
+    if path.exists() {
+        return;
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).log_err();
+    }
+    let header = "\
+# ProTools Studio — Global Hotkeys
+# These shortcuts work even when ProTools Studio is not focused.
+# Requires \"Input Monitoring\" permission in System Settings.
+#
+# [[hotkey]]
+# keystroke = \"ctrl-alt-0\"
+# tool_id = \"bounceAll\"
+";
+    std::fs::write(&path, header).log_err();
+}
+
+fn load_global_hotkeys_config() -> Vec<GlobalHotkeyEntry> {
+    let path = global_hotkeys_toml_path();
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    match toml::from_str::<GlobalHotkeysFile>(&content) {
+        Ok(file) => file.hotkey,
+        Err(e) => {
+            log::warn!("global-hotkeys.toml: parse error: {e}");
+            Vec::new()
+        }
+    }
+}
+
+fn gpui_key_to_code(key: &str) -> Option<Code> {
+    Some(match key {
+        "a" => Code::KeyA,
+        "b" => Code::KeyB,
+        "c" => Code::KeyC,
+        "d" => Code::KeyD,
+        "e" => Code::KeyE,
+        "f" => Code::KeyF,
+        "g" => Code::KeyG,
+        "h" => Code::KeyH,
+        "i" => Code::KeyI,
+        "j" => Code::KeyJ,
+        "k" => Code::KeyK,
+        "l" => Code::KeyL,
+        "m" => Code::KeyM,
+        "n" => Code::KeyN,
+        "o" => Code::KeyO,
+        "p" => Code::KeyP,
+        "q" => Code::KeyQ,
+        "r" => Code::KeyR,
+        "s" => Code::KeyS,
+        "t" => Code::KeyT,
+        "u" => Code::KeyU,
+        "v" => Code::KeyV,
+        "w" => Code::KeyW,
+        "x" => Code::KeyX,
+        "y" => Code::KeyY,
+        "z" => Code::KeyZ,
+        "0" => Code::Digit0,
+        "1" => Code::Digit1,
+        "2" => Code::Digit2,
+        "3" => Code::Digit3,
+        "4" => Code::Digit4,
+        "5" => Code::Digit5,
+        "6" => Code::Digit6,
+        "7" => Code::Digit7,
+        "8" => Code::Digit8,
+        "9" => Code::Digit9,
+        "f1" => Code::F1,
+        "f2" => Code::F2,
+        "f3" => Code::F3,
+        "f4" => Code::F4,
+        "f5" => Code::F5,
+        "f6" => Code::F6,
+        "f7" => Code::F7,
+        "f8" => Code::F8,
+        "f9" => Code::F9,
+        "f10" => Code::F10,
+        "f11" => Code::F11,
+        "f12" => Code::F12,
+        "space" => Code::Space,
+        "enter" => Code::Enter,
+        "tab" => Code::Tab,
+        "escape" => Code::Escape,
+        "backspace" => Code::Backspace,
+        "delete" => Code::Delete,
+        "up" => Code::ArrowUp,
+        "down" => Code::ArrowDown,
+        "left" => Code::ArrowLeft,
+        "right" => Code::ArrowRight,
+        "home" => Code::Home,
+        "end" => Code::End,
+        "pageup" => Code::PageUp,
+        "pagedown" => Code::PageDown,
+        "-" => Code::Minus,
+        "=" => Code::Equal,
+        "[" => Code::BracketLeft,
+        "]" => Code::BracketRight,
+        "\\" => Code::Backslash,
+        ";" => Code::Semicolon,
+        "'" => Code::Quote,
+        "," => Code::Comma,
+        "." => Code::Period,
+        "/" => Code::Slash,
+        "`" => Code::Backquote,
+        _ => return None,
+    })
+}
+
+fn parse_global_hotkey(keystroke_str: &str) -> Option<HotKey> {
+    let keystroke = Keystroke::parse(keystroke_str).ok()?;
+    let mut modifiers = GHModifiers::empty();
+    if keystroke.modifiers.control {
+        modifiers |= GHModifiers::CONTROL;
+    }
+    if keystroke.modifiers.alt {
+        modifiers |= GHModifiers::ALT;
+    }
+    if keystroke.modifiers.shift {
+        modifiers |= GHModifiers::SHIFT;
+    }
+    if keystroke.modifiers.platform {
+        modifiers |= GHModifiers::SUPER;
+    }
+    let code = gpui_key_to_code(&keystroke.key)?;
+    Some(HotKey::new(
+        if modifiers.is_empty() {
+            None
+        } else {
+            Some(modifiers)
+        },
+        code,
+    ))
+}
+
+fn keystroke_to_display(keystroke_str: &str) -> String {
+    let Ok(keystroke) = Keystroke::parse(keystroke_str) else {
+        return keystroke_str.to_string();
+    };
+    let mut parts = Vec::new();
+    if keystroke.modifiers.control {
+        parts.push("\u{2303}"); // ⌃
+    }
+    if keystroke.modifiers.alt {
+        parts.push("\u{2325}"); // ⌥
+    }
+    if keystroke.modifiers.shift {
+        parts.push("\u{21E7}"); // ⇧
+    }
+    if keystroke.modifiers.platform {
+        parts.push("\u{2318}"); // ⌘
+    }
+    parts.push(&keystroke.key);
+    parts.join(" ")
+}
+
+pub struct GlobalHotkeyManager {
+    native_manager: NativeHotKeyManager,
+    hotkey_map: HashMap<u32, String>,
+    registered_hotkeys: Vec<HotKey>,
+    _poll_task: gpui::Task<()>,
+    _watch_task: gpui::Task<()>,
+}
+
+struct GlobalHotkeyManagerHandle(Entity<GlobalHotkeyManager>);
+
+impl gpui::Global for GlobalHotkeyManagerHandle {}
+
+impl GlobalHotkeyManager {
+    fn register_hotkeys_from_config(&mut self) {
+        // Unregister old hotkeys
+        for hotkey in &self.registered_hotkeys {
+            self.native_manager.unregister(*hotkey).log_err();
+        }
+        self.registered_hotkeys.clear();
+        self.hotkey_map.clear();
+
+        let entries = load_global_hotkeys_config();
+        for entry in entries {
+            let Some(hotkey) = parse_global_hotkey(&entry.keystroke) else {
+                log::warn!(
+                    "global hotkey: could not parse keystroke '{}'",
+                    entry.keystroke
+                );
+                continue;
+            };
+            match self.native_manager.register(hotkey) {
+                Ok(()) => {
+                    log::info!(
+                        "global hotkey: registered {} -> {}",
+                        entry.keystroke,
+                        entry.tool_id
+                    );
+                    self.hotkey_map.insert(hotkey.id(), entry.tool_id.clone());
+                    self.registered_hotkeys.push(hotkey);
+                }
+                Err(e) => {
+                    log::warn!(
+                        "global hotkey: failed to register '{}': {e}",
+                        entry.keystroke
+                    );
+                }
+            }
+        }
+    }
+}
+
+pub fn init_global_hotkeys(cx: &mut App) {
+    ensure_global_hotkeys_config();
+
+    let native_manager = match NativeHotKeyManager::new() {
+        Ok(m) => m,
+        Err(e) => {
+            log::warn!("global hotkeys: could not initialize (Input Monitoring permission needed?): {e}");
+            return;
+        }
+    };
+
+    let receiver = GlobalHotKeyEvent::receiver().clone();
+
+    let entity: Entity<GlobalHotkeyManager> = cx.new(|cx| {
+        let poll_task = cx.spawn({
+            let receiver = receiver.clone();
+            async move |this, cx: &mut AsyncApp| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(100))
+                        .await;
+
+                    while let Ok(event) = receiver.try_recv() {
+                        let hotkey_id = event.id();
+                        let tool_id = this
+                            .update(cx, |manager: &mut GlobalHotkeyManager, _cx| {
+                                manager.hotkey_map.get(&hotkey_id).cloned()
+                            })
+                            .ok()
+                            .flatten();
+
+                        if let Some(tool_id) = tool_id {
+                            log::info!("global hotkey: triggered tool '{tool_id}'");
+                            cx.update(|cx| {
+                                cx.activate(true);
+                                dispatch_global_tool(&tool_id, cx);
+                            });
+                        }
+                    }
+                }
+            }
+        });
+
+        let watch_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_secs(10))
+                    .await;
+
+                let _ = this.update(cx, |manager: &mut GlobalHotkeyManager, _cx| {
+                    manager.register_hotkeys_from_config();
+                });
+            }
+        });
+
+        let mut manager = GlobalHotkeyManager {
+            native_manager,
+            hotkey_map: HashMap::new(),
+            registered_hotkeys: Vec::new(),
+            _poll_task: poll_task,
+            _watch_task: watch_task,
+        };
+        manager.register_hotkeys_from_config();
+        manager
+    });
+
+    cx.set_global(GlobalHotkeyManagerHandle(entity));
+}
+
+fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
+    let action = RunDashboardTool {
+        tool_id: tool_id.to_string(),
+    };
+    with_active_or_new_workspace(cx, move |workspace, window, cx| {
+        ensure_dashboard(workspace, window, cx);
+        window.dispatch_action(action.boxed_clone(), cx);
+    });
+}
+
+fn save_global_hotkey(keystroke_str: &str, tool_id: &str) {
+    let path = global_hotkeys_toml_path();
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+
+    // Remove any existing entry for this tool_id to avoid duplicates
+    let lines: Vec<&str> = existing.lines().collect();
+    let mut filtered = Vec::new();
+    let mut skip_next_lines = false;
+    for (i, line) in lines.iter().enumerate() {
+        if line.trim() == "[[hotkey]]" {
+            // Check if the next 2 lines contain this tool_id
+            let next_lines: String = lines
+                .get(i + 1..std::cmp::min(i + 3, lines.len()))
+                .unwrap_or_default()
+                .join("\n");
+            if next_lines.contains(&format!("tool_id = \"{tool_id}\"")) {
+                skip_next_lines = true;
+                continue;
+            }
+        }
+        if skip_next_lines {
+            if line.trim().starts_with("keystroke") || line.trim().starts_with("tool_id") {
+                continue;
+            }
+            if line.trim().is_empty() {
+                skip_next_lines = false;
+                continue;
+            }
+            skip_next_lines = false;
+        }
+        filtered.push(*line);
+    }
+
+    let mut content = filtered.join("\n");
+    if !content.ends_with('\n') {
+        content.push('\n');
+    }
+    content.push_str(&format!(
+        "\n[[hotkey]]\nkeystroke = \"{keystroke_str}\"\ntool_id = \"{tool_id}\"\n"
+    ));
+
+    std::fs::write(&path, content).log_err();
+}
+
+// ---------------------------------------------------------------------------
+// Global Shortcut Modal — keystroke capture UI
+// ---------------------------------------------------------------------------
+
+struct GlobalShortcutModal {
+    tool_id: String,
+    tool_label: String,
+    captured_keystroke: Option<String>,
+    focus_handle: FocusHandle,
+    _intercept_subscription: Option<Subscription>,
+}
+
+impl GlobalShortcutModal {
+    fn new(
+        tool_id: String,
+        tool_label: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let focus_handle = cx.focus_handle();
+        focus_handle.focus(window, cx);
+
+        let listener = cx.listener(|this, event: &KeystrokeEvent, _window, cx| {
+                let keystroke = &event.keystroke;
+                // Only capture if at least one modifier is pressed (ignore bare modifiers)
+                if (keystroke.modifiers.control
+                    || keystroke.modifiers.alt
+                    || keystroke.modifiers.shift
+                    || keystroke.modifiers.platform)
+                    && !keystroke.key.is_empty()
+                    && !matches!(
+                        keystroke.key.as_str(),
+                        "control" | "alt" | "shift" | "cmd" | "meta"
+                    )
+                {
+                    let mut parts = Vec::new();
+                    if keystroke.modifiers.control {
+                        parts.push("ctrl");
+                    }
+                    if keystroke.modifiers.alt {
+                        parts.push("alt");
+                    }
+                    if keystroke.modifiers.shift {
+                        parts.push("shift");
+                    }
+                    if keystroke.modifiers.platform {
+                        parts.push("cmd");
+                    }
+                    parts.push(&keystroke.key);
+                    this.captured_keystroke = Some(parts.join("-"));
+                    cx.notify();
+                }
+            });
+        let intercept_sub = cx.intercept_keystrokes(listener);
+
+        Self {
+            tool_id,
+            tool_label,
+            captured_keystroke: None,
+            focus_handle,
+            _intercept_subscription: Some(intercept_sub),
+        }
+    }
+
+    fn save_and_dismiss(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(keystroke_str) = &self.captured_keystroke {
+            save_global_hotkey(keystroke_str, &self.tool_id);
+            log::info!(
+                "global hotkey: saved {} -> {}",
+                keystroke_str,
+                self.tool_id
+            );
+
+            // Trigger immediate re-registration
+            if let Some(handle) = cx.try_global::<GlobalHotkeyManagerHandle>() {
+                let manager = handle.0.clone();
+                manager.update(cx, |m, _cx| m.register_hotkeys_from_config());
+            }
+        }
+        cx.emit(DismissEvent);
+    }
+}
+
+impl EventEmitter<DismissEvent> for GlobalShortcutModal {}
+
+impl Focusable for GlobalShortcutModal {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl ModalView for GlobalShortcutModal {
+    fn fade_out_background(&self) -> bool {
+        true
+    }
+}
+
+impl Render for GlobalShortcutModal {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let display_text = match &self.captured_keystroke {
+            Some(ks) => keystroke_to_display(ks),
+            None => "Waiting...".to_string(),
+        };
+
+        let has_capture = self.captured_keystroke.is_some();
+        let tool_label = self.tool_label.clone();
+
+        Modal::new("global-shortcut-modal", None)
+            .header(
+                ModalHeader::new().headline(format!("Global Shortcut: {}", tool_label)),
+            )
+            .section(
+                Section::new().child(
+                    v_flex()
+                        .gap_3()
+                        .p_4()
+                        .child(
+                            Label::new("Press the key combination:")
+                                .color(Color::Muted)
+                                .size(LabelSize::Small),
+                        )
+                        .child(
+                            div()
+                                .p_4()
+                                .rounded_md()
+                                .border_1()
+                                .border_color(cx.theme().colors().border)
+                                .bg(cx.theme().colors().editor_background)
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .child(
+                                    Label::new(display_text)
+                                        .size(LabelSize::Large)
+                                        .color(if has_capture {
+                                            Color::Default
+                                        } else {
+                                            Color::Muted
+                                        }),
+                                ),
+                        )
+                        .child(
+                            Label::new(
+                                "Use Ctrl, Option, Shift, or Cmd with a key. Escape to cancel.",
+                            )
+                            .color(Color::Muted)
+                            .size(LabelSize::XSmall),
+                        ),
+                ),
+            )
+            .footer(
+                ModalFooter::new().end_slot(
+                    h_flex()
+                        .gap_2()
+                        .child(
+                            Button::new("cancel", "Cancel")
+                                .on_click(cx.listener(|_this, _, _window, cx| {
+                                    cx.emit(DismissEvent);
+                                })),
+                        )
+                        .child(
+                            Button::new("save", "Save")
+                                .style(ButtonStyle::Filled)
+                                .disabled(!has_capture)
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| {
+                                        this.save_and_dismiss(window, cx);
+                                    }),
+                                ),
+                        ),
+                ),
+            )
     }
 }
 
@@ -617,11 +957,10 @@ fn write_pasta_ativa(path: &Path) {
 }
 
 // ---------------------------------------------------------------------------
-// Binary resolution
+// Binary / runtime resolution
 // ---------------------------------------------------------------------------
 
 fn resolve_bin(name: &str) -> String {
-    // Look in common locations for the binary
     let candidates = [
         util::paths::home_dir().join(".local/bin").join(name),
         PathBuf::from("/opt/homebrew/bin").join(name),
@@ -632,8 +971,30 @@ fn resolve_bin(name: &str) -> String {
             return candidate.to_string_lossy().to_string();
         }
     }
-    // Fallback to bare name (relies on PATH)
     name.to_string()
+}
+
+/// Resolve the runtime path with priority:
+/// 1. `exe_dir/runtime/` (symlinked by build.rs)
+/// 2. `PROTOOLS_RUNTIME_PATH` env var
+/// 3. Default hardcoded path
+fn resolve_runtime_path() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join("runtime");
+            if candidate.exists() {
+                return candidate;
+            }
+        }
+    }
+
+    std::env::var("PROTOOLS_RUNTIME_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(
+                "/Users/caio_ze/Documents/Rust_projects/PROTOOLS_SDK_PTSL/target/runtime",
+            )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -700,6 +1061,8 @@ pub struct Dashboard {
     focus_handle: FocusHandle,
     runtime_path: PathBuf,
     agent_tools_path: PathBuf,
+    // TOML-driven tool registry
+    tools: Vec<ToolEntry>,
     // Session polling
     session_path: Option<String>,
     session_name: Option<String>,
@@ -719,13 +1082,7 @@ pub struct Dashboard {
 
 impl Dashboard {
     pub fn new(workspace: &Workspace, cx: &mut App) -> Entity<Self> {
-        let runtime_path = std::env::var("PROTOOLS_RUNTIME_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                PathBuf::from(
-                    "/Users/caio_ze/Documents/Rust_projects/PROTOOLS_SDK_PTSL/target/runtime",
-                )
-            });
+        let runtime_path = resolve_runtime_path();
 
         let agent_tools_path = std::env::var("PROTOOLS_AGENT_TOOLS_PATH")
             .map(PathBuf::from)
@@ -739,6 +1096,7 @@ impl Dashboard {
 
         let pasta_ativa = read_pasta_ativa();
         let automations = load_automations();
+        let tools = load_tools_registry(cx);
 
         cx.new(|cx| {
             // Spawn session polling task (every 5 seconds)
@@ -750,8 +1108,9 @@ impl Dashboard {
                     let result = cx
                         .background_executor()
                         .spawn(async move {
-                            std::process::Command::new(&binary)
+                            smol::process::Command::new(&binary)
                                 .output()
+                                .await
                                 .ok()
                                 .filter(|o| o.status.success())
                                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
@@ -829,6 +1188,7 @@ impl Dashboard {
                 focus_handle: cx.focus_handle(),
                 runtime_path,
                 agent_tools_path,
+                tools,
                 session_path: None,
                 session_name: None,
                 _session_poll_task: session_poll_task,
@@ -843,8 +1203,8 @@ impl Dashboard {
         })
     }
 
-    fn spawn_tool(
-        tool: &ToolCard,
+    fn spawn_tool_entry(
+        tool: &ToolEntry,
         runtime_path: &Path,
         agent_tools_path: &Path,
         session_path: &Option<String>,
@@ -853,30 +1213,29 @@ impl Dashboard {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
-        let is_agent_tool = tool.category == ToolCategory::Mixer;
-        let is_standalone = matches!(tool.category, ToolCategory::Audio | ToolCategory::File);
+        let is_agent_tool = tool.source == ToolSource::Agent;
 
         let (command, cwd) = if is_agent_tool {
             let cmd = agent_tools_path
-                .join(tool.binary)
+                .join(&tool.binary)
                 .to_string_lossy()
                 .to_string();
             let work_dir = agent_tools_path.to_path_buf();
             (cmd, work_dir)
         } else {
             let cmd = runtime_path
-                .join(tool.cwd)
-                .join(tool.binary)
+                .join(&tool.cwd)
+                .join(&tool.binary)
                 .to_string_lossy()
                 .to_string();
-            let work_dir = if is_standalone {
-                if let Some(pa) = &pasta_ativa {
+            let work_dir = if tool.tier == ToolTier::Standard && tool.source == ToolSource::Runtime {
+                if let Some(pa) = pasta_ativa {
                     pa.clone()
                 } else {
-                    runtime_path.join(tool.cwd)
+                    runtime_path.join(&tool.cwd)
                 }
             } else {
-                runtime_path.join(tool.cwd)
+                runtime_path.join(&tool.cwd)
             };
             (cmd, work_dir)
         };
@@ -892,11 +1251,11 @@ impl Dashboard {
 
         let spawn = SpawnInTerminal {
             id: TaskId(format!("dashboard-{}", tool.id)),
-            label: tool.label.to_string(),
-            full_label: tool.label.to_string(),
+            label: tool.label.clone(),
+            full_label: tool.label.clone(),
             command: Some(command),
             args,
-            command_label: tool.label.to_string(),
+            command_label: tool.label.clone(),
             cwd: Some(cwd),
             use_new_terminal: true,
             allow_concurrent_runs: false,
@@ -1003,6 +1362,54 @@ impl Dashboard {
             }
         })
         .detach();
+    }
+
+    /// Copy a keymap JSON snippet for this tool to the clipboard
+    /// and open keymap.json for editing.
+    fn create_shortcut_for_tool(
+        &self,
+        tool_id: &str,
+        tool_label: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let snippet = format!(
+            // Provide a ready-to-paste snippet with a placeholder keystroke
+            "{{\n  \"context\": \"Dashboard\",\n  \"bindings\": {{\n    \"cmd-shift-CHANGE_ME\": [\"dashboard::RunDashboardTool\", {{ \"tool_id\": \"{}\" }}]\n  }}\n}}",
+            tool_id,
+        );
+        cx.write_to_clipboard(ClipboardItem::new_string_with_json_metadata(
+            snippet,
+            format!("Shortcut for {tool_label}"),
+        ));
+
+        let keymap_path = paths::keymap_file().clone();
+        let workspace = self.workspace.clone();
+        cx.spawn_in(window, async move |_this, cx| {
+            let _ = workspace.update_in(cx, |workspace, window, cx| {
+                workspace
+                    .open_abs_path(keymap_path, OpenOptions::default(), window, cx)
+                    .detach();
+            });
+        })
+        .detach();
+    }
+
+    fn open_global_shortcut_modal(
+        &self,
+        tool_id: String,
+        tool_label: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let workspace = self.workspace.clone();
+        let _ = workspace.update(cx, |workspace, cx| {
+            workspace.toggle_modal(window, cx, {
+                let tool_id = tool_id.clone();
+                let tool_label = tool_label.clone();
+                move |window, cx| GlobalShortcutModal::new(tool_id, tool_label, window, cx)
+            });
+        });
     }
 
     // -- Rendering helpers --
@@ -1141,105 +1548,332 @@ impl Dashboard {
             .child(Label::new(indicator).size(LabelSize::XSmall).color(color))
     }
 
-    fn render_section(
-        &self,
-        category: ToolCategory,
-        tab_offset: usize,
-        _cx: &App,
-    ) -> impl IntoElement {
-        let tools_in_category: Vec<&ToolCard> =
-            TOOLS.iter().filter(|t| t.category == category).collect();
+    fn section_header(title: &str) -> impl IntoElement {
+        h_flex()
+            .px_1()
+            .mb_2()
+            .gap_2()
+            .child(
+                Label::new(title.to_string())
+                    .color(Color::Muted)
+                    .size(LabelSize::XSmall),
+            )
+            .child(Divider::horizontal().color(DividerColor::BorderVariant))
+    }
 
-        let runtime_path = self.runtime_path.clone();
-        let agent_tools_path = self.agent_tools_path.clone();
-        let workspace = self.workspace.clone();
-        let pasta_ativa = self.pasta_ativa.clone();
-        let session_path = self.session_path.clone();
+    /// Build tool buttons for a given tier. Pre-computes keybindings to avoid
+    /// capturing `cx` inside the `.map()` closure (Rust 2024 lifetime rules).
+    fn build_tool_buttons(
+        &self,
+        tier: ToolTier,
+        button_size: ButtonSize,
+        cx: &mut Context<Self>,
+    ) -> Vec<ButtonLike> {
+        let entity = cx.entity().downgrade();
+        let tools: Vec<ToolEntry> = self
+            .tools
+            .iter()
+            .filter(|t| t.tier == tier)
+            .cloned()
+            .collect();
+
+        let icon_color = if tier == ToolTier::Featured {
+            Color::Accent
+        } else {
+            Color::Muted
+        };
+
+        tools
+            .into_iter()
+            .map(|tool| {
+                let tool_icon = icon_for_tool(&tool.icon);
+                let tool_id = tool.id.clone();
+                let tool_label: SharedString = tool.label.clone().into();
+                let tool_description: SharedString = tool.description.clone().into();
+                let tool_clone = tool.clone();
+
+                let shortcut_tool_id = tool_id.clone();
+                let shortcut_tool_label = tool_label.to_string();
+
+                let globe_tool_id = tool_id.clone();
+                let globe_tool_label = tool_label.to_string();
+                let globe_entity = entity.clone();
+
+                let action = RunDashboardTool {
+                    tool_id: tool.id,
+                };
+                let keybinding = KeyBinding::for_action(&action, cx);
+
+                let shortcut_entity = entity.clone();
+
+                let runtime_path = self.runtime_path.clone();
+                let agent_tools_path = self.agent_tools_path.clone();
+                let workspace = self.workspace.clone();
+                let session_path = self.session_path.clone();
+                let pasta_ativa = self.pasta_ativa.clone();
+
+                ButtonLike::new(format!("dashboard-btn-{}", tool_id))
+                    .full_width()
+                    .size(button_size)
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_2()
+                            .items_center()
+                            .child(
+                                Icon::new(tool_icon)
+                                    .color(icon_color)
+                                    .size(IconSize::Small),
+                            )
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .child(Label::new(tool_label))
+                                    .child(
+                                        Label::new(tool_description)
+                                            .color(Color::Muted)
+                                            .size(LabelSize::XSmall),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .child(keybinding)
+                                    .child(
+                                        IconButton::new(
+                                            SharedString::from(format!(
+                                                "shortcut-{}",
+                                                shortcut_tool_id
+                                            )),
+                                            IconName::Plus,
+                                        )
+                                        .icon_size(IconSize::XSmall)
+                                        .icon_color(Color::Muted)
+                                        .tooltip(Tooltip::text("Create keyboard shortcut"))
+                                        .on_click(move |_, window, cx| {
+                                            let tool_id = shortcut_tool_id.clone();
+                                            let tool_label = shortcut_tool_label.clone();
+                                            let _ = shortcut_entity.update(cx, |this, cx| {
+                                                this.create_shortcut_for_tool(
+                                                    &tool_id,
+                                                    &tool_label,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }),
+                                    )
+                                    .child(
+                                        IconButton::new(
+                                            SharedString::from(format!(
+                                                "globe-{}",
+                                                globe_tool_id
+                                            )),
+                                            IconName::Keyboard,
+                                        )
+                                        .icon_size(IconSize::XSmall)
+                                        .icon_color(Color::Muted)
+                                        .tooltip(Tooltip::text("Create global shortcut"))
+                                        .on_click(move |_, window, cx| {
+                                            let tool_id = globe_tool_id.clone();
+                                            let tool_label = globe_tool_label.clone();
+                                            let _ = globe_entity.update(cx, |this, cx| {
+                                                this.open_global_shortcut_modal(
+                                                    tool_id,
+                                                    tool_label,
+                                                    window,
+                                                    cx,
+                                                );
+                                            });
+                                        }),
+                                    ),
+                            ),
+                    )
+                    .on_click(move |_, window, cx| {
+                        let runtime_path = runtime_path.clone();
+                        let agent_tools_path = agent_tools_path.clone();
+                        let pasta_ativa = pasta_ativa.clone();
+                        let session_path = session_path.clone();
+                        let tool = tool_clone.clone();
+                        let _ = workspace.update(cx, |workspace, cx| {
+                            Self::spawn_tool_entry(
+                                &tool,
+                                &runtime_path,
+                                &agent_tools_path,
+                                &session_path,
+                                &pasta_ativa,
+                                workspace,
+                                window,
+                                cx,
+                            );
+                        });
+                    })
+            })
+            .collect()
+    }
+
+    fn render_featured_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let buttons = self.build_tool_buttons(ToolTier::Featured, ButtonSize::Large, cx);
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(Self::section_header(ToolTier::Featured.label()))
+            .children(buttons)
+    }
+
+    fn render_standard_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let buttons = self.build_tool_buttons(ToolTier::Standard, ButtonSize::Medium, cx);
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(Self::section_header(ToolTier::Standard.label()))
+            .children(buttons)
+    }
+
+    /// Render the compact tools section (small 2-column grid, label only, tooltip for description).
+    fn render_compact_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity().downgrade();
+
+        let compact: Vec<ToolEntry> = self
+            .tools
+            .iter()
+            .filter(|t| t.tier == ToolTier::Compact)
+            .cloned()
+            .collect();
+
+        // Pre-compute keybindings outside the closure to avoid capturing cx
+        let compact_buttons: Vec<_> = compact
+            .into_iter()
+            .map(|tool| {
+                let tool_icon = icon_for_tool(&tool.icon);
+                let tool_id = tool.id.clone();
+                let tool_label: SharedString = tool.label.clone().into();
+                let tool_description = tool.description.clone();
+                let tool_clone = tool.clone();
+
+                let shortcut_tool_id = tool_id.clone();
+                let shortcut_tool_label = tool_label.to_string();
+
+                let globe_tool_id = tool_id.clone();
+                let globe_tool_label = tool_label.to_string();
+                let globe_entity = entity.clone();
+
+                let action = RunDashboardTool {
+                    tool_id: tool.id,
+                };
+                let keybinding = KeyBinding::for_action(&action, cx);
+
+                let shortcut_entity = entity.clone();
+
+                let runtime_path = self.runtime_path.clone();
+                let agent_tools_path = self.agent_tools_path.clone();
+                let workspace = self.workspace.clone();
+                let session_path = self.session_path.clone();
+                let pasta_ativa = self.pasta_ativa.clone();
+
+                ButtonLike::new(format!("dashboard-btn-{}", tool_id))
+                    .width(gpui::DefiniteLength::Fraction(0.48))
+                    .size(ButtonSize::Compact)
+                    .tooltip(Tooltip::text(tool_description))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                Icon::new(tool_icon)
+                                    .color(Color::Muted)
+                                    .size(IconSize::XSmall),
+                            )
+                            .child(
+                                Label::new(tool_label)
+                                    .size(LabelSize::Small)
+                                    .into_any_element(),
+                            )
+                            .child(div().flex_grow())
+                            .child(keybinding)
+                            .child(
+                                IconButton::new(
+                                    SharedString::from(format!(
+                                        "shortcut-{}",
+                                        shortcut_tool_id
+                                    )),
+                                    IconName::Plus,
+                                )
+                                .icon_size(IconSize::XSmall)
+                                .icon_color(Color::Muted)
+                                .on_click(move |_, window, cx| {
+                                    let tool_id = shortcut_tool_id.clone();
+                                    let tool_label = shortcut_tool_label.clone();
+                                    let _ =
+                                        shortcut_entity.update(cx, |this, cx| {
+                                            this.create_shortcut_for_tool(
+                                                &tool_id,
+                                                &tool_label,
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                }),
+                            )
+                            .child(
+                                IconButton::new(
+                                    SharedString::from(format!(
+                                        "globe-{}",
+                                        globe_tool_id
+                                    )),
+                                    IconName::Keyboard,
+                                )
+                                .icon_size(IconSize::XSmall)
+                                .icon_color(Color::Muted)
+                                .on_click(move |_, window, cx| {
+                                    let tool_id = globe_tool_id.clone();
+                                    let tool_label = globe_tool_label.clone();
+                                    let _ =
+                                        globe_entity.update(cx, |this, cx| {
+                                            this.open_global_shortcut_modal(
+                                                tool_id,
+                                                tool_label,
+                                                window,
+                                                cx,
+                                            );
+                                        });
+                                }),
+                            ),
+                    )
+                    .on_click(move |_, window, cx| {
+                        let runtime_path = runtime_path.clone();
+                        let agent_tools_path = agent_tools_path.clone();
+                        let pasta_ativa = pasta_ativa.clone();
+                        let session_path = session_path.clone();
+                        let tool = tool_clone.clone();
+                        let _ = workspace.update(cx, |workspace, cx| {
+                            Self::spawn_tool_entry(
+                                &tool,
+                                &runtime_path,
+                                &agent_tools_path,
+                                &session_path,
+                                &pasta_ativa,
+                                workspace,
+                                window,
+                                cx,
+                            );
+                        });
+                    })
+            })
+            .collect();
 
         v_flex()
             .w_full()
             .gap_1()
+            .child(Self::section_header(ToolTier::Compact.label()))
             .child(
                 h_flex()
-                    .px_1()
-                    .mb_2()
-                    .gap_2()
-                    .child(
-                        Label::new(category.label())
-                            .color(Color::Muted)
-                            .size(LabelSize::XSmall),
-                    )
-                    .child(Divider::horizontal().color(DividerColor::BorderVariant)),
+                    .w_full()
+                    .flex_wrap()
+                    .gap_1()
+                    .children(compact_buttons),
             )
-            .children(tools_in_category.into_iter().enumerate().map(
-                move |(idx, tool)| {
-                    let runtime_path = runtime_path.clone();
-                    let agent_tools_path = agent_tools_path.clone();
-                    let workspace = workspace.clone();
-                    let pasta_ativa = pasta_ativa.clone();
-                    let session_path = session_path.clone();
-                    let tool_id = tool.id;
-                    let tool_label = tool.label;
-                    let tool_description = tool.description;
-                    let tool_icon = tool.icon;
-                    let tool_binary = tool.binary;
-                    let tool_cwd = tool.cwd;
-                    let tool_category = tool.category;
-                    let tool_needs_session = tool.needs_session;
-
-                    ButtonLike::new(format!("dashboard-btn-{}", tool_id))
-                        .tab_index((tab_offset + idx) as isize)
-                        .full_width()
-                        .size(ButtonSize::Medium)
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .child(
-                                    Icon::new(tool_icon)
-                                        .color(Color::Muted)
-                                        .size(IconSize::Small),
-                                )
-                                .child(
-                                    v_flex()
-                                        .child(Label::new(tool_label))
-                                        .child(
-                                            Label::new(tool_description)
-                                                .color(Color::Muted)
-                                                .size(LabelSize::XSmall),
-                                        ),
-                                ),
-                        )
-                        .on_click(move |_, window, cx| {
-                            let runtime_path = runtime_path.clone();
-                            let agent_tools_path = agent_tools_path.clone();
-                            let pasta_ativa = pasta_ativa.clone();
-                            let session_path = session_path.clone();
-                            let _ = workspace.update(cx, |workspace, cx| {
-                                let card = ToolCard {
-                                    id: tool_id,
-                                    label: tool_label,
-                                    description: tool_description,
-                                    icon: tool_icon,
-                                    binary: tool_binary,
-                                    cwd: tool_cwd,
-                                    category: tool_category,
-                                    needs_session: tool_needs_session,
-                                };
-                                Self::spawn_tool(
-                                    &card,
-                                    &runtime_path,
-                                    &agent_tools_path,
-                                    &session_path,
-                                    &pasta_ativa,
-                                    workspace,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        })
-                },
-            ))
     }
 
     fn render_automations_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -1310,20 +1944,18 @@ impl Dashboard {
                 )
             })
             .children(automations.into_iter().enumerate().map({
-                let badge_label = badge_label.clone();
-                let entity = entity.clone();
                 move |(idx, entry)| {
                     let icon = icon_for_automation(&entry.icon);
                     let entry_id = entry.id.clone();
                     let entry_label: SharedString = entry.label.clone().into();
                     let entry_description: SharedString = entry.description.clone().into();
-                    let entry_prompt = entry.prompt.clone();
+                    let entry_prompt = entry.prompt;
                     let badge_label = badge_label.clone();
 
                     let click_entity = entity.clone();
                     let click_id = entry_id.clone();
                     let click_label = entry_label.clone();
-                    let click_prompt = entry_prompt.clone();
+                    let click_prompt = entry_prompt;
 
                     ButtonLike::new(format!("automation-btn-{}-{}", entry_id, idx))
                         .full_width()
@@ -1348,7 +1980,7 @@ impl Dashboard {
                                         ),
                                 )
                                 .child(
-                                    Label::new(badge_label.clone())
+                                    Label::new(badge_label)
                                         .color(badge_color)
                                         .size(LabelSize::XSmall),
                                 ),
@@ -1479,27 +2111,35 @@ impl Dashboard {
 }
 
 // ---------------------------------------------------------------------------
-// Render
+// Render — Three-tier layout
 // ---------------------------------------------------------------------------
 
 impl Render for Dashboard {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let pt_count = TOOLS
-            .iter()
-            .filter(|t| t.category == ToolCategory::ProTools)
-            .count();
-        let mixer_count = TOOLS
-            .iter()
-            .filter(|t| t.category == ToolCategory::Mixer)
-            .count();
-        let audio_count = TOOLS
-            .iter()
-            .filter(|t| t.category == ToolCategory::Audio)
-            .count();
-
         h_flex()
             .key_context("Dashboard")
             .track_focus(&self.focus_handle(cx))
+            .on_action(cx.listener(|this, action: &RunDashboardTool, window, cx| {
+                if let Some(tool) = this.tools.iter().find(|t| t.id == action.tool_id) {
+                    let tool = tool.clone();
+                    let runtime_path = this.runtime_path.clone();
+                    let agent_tools_path = this.agent_tools_path.clone();
+                    let session_path = this.session_path.clone();
+                    let pasta_ativa = this.pasta_ativa.clone();
+                    let _ = this.workspace.update(cx, |workspace, cx| {
+                        Self::spawn_tool_entry(
+                            &tool,
+                            &runtime_path,
+                            &agent_tools_path,
+                            &session_path,
+                            &pasta_ativa,
+                            workspace,
+                            window,
+                            cx,
+                        );
+                    });
+                }
+            }))
             .size_full()
             .justify_center()
             .overflow_hidden()
@@ -1517,7 +2157,7 @@ impl Render for Dashboard {
                             .min_w_0()
                             .pt_8()
                             .pb_8()
-                            .max_w_128()
+                            .max_w_full()
                             .gap_6()
                             .overflow_y_scroll()
                             .track_scroll(&self.scroll_handle)
@@ -1553,19 +2193,10 @@ impl Render for Dashboard {
                             .child(self.render_session_status(cx))
                             // Pasta ativa
                             .child(self.render_pasta_ativa(cx))
-                            // Tool sections
-                            .child(self.render_section(ToolCategory::ProTools, 0, cx))
-                            .child(self.render_section(ToolCategory::Mixer, pt_count, cx))
-                            .child(self.render_section(
-                                ToolCategory::Audio,
-                                pt_count + mixer_count,
-                                cx,
-                            ))
-                            .child(self.render_section(
-                                ToolCategory::File,
-                                pt_count + mixer_count + audio_count,
-                                cx,
-                            ))
+                            // Three-tier tool layout
+                            .child(self.render_featured_section(cx))
+                            .child(self.render_standard_section(cx))
+                            .child(self.render_compact_section(cx))
                             // AI Agents
                             .child(self.render_ai_agents_section(cx))
                             // Automations

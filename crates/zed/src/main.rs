@@ -240,6 +240,7 @@ fn main() {
         }
     }
 
+    clear_persisted_state();
     let file_errors = init_paths();
     if !file_errors.is_empty() {
         files_not_created_on_launch(file_errors);
@@ -683,6 +684,7 @@ fn main() {
         svg_preview::init(cx);
         onboarding::init(cx);
         dashboard::init(cx);
+        dashboard::init_global_hotkeys(cx);
         call::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         title_bar::init(cx);
         settings_ui::init(cx);
@@ -1400,6 +1402,19 @@ pub(crate) async fn restorable_workspace_locations(
             }
         }
         _ => None,
+    }
+}
+
+fn clear_persisted_state() {
+    let dirs_to_clear = [
+        paths::database_dir(),
+        paths::state_dir(),
+        paths::temp_dir(),
+    ];
+    for dir in &dirs_to_clear {
+        if dir.exists() {
+            std::fs::remove_dir_all(dir).log_err();
+        }
     }
 }
 

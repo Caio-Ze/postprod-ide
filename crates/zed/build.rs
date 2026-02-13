@@ -16,6 +16,30 @@ fn main() {
 
         // weak link to support Catalina
         println!("cargo:rustc-link-arg=-Wl,-weak_framework,ScreenCaptureKit");
+
+        // Symlink the PTSL SDK runtime folder into target/{profile}/ so
+        // the dashboard can find tool binaries next to the main binary.
+        // Uses a symlink (~0ms) rather than a full copy (~400MB) for dev speed.
+        println!("cargo:rerun-if-changed=../../../PROTOOLS_SDK_PTSL/target/runtime");
+        let out_dir = std::env::var("OUT_DIR").unwrap();
+        let target_profile_dir = std::path::Path::new(&out_dir)
+            .parent()
+            .and_then(|p| p.parent())
+            .and_then(|p| p.parent())
+            .expect("failed to find target profile dir");
+
+        let runtime_src = std::path::Path::new("../../../PROTOOLS_SDK_PTSL/target/runtime");
+        let runtime_dst = target_profile_dir.join("runtime");
+
+        if runtime_src.exists() && !runtime_dst.exists() {
+            if let Ok(canonical) = runtime_src.canonicalize() {
+                std::os::unix::fs::symlink(&canonical, &runtime_dst).ok();
+                println!(
+                    "cargo::warning=Linked runtime → {}",
+                    runtime_dst.display()
+                );
+            }
+        }
     }
 
     // Populate git sha environment variable if git is available

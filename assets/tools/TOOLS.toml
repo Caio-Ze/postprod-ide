@@ -1,0 +1,326 @@
+## ProTools Studio — Tool Registry
+## Each [[tool]] block becomes a button on the Dashboard.
+## Adding a new entry here auto-creates the button — no Rust code changes needed.
+## The dashboard embeds this file at compile time.
+##
+## Fields:
+##   id            — unique identifier (camelCase, no spaces)
+##   label         — button text (short)
+##   description   — subtitle shown below the label
+##   icon          — icon name (mapped to IconName in Rust)
+##   binary        — executable name (no path)
+##   cwd           — working directory relative to runtime_path (runtime tools only)
+##   source        — "runtime" (runtime/ folder) or "agent" (agent_tools/ folder)
+##   tier          — "featured" | "standard" | "compact"
+##   needs_session — true if the tool needs --session <path> argument
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FEATURED — The two master launchers that call all other runtime tools
+# Session Monitor and Batch Processing contain and orchestrate the executables
+# inside their respective folders.
+# ═══════════════════════════════════════════════════════════════════════════
+
+[[tool]]
+id = "sessionMonitor"
+label = "Session Monitor"
+description = "Real-time session monitoring — calls all tools in bin/Session_Monitor/"
+icon = "tool_terminal"
+binary = "session-monitor"
+cwd = "bin/Session_Monitor"
+source = "runtime"
+tier = "featured"
+needs_session = false
+
+[[tool]]
+id = "batchProcessing"
+label = "Batch Processing"
+description = "Interactive batch launcher — calls all tools in bin/Pro_Tools_Batch_Processing_Runtime/"
+icon = "play_filled"
+binary = "start-scripts-pro-tools-batch-processing"
+cwd = "bin/Pro_Tools_Batch_Processing_Runtime"
+source = "runtime"
+tier = "featured"
+needs_session = false
+
+# ═══════════════════════════════════════════════════════════════════════════
+# STANDARD — Medium buttons (individual runtime tools, audio, file ops)
+# ═══════════════════════════════════════════════════════════════════════════
+
+[[tool]]
+id = "bounceAll"
+label = "Bounce All (TV + NET + SPOT)"
+description = "Multi-format bounce with LUFS normalization"
+icon = "audio_on"
+binary = "rust-bounce-to-all-configurable-bin"
+cwd = "bin/Bounce"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "importSpotClips"
+label = "Import & Spot Clips"
+description = "Import audio and spot to timeline"
+icon = "list_tree"
+binary = "import-and-spot-clip-notimelimit"
+cwd = "bin/Session_Monitor/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "importSfx"
+label = "Import SFX (Gemini)"
+description = "Import SFX folders with Gemini AI integration"
+icon = "sparkle"
+binary = "sfx_workflow_v3_json"
+cwd = "bin/SFX_Workflow_Runtime"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "voiceToText"
+label = "Voice to Text Compare"
+description = "Voice transcription vs script comparison"
+icon = "mic"
+binary = "RUST_VOICE_TO_TEXT_CLI"
+cwd = "bin/Session_Monitor/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "tvToSpotWorkflow"
+label = "TV -> SPOT Workflow"
+description = "Full TV to SPOT session conversion pipeline"
+icon = "forward_arrow"
+binary = "from-tv-to-spot-workflow"
+cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "saveIncrement"
+label = "Save + Increment"
+description = "Auto-increment and save Pro Tools session"
+icon = "check"
+binary = "save_session_increment"
+cwd = "tools"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "normalizeAudio"
+label = "Normalize Audio (EBU R128)"
+description = "EBU R128 loudness normalization"
+icon = "audio_on"
+binary = "audio-normalizer-configurable"
+cwd = "bin/Bounce/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "maximizeAudio"
+label = "Maximize Audio Peaks"
+description = "Peak normalization to 0dBFS"
+icon = "arrow_up_right"
+binary = "audio-normalizer-maximize"
+cwd = "tools"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "convertMp3Wav"
+label = "Convert MP3 / WAV"
+description = "Batch MP3/WAV conversion at 320kbps"
+icon = "replace"
+binary = "wav_mp3_fix_rust"
+cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "tvConverter"
+label = "TV Converter (_TV/_NET)"
+description = "LUFS normalization with _TV/_NET naming"
+icon = "audio_on"
+binary = "tv_converter"
+cwd = "bin/Bounce/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "reduceVideo"
+label = "Reduce Video (strip audio)"
+description = "Strip audio and compress video to 480p"
+icon = "minimize"
+binary = "video_reducer_remove_audio"
+cwd = "bin/SFX_Workflow_Runtime/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "carrefourRenamer"
+label = "Carrefour Renamer"
+description = "Rename session folders with dates"
+icon = "folder"
+binary = "carrefour-folder-renamer"
+cwd = "tools"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "tvToSpotRename"
+label = "TV -> SPOT Rename"
+description = "Rename WAV files (strip prefix/version)"
+icon = "file_rust"
+binary = "tv_to_spot_rename"
+cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "createFolderStructure"
+label = "Create Folder Structure (CRF)"
+description = "Create folder structures from clipboard"
+icon = "folder_open"
+binary = "pastas_crf_rust"
+cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+# ═══════════════════════════════════════════════════════════════════════════
+# COMPACT — Small 2-column grid (agent CLI tools)
+# ═══════════════════════════════════════════════════════════════════════════
+
+[[tool]]
+id = "agentTransport"
+label = "Transport"
+description = "Play / Stop / Status"
+icon = "play_filled"
+binary = "agent-transport"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = false
+
+[[tool]]
+id = "agentMuteSolo"
+label = "Mute / Solo"
+description = "Mute, unmute, solo, or unsolo tracks"
+icon = "audio_off"
+binary = "agent-mute-solo"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = true
+
+[[tool]]
+id = "agentTrackVolume"
+label = "Track Volume"
+description = "Set track fader volume in dB (automation must be Read mode)"
+icon = "audio_on"
+binary = "agent-track-volume"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = true
+
+[[tool]]
+id = "agentManageTracks"
+label = "Manage Tracks"
+description = "List, create, hide, inactivate, solo tracks"
+icon = "list_tree"
+binary = "agent-manage-tracks"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = true
+
+[[tool]]
+id = "agentRenameTrack"
+label = "Rename Track"
+description = "Rename a track in the session"
+icon = "replace"
+binary = "agent-rename-track"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = true
+
+[[tool]]
+id = "agentRenameClip"
+label = "Rename Clip"
+description = "Rename a clip in the open session"
+icon = "replace"
+binary = "agent-rename-clip"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = false
+
+[[tool]]
+id = "agentDeleteTracks"
+label = "Delete Tracks"
+description = "Delete one or more tracks from session"
+icon = "trash"
+binary = "agent-delete-tracks"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = true
+
+[[tool]]
+id = "agentGetClipList"
+label = "Get Clip List"
+description = "List all clips in session"
+icon = "file_doc"
+binary = "agent-get-clip-list"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = true
+
+[[tool]]
+id = "agentTimelineSelection"
+label = "Timeline Selection"
+description = "Get or set timeline in/out points"
+icon = "select_all"
+binary = "agent-timeline-selection"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = true
+
+[[tool]]
+id = "agentSaveSessionAs"
+label = "Save Session As"
+description = "Save session under a new name/location"
+icon = "check"
+binary = "agent-save-session-as"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = true
+
+[[tool]]
+id = "agentBounceExport"
+label = "Bounce Export"
+description = "Bounce current session to WAV or MP3"
+icon = "audio_on"
+binary = "agent-bounce-export"
+cwd = ""
+source = "agent"
+tier = "compact"
+needs_session = false

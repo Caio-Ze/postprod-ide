@@ -8,12 +8,14 @@ ProTools Studio is a fork of Zed (a GPU-accelerated code editor) rebranded as a 
 
 ## Build commands
 
+**IMPORTANT: Always build in release mode after making changes.**
+
 ```bash
-# Build the main application
-cargo build -p zed
+# Build the main application (always use --release)
+cargo build --release -p zed
 
 # Run the application
-cargo run -p zed
+cargo run --release -p zed
 
 # Lint (use this instead of `cargo clippy` directly)
 ./script/clippy

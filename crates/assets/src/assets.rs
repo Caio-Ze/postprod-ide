@@ -14,6 +14,7 @@ use rust_embed::RustEmbed;
 #[include = "sounds/**/*"]
 #[include = "prompts/**/*"]
 #[include = "agent-skills/**/*"]
+#[include = "tools/**/*"]
 #[include = "*.md"]
 #[exclude = "*.DS_Store"]
 pub struct Assets;
