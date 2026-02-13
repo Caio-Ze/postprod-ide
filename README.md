@@ -37,6 +37,27 @@ Every tool communicates with Pro Tools over the official PTSL gRPC protocol — 
 | **Audio** | Normalize (EBU R128), Maximize Peaks, Convert MP3/WAV, TV Converter |
 | **File** | Folder Renamer, TV to SPOT Rename, Create Folder Structure |
 
+### Session Monitor — the always-on autopilot
+
+Session Monitor is the centerpiece of ProTools Studio. It runs in the background and watches what happens in Pro Tools — when you open a session, when you save, when you close. And it acts on it.
+
+![Session Monitor](DOCS/session-monitor-screenshot.png)
+
+**What it does today:**
+- Detects when a session opens and automatically configures Pro Tools — window layout, track visibility, routing, the way you prefer to work
+- Runs scripts on session events: auto-save a new version before you start editing, execute a task list when you save, trigger delivery processing when you close
+- Monitors PTSL connection status in real time — you always know if Pro Tools is reachable
+- Chains with other tools: open a session, import tracks from a source, solo what you need, and start monitoring — all without a single manual click
+
+**What's coming:**
+- Full screen layout presets — save and restore your preferred Pro Tools window arrangement per project or per client
+- Expanded event triggers — react to track changes, marker creation, timeline selections
+- Conditional scripts — "if the session name contains SPOT, run the SPOT workflow automatically"
+
+No other Pro Tools automation tool works this way. SoundFlow macros run when you press a button. Keyboard Maestro macros run when you press a key. Session Monitor runs by itself — it watches, it reacts, it chains. You open a session and everything is already configured. You save and the backup is already done. You close and the delivery is already processing.
+
+It is the fastest path from "session opened" to "files delivered" because there is no path — it just happens.
+
 ### System-wide keyboard shortcuts
 
 Assign a global hotkey to any tool. Press it from Pro Tools — without switching apps — and the tool runs. The shortcut capture modal lets you record any key combination and saves it instantly.
