@@ -4,16 +4,39 @@ A native macOS audio post-production IDE built on top of [Zed](https://github.co
 
 ![ProTools Studio Dashboard](DOCS/dashboard-screenshot.png)
 
-## What makes this different
+## How it compares
 
-Most Pro Tools automation tools are either proprietary plugins, fragile AppleScript wrappers, or scattered shell scripts. ProTools Studio takes a different approach:
+Audio post-production has a few automation options today, each with trade-offs:
 
-- **Native gRPC control** — 31 CLI tools communicate directly with Pro Tools via the PTSL (Pro Tools Scripting Language) protocol over gRPC. No GUI scripting, no accessibility hacks.
-- **System-wide hotkeys** — Global keyboard shortcuts (via macOS CGEventTap) trigger tools even when Pro Tools is the foreground app. Press a key combo from your DAW and the tool runs.
-- **AI agent integration** — One-click automations that dispatch multi-step prompts to Claude Code or Gemini CLI. Agents can chain multiple PTSL tools together for complex workflows (import tracks, solo, bounce, normalize, rename — all from a single prompt).
-- **Self-improving skills** — Agent skill files are shared across Claude and Gemini via symlinks to a single canonical source. Agents can update their own documentation as they discover new patterns.
-- **TOML-driven automations** — Add or edit automation prompts in a TOML file; the dashboard picks up changes every 30 seconds. No recompilation needed.
-- **The IDE edits its own tools** — The Zed editor, terminal, and PTSL tool source code all live in the same workspace. You can edit a tool binary's Rust source, rebuild, and test it without leaving the app.
+| | **ProTools Studio** | **[SoundFlow](https://soundflow.org/)** | **[Keyboard Maestro](https://www.keyboardmaestro.com/)** | **[py-ptsl](https://github.com/iluvcapra/py-ptsl)** | **Custom scripts** |
+|---|---|---|---|---|---|
+| **How it talks to PT** | gRPC (PTSL protocol) | SFX protocol + GUI hooks | GUI simulation (clicks, keystrokes) | gRPC (PTSL protocol) | AppleScript / osascript |
+| **Breaks on UI changes** | No | Partially | Yes | No | Often |
+| **AI agents** | Built-in (Claude + Gemini) | AI assistant (premium) | No | No | No |
+| **File/folder awareness** | Full IDE (editor, git, tree) | No | No | No | No |
+| **Session awareness** | Live polling (5s) | Via SFX framework | Manual | Manual | Manual |
+| **System-wide hotkeys** | Yes (CGEventTap) | Yes (MIDI/OSC/keys) | Yes | No | No |
+| **Custom tool authoring** | Rust, edit + rebuild in-app | JavaScript | GUI macro builder | Python | Any language |
+| **Cost** | Free / open source | Free tier, $12-20/mo for Pro | $36 one-time | Free / open source | Free |
+| **Open source** | Yes (GPL-3.0) | No | No | Yes (BSD) | Varies |
+
+### What SoundFlow does well
+
+[SoundFlow](https://soundflow.org/) is the industry standard for Pro Tools automation — now [integrated directly into Pro Tools 2025.10](https://www.avid.com/resource-center/soundflow). It ships with 1,700+ pre-built macros, has a JavaScript scripting engine, and supports Stream Deck, MIDI, and OSC triggers. For most users who want ready-made macros and a polished GUI, SoundFlow is the right choice.
+
+### Where ProTools Studio is different
+
+ProTools Studio is not trying to replace SoundFlow's macro library. It solves a different problem: **giving audio engineers an integrated development environment that understands their project structure**.
+
+- **Folder-aware workspace** — The Zed file explorer shows your entire delivery structure (`Sessoes/`, `Imports/`, `Processamento/`, `Finalizados/`, `Arquivo/`). You see your session files, audio exports, and tool source code side by side. No other audio automation tool gives you a project tree with git integration, search across files, and a terminal — all in one window.
+
+- **AI agents that understand context** — When Claude or Gemini runs inside ProTools Studio, the agent sees your file tree, your open session path, your TOML automations, and your tool source code. It can read a bounced WAV, check if normalization was applied, rename the output, and move it to the delivery folder — all guided by project context that a standalone macro system simply doesn't have.
+
+- **Native gRPC, not GUI simulation** — Like py-ptsl, ProTools Studio talks to Pro Tools over the official PTSL gRPC protocol. Unlike Keyboard Maestro (which simulates mouse clicks and keystrokes and [breaks when Avid changes the UI](https://duc.avid.com/showthread.php?t=428108)), gRPC commands are stable across Pro Tools versions.
+
+- **The tools are the project** — The 31 CLI tools are Rust binaries that live in the same workspace. You can open a tool's source, fix a bug, `cargo build` in the integrated terminal, and immediately re-run it from the dashboard. The IDE and the runtime are one thing. No other audio tool offers this.
+
+- **No subscription** — SoundFlow's Pro tier costs $12-20/month. Keyboard Maestro is $36. ProTools Studio is free and open source. You own every line of code and can modify anything.
 
 ## Current state
 
