@@ -4,6 +4,14 @@ A native macOS audio post-production IDE built on top of [Zed](https://github.co
 
 ![ProTools Studio Dashboard](DOCS/dashboard-screenshot.png)
 
+## Who this is for
+
+Audio post-production for broadcast, advertising, and streaming is a volume game. A single production company might deliver dozens of spots per day — each one requiring the same sequence of steps: open session, import tracks, solo the right stems, bounce, normalize to broadcast loudness standards (-23 LUFS), convert formats, rename files to network specs, and organize deliveries. Multiply that by every editor on the team, every day, every client.
+
+These are hours of mechanical, repetitive work that require precision but not creativity. A missed normalization, a wrong filename, a forgotten MP3 conversion — any of these means a rejected delivery and wasted time.
+
+ProTools Studio was built for this reality. It replaces the manual repetition with one-click tools and AI-driven workflows that handle the entire chain — from open session to verified delivery — while the engineer focuses on the actual creative work.
+
 ## How it compares
 
 Audio post-production has a few automation options today, each with trade-offs:
@@ -47,6 +55,22 @@ ProTools Studio is not trying to replace SoundFlow's macro library. It solves a 
 - **Native gRPC, not GUI simulation** — Like py-ptsl, ProTools Studio talks to Pro Tools over the official PTSL gRPC protocol. Unlike Keyboard Maestro (which simulates mouse clicks and keystrokes and [breaks when Avid changes the UI](https://duc.avid.com/showthread.php?t=428108)), gRPC commands are stable across Pro Tools versions.
 
 - **The tools are the project** — The 31 CLI tools are Rust binaries that live in the same workspace. You can open a tool's source, fix a bug, `cargo build` in the integrated terminal, and immediately re-run it from the dashboard. The IDE and the runtime are one thing. No other audio tool offers this.
+
+## Built entirely in Rust
+
+Everything — the IDE, the dashboard, and every single CLI tool — is written in Rust. This is not a cosmetic choice. It has real consequences for the people using it:
+
+- **Instant tool execution** — Each of the 31 CLI tools is a compiled native binary. There is no interpreter startup, no VM warmup, no dependency resolution at runtime. A tool launches, does its work, and exits. When you're bouncing 40 sessions in a batch, the difference between a 200ms Rust binary and a 2-second Python script adds up fast.
+
+- **GPU-accelerated UI** — The IDE is built on [GPUI](https://www.gpui.rs/), Zed's GPU rendering framework. The dashboard, the editor, the terminal — everything is rendered on the GPU. Scrolling through a session with hundreds of tracks or scanning a delivery folder with thousands of files stays smooth. There is no Electron, no web view, no garbage collector pausing the UI.
+
+- **Low memory footprint** — Rust has no runtime and no garbage collector. The entire application (IDE + dashboard + terminal + file tree) typically uses a fraction of the memory that Electron-based tools consume. On a machine already running Pro Tools (which is not gentle with RAM), this matters.
+
+- **Single static binaries** — Each tool compiles to a single executable with no external dependencies (except FFmpeg for audio processing tools). No `node_modules/`, no `pip install`, no version conflicts. Copy the binary, run it.
+
+- **Reliability at scale** — Rust's ownership model catches entire categories of bugs (null pointers, data races, use-after-free) at compile time. When a production company runs batch processing across dozens of sessions overnight, the tools either work correctly or refuse to compile. They don't silently corrupt data at 3 AM.
+
+The same language runs from the lowest level (gRPC protocol buffers talking to Pro Tools) to the highest level (GPU-rendered dashboard buttons). There is no glue layer, no FFI boundary, no serialization between languages. It is Rust all the way down.
 
 ## Current state
 
