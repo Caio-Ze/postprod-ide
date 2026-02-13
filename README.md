@@ -12,7 +12,7 @@ Audio post-production has a few automation options today, each with trade-offs:
 |---|---|---|---|---|---|
 | **How it talks to PT** | gRPC (PTSL protocol) | SFX protocol + GUI hooks | GUI simulation (clicks, keystrokes) | gRPC (PTSL protocol) | AppleScript / osascript |
 | **Breaks on UI changes** | No | Partially | Yes | No | Often |
-| **AI agents** | Built-in (Claude + Gemini) | AI assistant (premium) | No | No | No |
+| **AI** | Autonomous agents (see below) | Chat assistant (premium) | No | No | No |
 | **File/folder awareness** | Full IDE (editor, git, tree) | No | No | No | No |
 | **Session awareness** | Live polling (5s) | Via SFX framework | Manual | Manual | Manual |
 | **System-wide hotkeys** | Yes (CGEventTap) | Yes (MIDI/OSC/keys) | Yes | No | No |
@@ -30,7 +30,21 @@ ProTools Studio is not trying to replace SoundFlow's macro library. It solves a 
 
 - **Folder-aware workspace** — The Zed file explorer shows your entire delivery structure (`Sessoes/`, `Imports/`, `Processamento/`, `Finalizados/`, `Arquivo/`). You see your session files, audio exports, and tool source code side by side. No other audio automation tool gives you a project tree with git integration, search across files, and a terminal — all in one window.
 
-- **AI agents that understand context** — When Claude or Gemini runs inside ProTools Studio, the agent sees your file tree, your open session path, your TOML automations, and your tool source code. It can read a bounced WAV, check if normalization was applied, rename the output, and move it to the delivery folder — all guided by project context that a standalone macro system simply doesn't have.
+- **Autonomous AI agents, not a chat assistant** — SoundFlow's [Session Assistant](https://soundflow.org/session-assistant) is a conversational interface inside Pro Tools: you type "create a track" and it executes that single command. It cannot read your project folders, create files on disk, chain external tools, or work without your input at every step.
+
+  ProTools Studio integrates full-blown coding agents (Claude Code, Gemini CLI) that run autonomously in the integrated terminal. The difference is fundamental:
+
+  | | **ProTools Studio agents** | **SoundFlow Session Assistant** |
+  |---|---|---|
+  | Reads your file tree | Yes — sees sessions, audio, exports, source code | No — only sees Pro Tools session state |
+  | Creates/edits files | Yes — writes scripts, renames exports, moves deliveries | No — limited to Pro Tools track operations |
+  | Chains multiple tools | Yes — import tracks → solo → bounce → normalize → rename in one prompt | No — one command at a time |
+  | Runs without prompting | Yes — headless mode executes multi-step workflows end-to-end | No — requires human input for each step |
+  | Fixes its own tools | Yes — agent reads tool source, edits Rust code, rebuilds | No — macros are fixed scripts |
+  | Learns from mistakes | Yes — agents update their own skill files with new patterns | No |
+  | Works outside Pro Tools | Yes — file operations, FFmpeg, audio analysis, git | No — Pro Tools only |
+
+  A concrete example: you click "Full Delivery" in the dashboard and the agent autonomously bounces the session, normalizes to -23 LUFS, converts to MP3, renames files for broadcast standards, organizes them into delivery folders, and verifies the output — all from a single click. The agent decides what to do at each step based on what it finds on disk.
 
 - **Native gRPC, not GUI simulation** — Like py-ptsl, ProTools Studio talks to Pro Tools over the official PTSL gRPC protocol. Unlike Keyboard Maestro (which simulates mouse clicks and keystrokes and [breaks when Avid changes the UI](https://duc.avid.com/showthread.php?t=428108)), gRPC commands are stable across Pro Tools versions.
 
