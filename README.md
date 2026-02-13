@@ -1,8 +1,12 @@
 # ProTools Studio
 
-A native macOS audio post-production IDE built on top of [Zed](https://github.com/zed-industries/zed). ProTools Studio keeps everything Zed offers — a GPU-accelerated editor, integrated terminal, AI chat, LSP, and git — and adds a dashboard purpose-built for audio workflows with Avid Pro Tools.
+A native macOS application for audio post-production. One app, one window — a dashboard with 30+ automation tools that talk directly to Avid Pro Tools, plus AI agents that can run entire delivery workflows autonomously.
+
+Built on top of [Zed](https://github.com/zed-industries/zed), the GPU-accelerated code editor.
 
 ![ProTools Studio Dashboard](DOCS/dashboard-screenshot.png)
+
+**Expected launch: March 13, 2026** — The application is in active daily use for real production work. The remaining work is packaging everything into a single `.app` bundle that runs out of the box with no setup.
 
 ## Who this is for
 
@@ -12,151 +16,115 @@ These are hours of mechanical, repetitive work that require precision but not cr
 
 ProTools Studio was built for this reality. It replaces the manual repetition with one-click tools and AI-driven workflows that handle the entire chain — from open session to verified delivery — while the engineer focuses on the actual creative work.
 
+## What you get
+
+### A single application
+
+Download, open, and start working. ProTools Studio is a native macOS app — not a browser tool, not a plugin, not a collection of scripts you need to install separately. Every tool is bundled inside the application. The dashboard shows your tools, your sessions, and your delivery status in one window.
+
+### 30+ tools that control Pro Tools directly
+
+Every tool communicates with Pro Tools over the official PTSL gRPC protocol — the same interface Avid built for professional integrations. This means:
+
+- Tools don't simulate mouse clicks or keyboard shortcuts. They send commands directly to the Pro Tools engine.
+- They don't break when Avid updates the UI. The protocol is versioned and stable.
+- They execute instantly. No waiting for screen elements to appear, no timing-dependent scripting.
+
+| Category | Tools |
+|----------|-------|
+| **Session** | Bounce All, Session Monitor, Import & Spot Clips, Save + Increment, Batch Processing, Voice to Text Compare |
+| **Mixer** | Transport, Mute/Solo, Track Volume, Manage Tracks, Rename Track/Clip, Delete Tracks, Timeline Selection, Bounce Export |
+| **Audio** | Normalize (EBU R128), Maximize Peaks, Convert MP3/WAV, TV Converter |
+| **File** | Folder Renamer, TV to SPOT Rename, Create Folder Structure |
+
+### System-wide keyboard shortcuts
+
+Assign a global hotkey to any tool. Press it from Pro Tools — without switching apps — and the tool runs. The shortcut capture modal lets you record any key combination and saves it instantly.
+
+### Session awareness
+
+The app detects your open Pro Tools session automatically. The window title shows the session name, a status indicator shows whether Pro Tools is connected, and every session-aware tool receives the correct session path without you typing anything.
+
+### Organized project workspace
+
+The file explorer shows your entire delivery structure side by side:
+
+```
+ProTools_Suite/
+├── 1_Sessoes/          ← Pro Tools sessions
+├── 2_Imports/          ← Source audio
+├── 3_Processamento/    ← Work in progress
+├── 4_Finalizados/      ← Delivery-ready files
+└── 5_Arquivo/          ← Archive
+```
+
+You see your sessions, exports, and deliveries in one place — with search, git tracking, and a built-in terminal.
+
+### Delivery monitoring
+
+A background scan checks your delivery folder and reports what's ready: TV versions, NET versions, SPOT versions, MP3s. Color-coded badges show what's complete and what's missing. No more manually counting files before sending to the client.
+
+## AI agents — not just an assistant
+
+ProTools Studio integrates autonomous AI agents (Claude Code, Gemini CLI) that run in the built-in terminal. This is fundamentally different from chat-based assistants like SoundFlow's [Session Assistant](https://soundflow.org/session-assistant):
+
+| | **ProTools Studio agents** | **SoundFlow Session Assistant** |
+|---|---|---|
+| Reads your file tree | Yes — sees sessions, audio, exports | No — only sees Pro Tools session state |
+| Creates/edits files | Yes — renames exports, moves deliveries, writes scripts | No — limited to Pro Tools track operations |
+| Chains multiple tools | Yes — import → solo → bounce → normalize → rename in one prompt | No — one command at a time |
+| Runs autonomously | Yes — headless mode executes entire workflows end-to-end | No — requires human input at each step |
+| Works outside Pro Tools | Yes — file operations, audio processing, format conversion | No — Pro Tools only |
+
+A concrete example: you click "Full Delivery" in the dashboard and the agent autonomously bounces the session, normalizes to -23 LUFS, converts to MP3, renames files for broadcast standards, organizes them into delivery folders, and verifies the output — all from a single click. The agent decides what to do at each step based on what it finds on disk.
+
+Automations are defined in a simple TOML file. Add or edit them at any time — the dashboard picks up changes automatically. No recompilation, no restarts.
+
 ## How it compares
 
-Audio post-production has a few automation options today, each with trade-offs:
-
-| | **ProTools Studio** | **[SoundFlow](https://soundflow.org/)** | **[Keyboard Maestro](https://www.keyboardmaestro.com/)** | **[py-ptsl](https://github.com/iluvcapra/py-ptsl)** | **Custom scripts** |
-|---|---|---|---|---|---|
-| **How it talks to PT** | gRPC (PTSL protocol) | SFX protocol + GUI hooks | GUI simulation (clicks, keystrokes) | gRPC (PTSL protocol) | AppleScript / osascript |
-| **Breaks on UI changes** | No | Partially | Yes | No | Often |
-| **AI** | Autonomous agents (see below) | Chat assistant (premium) | No | No | No |
-| **File/folder awareness** | Full IDE (editor, git, tree) | No | No | No | No |
-| **Session awareness** | Live polling (5s) | Via SFX framework | Manual | Manual | Manual |
-| **System-wide hotkeys** | Yes (CGEventTap) | Yes (MIDI/OSC/keys) | Yes | No | No |
-| **Custom tool authoring** | Rust, edit + rebuild in-app | JavaScript | GUI macro builder | Python | Any language |
+| | **ProTools Studio** | **[SoundFlow](https://soundflow.org/)** | **[Keyboard Maestro](https://www.keyboardmaestro.com/)** | **Custom scripts** |
+|---|---|---|---|---|
+| **How it talks to PT** | gRPC (PTSL protocol) | SFX protocol + GUI hooks | GUI simulation (clicks, keystrokes) | AppleScript / osascript |
+| **Breaks on UI changes** | No | Partially | Yes | Often |
+| **AI agents** | Autonomous (Claude + Gemini) | Chat assistant (premium) | No | No |
+| **File/folder awareness** | Full workspace (editor, git, tree) | No | No | No |
+| **Session awareness** | Automatic (live polling) | Via SFX framework | Manual | Manual |
+| **System-wide hotkeys** | Yes | Yes (MIDI/OSC/keys) | Yes | No |
 
 ### What SoundFlow does well
 
-[SoundFlow](https://soundflow.org/) is the industry standard for Pro Tools automation — now [integrated directly into Pro Tools 2025.10](https://www.avid.com/resource-center/soundflow). It ships with 1,700+ pre-built macros, has a JavaScript scripting engine, and supports Stream Deck, MIDI, and OSC triggers. For most users who want ready-made macros and a polished GUI, SoundFlow is the right choice.
+[SoundFlow](https://soundflow.org/) is the industry standard — now [built into Pro Tools 2025.10](https://www.avid.com/resource-center/soundflow). It ships with 1,700+ pre-built macros, supports Stream Deck and MIDI triggers, and has a JavaScript scripting engine. For individual editors who want ready-made macros and a polished UI, SoundFlow is a solid choice.
 
 ### Where ProTools Studio is different
 
-ProTools Studio is not trying to replace SoundFlow's macro library. It solves a different problem: **giving audio engineers an integrated development environment that understands their project structure**.
+ProTools Studio is not trying to replace SoundFlow's macro library. It solves a different problem: **automating the entire post-production pipeline** — not just what happens inside Pro Tools, but everything around it. File management, audio processing, format conversion, delivery verification, and the repetitive session-to-session workflow that eats hours every day.
 
-- **Folder-aware workspace** — The Zed file explorer shows your entire delivery structure (`Sessoes/`, `Imports/`, `Processamento/`, `Finalizados/`, `Arquivo/`). You see your session files, audio exports, and tool source code side by side. No other audio automation tool gives you a project tree with git integration, search across files, and a terminal — all in one window.
-
-- **Autonomous AI agents, not a chat assistant** — SoundFlow's [Session Assistant](https://soundflow.org/session-assistant) is a conversational interface inside Pro Tools: you type "create a track" and it executes that single command. It cannot read your project folders, create files on disk, chain external tools, or work without your input at every step.
-
-  ProTools Studio integrates full-blown coding agents (Claude Code, Gemini CLI) that run autonomously in the integrated terminal. The difference is fundamental:
-
-  | | **ProTools Studio agents** | **SoundFlow Session Assistant** |
-  |---|---|---|
-  | Reads your file tree | Yes — sees sessions, audio, exports, source code | No — only sees Pro Tools session state |
-  | Creates/edits files | Yes — writes scripts, renames exports, moves deliveries | No — limited to Pro Tools track operations |
-  | Chains multiple tools | Yes — import tracks → solo → bounce → normalize → rename in one prompt | No — one command at a time |
-  | Runs without prompting | Yes — headless mode executes multi-step workflows end-to-end | No — requires human input for each step |
-  | Fixes its own tools | Yes — agent reads tool source, edits Rust code, rebuilds | No — macros are fixed scripts |
-  | Learns from mistakes | Yes — agents update their own skill files with new patterns | No |
-  | Works outside Pro Tools | Yes — file operations, FFmpeg, audio analysis, git | No — Pro Tools only |
-
-  A concrete example: you click "Full Delivery" in the dashboard and the agent autonomously bounces the session, normalizes to -23 LUFS, converts to MP3, renames files for broadcast standards, organizes them into delivery folders, and verifies the output — all from a single click. The agent decides what to do at each step based on what it finds on disk.
-
-- **Native gRPC, not GUI simulation** — Like py-ptsl, ProTools Studio talks to Pro Tools over the official PTSL gRPC protocol. Unlike Keyboard Maestro (which simulates mouse clicks and keystrokes and [breaks when Avid changes the UI](https://duc.avid.com/showthread.php?t=428108)), gRPC commands are stable across Pro Tools versions.
-
-- **The tools are the project** — The 31 CLI tools are Rust binaries that live in the same workspace. You can open a tool's source, fix a bug, `cargo build` in the integrated terminal, and immediately re-run it from the dashboard. The IDE and the runtime are one thing. No other audio tool offers this.
+The tools don't simulate the Pro Tools interface. They talk to the engine directly. And the AI agents don't just execute single commands — they run multi-step workflows end-to-end, reading your project structure and making decisions based on what they find.
 
 ## Built entirely in Rust
 
-Everything — the IDE, the dashboard, and every single CLI tool — is written in Rust. This is not a cosmetic choice. It has real consequences for the people using it:
+Everything — the application, the dashboard, and every single tool — is written in Rust. This is not a technical curiosity. It has real consequences:
 
-- **Instant tool execution** — Each of the 31 CLI tools is a compiled native binary. There is no interpreter startup, no VM warmup, no dependency resolution at runtime. A tool launches, does its work, and exits. When you're bouncing 40 sessions in a batch, the difference between a 200ms Rust binary and a 2-second Python script adds up fast.
+- **Instant execution** — Every tool is a compiled native binary. No interpreter startup, no VM warmup. When you're processing 40 sessions in a batch, the difference between a 200ms tool and a 2-second script adds up to minutes saved per run.
 
-- **GPU-accelerated UI** — The IDE is built on [GPUI](https://www.gpui.rs/), Zed's GPU rendering framework. The dashboard, the editor, the terminal — everything is rendered on the GPU. Scrolling through a session with hundreds of tracks or scanning a delivery folder with thousands of files stays smooth. There is no Electron, no web view, no garbage collector pausing the UI.
+- **GPU-accelerated interface** — The entire UI is rendered on the GPU via [GPUI](https://www.gpui.rs/). Scrolling through hundreds of tracks or scanning a delivery folder with thousands of files stays smooth. There is no Electron, no web view, no garbage collector pausing the interface.
 
-- **Low memory footprint** — Rust has no runtime and no garbage collector. The entire application (IDE + dashboard + terminal + file tree) typically uses a fraction of the memory that Electron-based tools consume. On a machine already running Pro Tools (which is not gentle with RAM), this matters.
+- **Low memory footprint** — No runtime overhead, no garbage collector. The application uses a fraction of the memory that browser-based tools consume. On a machine already running Pro Tools, this matters.
 
-- **Single static binaries** — Each tool compiles to a single executable with no external dependencies (except FFmpeg for audio processing tools). No `node_modules/`, no `pip install`, no version conflicts. Copy the binary, run it.
+- **Reliability at scale** — Rust catches entire categories of bugs at compile time. When batch processing runs across dozens of sessions overnight, the tools either work correctly or don't compile at all. They don't silently corrupt data at 3 AM.
 
-- **Reliability at scale** — Rust's ownership model catches entire categories of bugs (null pointers, data races, use-after-free) at compile time. When a production company runs batch processing across dozens of sessions overnight, the tools either work correctly or refuse to compile. They don't silently corrupt data at 3 AM.
-
-The same language runs from the lowest level (gRPC protocol buffers talking to Pro Tools) to the highest level (GPU-rendered dashboard buttons). There is no glue layer, no FFI boundary, no serialization between languages. It is Rust all the way down.
+The same language runs from the gRPC protocol layer talking to Pro Tools all the way up to the GPU-rendered dashboard buttons. There is no glue code, no bridge between languages. It is Rust all the way down.
 
 ## Current state
 
-This is an active development project, not a production release. It works on macOS (Apple Silicon and Intel) and has been used daily for real audio post-production work. That said:
+The application is in active daily use for real audio post-production work on macOS (Apple Silicon and Intel). What remains before the March 13 launch:
 
-- **macOS only** — The global hotkey system and Pro Tools integration are macOS-specific.
-- **Requires Pro Tools running locally** — The PTSL gRPC endpoint (`[::1]:31416`) must be available. Without it, the dashboard still opens but session-aware tools won't connect.
-- **Runtime binaries not bundled** — Tool binaries live in the companion [PROTOOLS_SDK_PTSL](https://github.com/Caio-Ze/PROTOOLS_SDK_PTSL) repo and are resolved via environment variables. A fresh install requires building that repo too.
-- **No code signing** — Use `xattr -cr` on the `.app` bundle after building.
-- **No custom app icon yet** — Still ships with the Zed icon.
+- Bundling all tools inside the `.app` package (currently resolved from a companion build)
+- Custom application icon
+- Code signing for macOS distribution
+- Installer and first-launch experience
 
-## Dashboard
-
-The dashboard panel is pinned as the first tab and organizes 27+ tools across four categories:
-
-| Category | Examples |
-|----------|----------|
-| **ProTools** | Bounce All, Session Monitor, Import & Spot Clips, Save + Increment, Batch Processing |
-| **Mixer** | Transport, Mute/Solo, Track Volume, Manage Tracks, Timeline Selection, Bounce Export |
-| **Audio** | Normalize (EBU R128), Maximize Peaks, Convert MP3/WAV, TV Converter |
-| **File** | Carrefour Renamer, TV to SPOT Rename, Create Folder Structure |
-
-Each tool card has buttons for:
-- **Run** — Spawns the tool in a terminal tab
-- **In-app shortcut** — Adds a keybinding to the local keymap
-- **Global shortcut** — Captures a key combo and registers it system-wide
-
-## Session awareness
-
-A background poller (every 5 seconds) queries Pro Tools for the currently open session. When connected:
-- The window title updates to `ProTools Studio — SessionName.ptx`
-- A green status indicator appears in the dashboard header
-- Session-aware tools automatically receive `--session <path>` arguments
-
-## Build
-
-```bash
-# Clone
-git clone https://github.com/Caio-Ze/protools-studio.git
-cd protools-studio
-
-# Build (always release mode — debug builds are very slow for GPU rendering)
-cargo build --release -p protools-studio
-
-# Run
-cargo run --release -p protools-studio
-
-# The binary is at target/release/protools-studio
-```
-
-### Requirements
-
-- Rust 1.93+ (see `rust-toolchain.toml`)
-- macOS 13+ (Ventura or later)
-- Xcode Command Line Tools
-
-### Environment variables
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `PROTOOLS_RUNTIME_PATH` | Path to runtime tool binaries | `~/Documents/Rust_projects/PROTOOLS_SDK_PTSL/target/runtime/` |
-| `PROTOOLS_AGENT_TOOLS_PATH` | Path to agent tool binaries | `~/Documents/Rust_projects/PROTOOLS_SDK_PTSL/target/debug/` |
-
-## Project structure
-
-```
-protools-studio/
-├── crates/
-│   ├── dashboard/          # Dashboard panel (tool cards, automations, global hotkeys)
-│   ├── zed/                # Main binary (startup, branding, init)
-│   ├── workspace/          # Window/pane management, session state
-│   ├── gpui/               # GPU-accelerated UI framework
-│   └── ...                 # ~220 other Zed crates (editor, terminal, LSP, etc.)
-├── assets/
-│   └── agent-skills/       # Embedded SKILL.md + AUTOMATIONS.toml defaults
-├── DOCS/
-│   └── PROJECT_OVERVIEW.md # Detailed development log and architecture notes
-├── CLAUDE.md               # AI agent instructions for this codebase
-└── old_zed/                # Archived upstream Zed files (docs, CI, Docker, Nix)
-```
-
-## Companion repository
-
-The tool binaries that the dashboard invokes live in a separate repo:
-
-**[PROTOOLS_SDK_PTSL](https://github.com/Caio-Ze/PROTOOLS_SDK_PTSL)** — Rust monorepo with 31 CLI tools for Pro Tools automation via gRPC, plus audio processing utilities (FFmpeg-based normalization, format conversion, peak maximization).
+For developers interested in the architecture: see [DOCS/PROJECT_OVERVIEW.md](DOCS/PROJECT_OVERVIEW.md) for a detailed development log, and the companion [PROTOOLS_SDK_PTSL](https://github.com/Caio-Ze/PROTOOLS_SDK_PTSL) repository for the tool binaries.
 
 ## License
 
