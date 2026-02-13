@@ -10,11 +10,27 @@ Built on top of [Zed](https://github.com/zed-industries/zed), the GPU-accelerate
 
 ## Who this is for
 
+### Production companies
+
 Audio post-production for broadcast, advertising, and streaming is a volume game. A single production company might deliver dozens of spots per day — each one requiring the same sequence of steps: open session, import tracks, solo the right stems, bounce, normalize to broadcast loudness standards (-23 LUFS), convert formats, rename files to network specs, and organize deliveries. Multiply that by every editor on the team, every day, every client.
 
 These are hours of mechanical, repetitive work that require precision but not creativity. A missed normalization, a wrong filename, a forgotten MP3 conversion — any of these means a rejected delivery and wasted time.
 
 ProTools Studio was built for this reality. It replaces the manual repetition with one-click tools and AI-driven workflows that handle the entire chain — from open session to verified delivery — while the engineer focuses on the actual creative work.
+
+### Independent creators and YouTubers
+
+You don't need a production company to have a production problem. If you're a YouTuber, a podcaster, or an independent audio creator, you know the feeling: the creative work takes an hour, the file management takes another hour. Renaming episodes, converting formats, normalizing loudness for different platforms, organizing folders — none of this is creative work, but it still eats your time.
+
+ProTools Studio is not limited to Pro Tools. Many of the tools work directly on files and folders — no DAW required:
+
+- **File renaming** — Batch rename audio files to match naming conventions, strip prefixes, add dates, convert between naming standards
+- **Format conversion** — Convert between WAV, MP3, and other formats in bulk
+- **Loudness normalization** — Normalize audio to broadcast standards (EBU R128) or platform targets
+- **Peak maximization** — Maximize audio levels without clipping
+- **Folder organization** — Create standardized project structures, move and sort files by type or date
+
+These tools run from the dashboard with a single click. If Pro Tools is running, the session-aware tools light up. If it's not, the standalone tools still work — they operate on whatever files and folders you point them at.
 
 ## What you get
 
