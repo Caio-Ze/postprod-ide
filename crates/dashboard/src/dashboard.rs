@@ -4,10 +4,11 @@ use gpui::{
     Styled, WeakEntity, Window,
 };
 use serde::Deserialize;
-use task::{RevealStrategy, SpawnInTerminal, TaskId};
+use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
 use ui::{
     prelude::*, ButtonLike, Divider, DividerColor, Headline, HeadlineSize, Icon, IconName,
-    IconSize, Label, LabelSize, WithScrollbar as _,
+    IconSize, Label, LabelSize, ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple,
+    WithScrollbar as _,
 };
 use workspace::{
     item::{Item, ItemEvent},
@@ -40,17 +41,17 @@ pub fn init(cx: &mut App) {
         with_active_or_new_workspace(cx, |workspace, window, cx| {
             workspace
                 .with_local_workspace(window, cx, |workspace, window, cx| {
-                    let existing = workspace
-                        .active_pane()
-                        .read(cx)
-                        .items()
-                        .find_map(|item| item.downcast::<Dashboard>());
+                    // Find existing Dashboard in any pane
+                    let existing = workspace.panes().iter().find_map(|pane| {
+                        pane.read(cx)
+                            .items()
+                            .find_map(|item| item.downcast::<Dashboard>())
+                    });
 
                     if let Some(existing) = existing {
                         workspace.activate_item(&existing, true, true, window, cx);
                     } else {
                         let dashboard = Dashboard::new(workspace, cx);
-                        // Insert at index 0 and pin it
                         workspace.add_item_to_active_pane(
                             Box::new(dashboard),
                             Some(0),
@@ -68,11 +69,20 @@ pub fn init(cx: &mut App) {
     });
 }
 
-/// Open the Dashboard as the initial tab in a new workspace window.
-pub fn show_dashboard(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+/// Ensure a Dashboard tab exists in the workspace. Idempotent — scans all
+/// panes before creating a new one.
+pub fn ensure_dashboard(workspace: &mut Workspace, window: &mut Window, cx: &mut Context<Workspace>) {
+    // Check all panes for an existing Dashboard
+    for pane in workspace.panes() {
+        let found = pane.read(cx).items().any(|item| item.downcast::<Dashboard>().is_some());
+        if found {
+            return;
+        }
+    }
+
     let dashboard = Dashboard::new(workspace, cx);
     workspace.add_item_to_center(Box::new(dashboard), window, cx);
-    // Pin the dashboard so it can't be closed with Cmd+W
+    // Pin the dashboard so it stays as the first tab
     workspace.active_pane().update(cx, |pane, _cx| {
         pane.set_pinned_count(pane.pinned_count() + 1);
     });
@@ -449,20 +459,38 @@ fn agent_skills_dir() -> PathBuf {
 
 fn ensure_agent_skills_extracted(cx: &App) {
     let dir = agent_skills_dir();
-    if dir.exists() {
-        return;
+    if !dir.exists() {
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+
+        for (name, asset_path) in [
+            ("SKILL.md", "agent-skills/SKILL.md"),
+            ("AUTOMATIONS.toml", "agent-skills/AUTOMATIONS.toml"),
+        ] {
+            if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
+                std::fs::write(dir.join(name), data.as_ref()).log_err();
+            }
+        }
     }
 
-    if std::fs::create_dir_all(&dir).is_err() {
-        return;
-    }
-
-    for (name, asset_path) in [
-        ("SKILL.md", "agent-skills/SKILL.md"),
-        ("AUTOMATIONS.toml", "agent-skills/AUTOMATIONS.toml"),
-    ] {
-        if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
-            std::fs::write(dir.join(name), data.as_ref()).log_err();
+    // Ensure global skill symlinks exist so Claude and Gemini pick up
+    // PTSL tools regardless of the working directory.
+    // - Claude reads from ~/.claude/skills/
+    // - Gemini reads from ~/.agents/skills/ (highest priority) and ~/.gemini/skills/
+    let skill_target = dir.join("SKILL.md");
+    if skill_target.exists() {
+        let home = util::paths::home_dir();
+        for skill_dir in [
+            home.join(".claude/skills/ptsl-tools"),
+            home.join(".agents/skills/ptsl-tools"),
+        ] {
+            let skill_link = skill_dir.join("SKILL.md");
+            if !skill_link.exists() {
+                std::fs::create_dir_all(&skill_dir).log_err();
+                #[cfg(unix)]
+                std::os::unix::fs::symlink(&skill_target, &skill_link).log_err();
+            }
         }
     }
 }
@@ -573,10 +601,94 @@ fn read_pasta_ativa() -> Option<PathBuf> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .or_else(|| {
+            let default = suite_root();
+            if default.is_dir() {
+                Some(default)
+            } else {
+                None
+            }
+        })
 }
 
 fn write_pasta_ativa(path: &Path) {
     let _ = std::fs::write(pasta_ativa_file(), path.to_string_lossy().as_bytes());
+}
+
+// ---------------------------------------------------------------------------
+// Binary resolution
+// ---------------------------------------------------------------------------
+
+fn resolve_bin(name: &str) -> String {
+    // Look in common locations for the binary
+    let candidates = [
+        util::paths::home_dir().join(".local/bin").join(name),
+        PathBuf::from("/opt/homebrew/bin").join(name),
+        PathBuf::from("/usr/local/bin").join(name),
+    ];
+    for candidate in &candidates {
+        if candidate.exists() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+    // Fallback to bare name (relies on PATH)
+    name.to_string()
+}
+
+// ---------------------------------------------------------------------------
+// Agent backend selector
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq, Default)]
+enum AgentBackend {
+    #[default]
+    Claude,
+    Gemini,
+    CopyOnly,
+}
+
+impl AgentBackend {
+    fn index(self) -> usize {
+        match self {
+            Self::Claude => 0,
+            Self::Gemini => 1,
+            Self::CopyOnly => 2,
+        }
+    }
+
+    fn badge_label(self) -> &'static str {
+        match self {
+            Self::Claude => "run with Claude",
+            Self::Gemini => "run with Gemini",
+            Self::CopyOnly => "(copy prompt)",
+        }
+    }
+
+    fn badge_color(self) -> Color {
+        match self {
+            Self::Claude | Self::Gemini => Color::Accent,
+            Self::CopyOnly => Color::Muted,
+        }
+    }
+
+    fn command(self) -> Option<String> {
+        match self {
+            Self::Claude => Some(resolve_bin("claude")),
+            Self::Gemini => Some(resolve_bin("gemini")),
+            Self::CopyOnly => None,
+        }
+    }
+
+    /// Flags required for headless `-p` mode so the agent can actually
+    /// execute tools (Bash, file ops, etc.) without interactive approval.
+    fn headless_flags(self) -> &'static str {
+        match self {
+            Self::Claude => "--dangerously-skip-permissions",
+            Self::Gemini => "--yolo -m gemini-3-flash-preview",
+            Self::CopyOnly => "",
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -599,6 +711,7 @@ pub struct Dashboard {
     _delivery_scan_task: gpui::Task<()>,
     // Automations (loaded from TOML)
     automations: Vec<AutomationEntry>,
+    agent_backend: AgentBackend,
     _automations_reload_task: gpui::Task<()>,
     // Scroll
     scroll_handle: ScrollHandle,
@@ -630,7 +743,7 @@ impl Dashboard {
         cx.new(|cx| {
             // Spawn session polling task (every 5 seconds)
             let poll_binary = runtime_path
-                .join("bin/Session_Monitor/bin/get_session_path");
+                .join("tools/get_session_path");
             let session_poll_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
                 loop {
                     let binary = poll_binary.clone();
@@ -723,6 +836,7 @@ impl Dashboard {
                 delivery_status: DeliveryStatus::default(),
                 _delivery_scan_task: delivery_scan_task,
                 automations,
+                agent_backend: AgentBackend::Claude,
                 _automations_reload_task: automations_reload_task,
                 scroll_handle: ScrollHandle::new(),
             }
@@ -795,19 +909,78 @@ impl Dashboard {
         workspace.spawn_in_terminal(spawn, window, cx).detach();
     }
 
-    fn spawn_automation(
+    /// Best working directory for AI agents. Priority:
+    /// 1. Open Pro Tools session's grandparent (gives context for the session
+    ///    folder AND its sibling folders)
+    /// 2. Pasta ativa (user-selected working folder)
+    /// 3. suite_root (~/ProTools_Suite)
+    fn agent_cwd(&self) -> PathBuf {
+        if let Some(session) = &self.session_path {
+            let session_path = Path::new(session);
+            if let Some(grandparent) = session_path.parent().and_then(|p| p.parent()) {
+                if grandparent.is_dir() {
+                    return grandparent.to_path_buf();
+                }
+            }
+        }
+        self.pasta_ativa.clone().unwrap_or_else(suite_root)
+    }
+
+    fn run_automation(
+        &self,
+        entry_id: &str,
+        entry_label: &str,
         prompt: &str,
-        session_path: &Option<String>,
-        _window: &mut Window,
-        cx: &mut App,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) {
-        let resolved_prompt = if let Some(session) = session_path {
+        let resolved_prompt = if let Some(session) = &self.session_path {
             prompt.replace("{session_path}", session)
         } else {
             prompt.replace("{session_path}", "<no session open>")
         };
 
-        cx.write_to_clipboard(ClipboardItem::new_string(resolved_prompt));
+        // Collapse multi-line prompts into a single line to avoid
+        // `zsh: parse error near '\n'` when spawning `claude -p "..."`.
+        let resolved_prompt = resolved_prompt
+            .lines()
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let Some(command) = self.agent_backend.command() else {
+            cx.write_to_clipboard(ClipboardItem::new_string(resolved_prompt));
+            return;
+        };
+
+        // Shell-escape the prompt with single quotes (POSIX-safe) and bake
+        // it into the command string so `build_no_quote` doesn't split it
+        // into separate unquoted tokens.
+        let escaped = resolved_prompt.replace("'", "'\\''");
+        let flags = self.agent_backend.headless_flags();
+        let full_command = format!("{command} {flags} -p '{escaped}'");
+
+        let spawn = SpawnInTerminal {
+            id: TaskId(format!("automation-{}", entry_id)),
+            label: entry_label.to_string(),
+            full_label: entry_label.to_string(),
+            command: Some(full_command),
+            args: vec![],
+            command_label: entry_label.to_string(),
+            cwd: Some(self.agent_cwd()),
+            use_new_terminal: true,
+            allow_concurrent_runs: false,
+            reveal: RevealStrategy::Always,
+            show_command: true,
+            show_rerun: true,
+            ..Default::default()
+        };
+
+        let workspace = self.workspace.clone();
+        let _ = workspace.update(cx, |workspace, cx| {
+            workspace.spawn_in_terminal(spawn, window, cx).detach();
+        });
     }
 
     fn pick_pasta_ativa(&mut self, cx: &mut Context<Self>) {
@@ -1071,7 +1244,11 @@ impl Dashboard {
 
     fn render_automations_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let automations = self.automations.clone();
-        let session_path = self.session_path.clone();
+        let backend = self.agent_backend;
+        let badge_label: SharedString = backend.badge_label().into();
+        let badge_color = backend.badge_color();
+
+        let entity = cx.entity().downgrade();
 
         v_flex()
             .w_full()
@@ -1081,12 +1258,45 @@ impl Dashboard {
                     .px_1()
                     .mb_2()
                     .gap_2()
+                    .items_center()
                     .child(
                         Label::new("AUTOMATIONS")
                             .color(Color::Muted)
                             .size(LabelSize::XSmall),
                     )
-                    .child(Divider::horizontal().color(DividerColor::BorderVariant)),
+                    .child(Divider::horizontal().color(DividerColor::BorderVariant))
+                    .child({
+                        let entity_claude = entity.clone();
+                        let entity_gemini = entity.clone();
+                        let entity_copy = entity.clone();
+
+                        ToggleButtonGroup::single_row(
+                            "agent-backend-toggle",
+                            [
+                                ToggleButtonSimple::new("Claude", move |_, _, cx| {
+                                    let _ = entity_claude.update(cx, |this, cx| {
+                                        this.agent_backend = AgentBackend::Claude;
+                                        cx.notify();
+                                    });
+                                }),
+                                ToggleButtonSimple::new("Gemini", move |_, _, cx| {
+                                    let _ = entity_gemini.update(cx, |this, cx| {
+                                        this.agent_backend = AgentBackend::Gemini;
+                                        cx.notify();
+                                    });
+                                }),
+                                ToggleButtonSimple::new("Copy", move |_, _, cx| {
+                                    let _ = entity_copy.update(cx, |this, cx| {
+                                        this.agent_backend = AgentBackend::CopyOnly;
+                                        cx.notify();
+                                    });
+                                }),
+                            ],
+                        )
+                        .selected_index(backend.index())
+                        .style(ToggleButtonGroupStyle::Outlined)
+                        .auto_width()
+                    }),
             )
             .when(automations.is_empty(), |el| {
                 el.child(
@@ -1099,49 +1309,62 @@ impl Dashboard {
                         ),
                 )
             })
-            .children(automations.into_iter().enumerate().map(move |(idx, entry)| {
-                let session_path = session_path.clone();
-                let icon = icon_for_automation(&entry.icon);
-                let entry_id = entry.id.clone();
-                let entry_label: SharedString = entry.label.clone().into();
-                let entry_description: SharedString = entry.description.clone().into();
-                let entry_prompt = entry.prompt.clone();
+            .children(automations.into_iter().enumerate().map({
+                let badge_label = badge_label.clone();
+                let entity = entity.clone();
+                move |(idx, entry)| {
+                    let icon = icon_for_automation(&entry.icon);
+                    let entry_id = entry.id.clone();
+                    let entry_label: SharedString = entry.label.clone().into();
+                    let entry_description: SharedString = entry.description.clone().into();
+                    let entry_prompt = entry.prompt.clone();
+                    let badge_label = badge_label.clone();
 
-                ButtonLike::new(format!("automation-btn-{}-{}", entry_id, idx))
-                    .full_width()
-                    .size(ButtonSize::Medium)
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(
-                                Icon::new(icon)
-                                    .color(Color::Accent)
-                                    .size(IconSize::Small),
-                            )
-                            .child(
-                                v_flex()
-                                    .child(Label::new(entry_label))
-                                    .child(
-                                        Label::new(entry_description)
-                                            .color(Color::Muted)
-                                            .size(LabelSize::XSmall),
-                                    ),
-                            )
-                            .child(
-                                Label::new("(copy prompt)")
-                                    .color(Color::Muted)
-                                    .size(LabelSize::XSmall),
-                            ),
-                    )
-                    .on_click(move |_, window, cx| {
-                        Self::spawn_automation(
-                            &entry_prompt,
-                            &session_path,
-                            window,
-                            cx,
-                        );
-                    })
+                    let click_entity = entity.clone();
+                    let click_id = entry_id.clone();
+                    let click_label = entry_label.clone();
+                    let click_prompt = entry_prompt.clone();
+
+                    ButtonLike::new(format!("automation-btn-{}-{}", entry_id, idx))
+                        .full_width()
+                        .size(ButtonSize::Medium)
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .child(
+                                    Icon::new(icon)
+                                        .color(Color::Accent)
+                                        .size(IconSize::Small),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .child(Label::new(entry_label))
+                                        .child(
+                                            Label::new(entry_description)
+                                                .color(Color::Muted)
+                                                .size(LabelSize::XSmall),
+                                        ),
+                                )
+                                .child(
+                                    Label::new(badge_label.clone())
+                                        .color(badge_color)
+                                        .size(LabelSize::XSmall),
+                                ),
+                        )
+                        .on_click(move |_, window, cx| {
+                            let _ = click_entity.update(cx, |this, cx| {
+                                this.run_automation(
+                                    &click_id,
+                                    &click_label,
+                                    &click_prompt,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        })
+                }
             }))
             .child(
                 ButtonLike::new("edit-automations-btn")
@@ -1175,6 +1398,83 @@ impl Dashboard {
                         .detach();
                     }))
             )
+    }
+
+    fn render_ai_agents_section(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+        let workspace = self.workspace.clone();
+        let cwd = self.agent_cwd();
+
+        // Resolve actual binary paths so we can run them directly without a
+        // shell wrapper (avoids `.zshrc` errors from `-i` flag).
+        let claude_bin = resolve_bin("claude");
+        let gemini_bin = resolve_bin("gemini");
+
+        let agents: Vec<(&str, &str, String, Vec<String>)> = vec![
+            ("ai-claude", "Open Claude", claude_bin, vec![]),
+            ("ai-gemini", "Open Gemini", gemini_bin, vec![]),
+        ];
+
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(
+                h_flex()
+                    .px_1()
+                    .mb_2()
+                    .gap_2()
+                    .child(
+                        Label::new("AI AGENTS")
+                            .color(Color::Muted)
+                            .size(LabelSize::XSmall),
+                    )
+                    .child(Divider::horizontal().color(DividerColor::BorderVariant)),
+            )
+            .children(agents.into_iter().map({
+                move |(id, label, program, args)| {
+                    let workspace = workspace.clone();
+                    let cwd = cwd.clone();
+
+                    ButtonLike::new(id)
+                        .full_width()
+                        .size(ButtonSize::Medium)
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .child(
+                                    Icon::new(IconName::Sparkle)
+                                        .color(Color::Accent)
+                                        .size(IconSize::Small),
+                                )
+                                .child(Label::new(label)),
+                        )
+                        .on_click(move |_, window, cx| {
+                            let workspace = workspace.clone();
+                            let args = args.clone();
+                            let program = program.clone();
+                            let cwd = cwd.clone();
+                            let _ = workspace.update(cx, |workspace, cx| {
+                                let spawn = SpawnInTerminal {
+                                    id: TaskId(format!("ai-agent-{}", id)),
+                                    label: label.to_string(),
+                                    full_label: label.to_string(),
+                                    command_label: label.to_string(),
+                                    cwd: Some(cwd),
+                                    shell: Shell::WithArguments {
+                                        program,
+                                        args,
+                                        title_override: Some(label.to_string()),
+                                    },
+                                    use_new_terminal: true,
+                                    allow_concurrent_runs: false,
+                                    reveal: RevealStrategy::Always,
+                                    ..Default::default()
+                                };
+                                workspace.spawn_in_terminal(spawn, window, cx).detach();
+                            });
+                        })
+                }
+            }))
     }
 }
 
@@ -1266,6 +1566,8 @@ impl Render for Dashboard {
                                 pt_count + mixer_count + audio_count,
                                 cx,
                             ))
+                            // AI Agents
+                            .child(self.render_ai_agents_section(cx))
                             // Automations
                             .child(self.render_automations_section(cx))
                             // Delivery status
@@ -1297,6 +1599,10 @@ impl Item for Dashboard {
 
     fn show_toolbar(&self) -> bool {
         false
+    }
+
+    fn prevent_close(&self) -> bool {
+        true
     }
 
     fn to_item_events(event: &Self::Event, mut f: impl FnMut(ItemEvent)) {

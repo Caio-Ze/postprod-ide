@@ -389,6 +389,9 @@ pub fn initialize_workspace(
                     title,
                     language,
                 } => open_bundled_file(workspace, text.clone(), title, language, window, cx),
+                workspace::Event::ItemsDeserialized => {
+                    dashboard::ensure_dashboard(workspace, window, cx);
+                }
                 _ => {}
             }
         })
@@ -492,7 +495,7 @@ pub fn initialize_workspace(
         register_actions(app_state.clone(), workspace, window, cx);
 
         // Show pinned Dashboard tab for every workspace
-        dashboard::show_dashboard(workspace, window, cx);
+        dashboard::ensure_dashboard(workspace, window, cx);
 
         workspace.focus_handle(cx).focus(window, cx);
     })

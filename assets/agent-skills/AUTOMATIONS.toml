@@ -125,3 +125,68 @@ Using the PTSL agent tools:
 4. Compare both texts using agent-compare-texts
 5. Report the differences found
 """
+
+[[automation]]
+id = "create-automation"
+label = "Create New Button"
+description = "I'll help you create a new dashboard button"
+icon = "sparkle"
+prompt = """
+I want to create a new one-click button for the ProTools Studio dashboard.
+
+Here's how it works (you don't need to understand this, I'll handle it):
+- All buttons live in a simple text file: ~/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/agent-skills/AUTOMATIONS.toml
+- Each button has: an id (internal name), a label (what you see), a description (subtitle), an icon, and a prompt (what the agent does when you click)
+- Available icons: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
+- The variable {session_path} is automatically replaced with the current Pro Tools session
+- The dashboard picks up changes automatically — no restart needed
+
+Here are the existing buttons so you know what's already there:
+- Bounce TRILHA — select clips, set timeline, bounce to WAV
+- Import & Solo Track — import tracks from another session, solo LOC
+- Batch Process Sessions — process all sessions in a folder
+- Rename All Tracks — list tracks and rename them one by one
+- Export & Normalize — export LOC, normalize -23 LUFS, convert MP3
+- Volume Adjust — set a track's volume in dB
+- Full Delivery — bounce, normalize, MP3, organize to Finalizados
+- Compare Texts — transcribe audio and compare with a reference document
+
+Now ask me:
+1. What should the button be called? (short name, 2-3 words)
+2. What should it do? (describe the steps in plain language — e.g. "bounce only the MIX track to MP3")
+3. Which icon fits best? Show me the options: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
+
+Then create the new [[automation]] block and add it to the AUTOMATIONS.toml file.
+After saving, confirm it was added and tell me the button will appear on the dashboard automatically.
+"""
+
+[[automation]]
+id = "edit-automation"
+label = "Edit a Button"
+description = "I'll help you change an existing dashboard button"
+icon = "replace"
+prompt = """
+I want to edit one of my existing dashboard buttons in ProTools Studio.
+
+Here's how it works (you don't need to understand this, I'll handle it):
+- All buttons live in a simple text file: ~/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/agent-skills/AUTOMATIONS.toml
+- Each button has: an id, a label (button text), a description (subtitle), an icon, and a prompt (the steps the agent follows)
+- Available icons: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
+- The variable {session_path} is automatically replaced with the current Pro Tools session
+- Changes are picked up automatically — no restart needed
+
+First, read the file at ~/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/agent-skills/AUTOMATIONS.toml
+and show me a numbered list of all the buttons with their names and what they do.
+
+Then ask me:
+1. Which button do I want to change? (by number)
+2. What do I want to change? Options:
+   - The name (label)
+   - The description (subtitle)
+   - What it does (the steps)
+   - The icon
+   - Delete it entirely
+3. What should the new value be? (in plain language — I'll translate it for you)
+
+Make the change in the TOML file, save it, and confirm what was changed.
+"""

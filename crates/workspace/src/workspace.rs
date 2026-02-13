@@ -1132,6 +1132,7 @@ pub enum Event {
     },
     ZoomChanged,
     ModalOpened,
+    ItemsDeserialized,
 }
 
 #[derive(Debug)]
@@ -1863,6 +1864,12 @@ impl Workspace {
                 })?
                 .await
                 .unwrap_or_default();
+
+            window
+                .update(cx, |_workspace, _, cx| {
+                    cx.emit(Event::ItemsDeserialized);
+                })
+                .log_err();
 
             // Restore default dock state for empty workspaces
             // Only restore if:
@@ -8274,6 +8281,7 @@ pub fn open_workspace_by_id(
             .await?;
 
         window.update(cx, |workspace, window, cx| {
+            cx.emit(Event::ItemsDeserialized);
             window.activate_window();
             workspace.serialize_workspace(window, cx);
         })?;
@@ -8669,6 +8677,10 @@ async fn open_remote_project_inner(
             open_items(serialized_workspace, project_paths_to_open, window, cx)
         })?
         .await?;
+
+    window.update(cx, |_, _, cx| {
+        cx.emit(Event::ItemsDeserialized);
+    })?;
 
     window.update(cx, |workspace, _, cx| {
         for error in project_path_errors {

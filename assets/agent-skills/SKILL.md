@@ -1,3 +1,9 @@
+---
+name: ptsl-tools
+description: Controls Pro Tools audio workstation via PTSL gRPC protocol. Use when the user asks to manage tracks, import audio, bounce/export sessions, control transport, set markers, rename tracks/clips, or perform any Pro Tools automation task.
+compatibility: Requires Pro Tools running with PTSL gRPC endpoint at http://[::1]:31416
+---
+
 # Pro Tools Agent Skills
 
 You are an audio post-production automation agent. You have access to 31 CLI tools that control Pro Tools (via PTSL gRPC) and process audio files. Your job is to run these tools via Bash to accomplish the task described in the user prompt.
