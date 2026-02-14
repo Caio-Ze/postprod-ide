@@ -209,6 +209,22 @@ Other entities can then register a callback to handle these events by doing `cx.
 
 - Use `./script/clippy` instead of `cargo clippy`
 
+## GitHub & Privacy Rules
+
+**This is a public repository.** Follow these rules on every commit:
+
+1. **Never commit internal docs** — PROJECT_OVERVIEW.md, PLAN.md, FORK_MAINTENANCE.md, business plans go in `private/` (gitignored)
+2. **Never commit hardcoded paths** — no `/Users/caio_ze/...` in committed code. Use env vars or `paths::config_dir()`
+3. **Never commit secrets** — no API keys, tokens, or credentials. Use environment variables
+4. **Never commit PROTOOLS_SDK_PTSL source code** — the tool binaries are proprietary, kept in a separate repo
+5. **Never commit client names or sensitive session info** — review screenshots before committing
+6. **Review every diff before pushing** — `git diff --cached` before every commit
+7. **Git history is permanent** — even deleted files remain in history. If something sensitive is committed, it requires `git filter-repo` + force push to remove
+8. **Never merge upstream/main** — always cherry-pick individual Zed commits. Log in `private/FORK_MAINTENANCE.md`
+9. **Internal documentation lives in `private/`** — this folder is gitignored and never leaves the local machine
+
+Full instructions: `private/GITHUB_INSTRUCTIONS.md`
+
 ## PTSL Agent Tools
 
 ProTools Studio includes 31 CLI tools (in the sibling `PROTOOLS_SDK_PTSL` repo) that control Pro Tools via gRPC. Full reference: `~/.claude/skills/ptsl-tools/SKILL.md`
