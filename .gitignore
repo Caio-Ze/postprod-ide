@@ -23,6 +23,14 @@
 .wrangler
 .perf-runs
 /private/
+/postprod-tools-growth/private/
+
+# Safety nets — prevent accidental commit of sensitive dirs
+DOCS/Caio-Ze/
+DOCS/postprod-tools-growth/
+**/PRIVATE_TEST_ACCOUNTS/
+**/PRIVATE_TEST_ACCONTS/
+**/Assets_private/
 /assets/*licenses.*
 /crates/collab/seed.json
 /crates/theme/schemas/theme.json

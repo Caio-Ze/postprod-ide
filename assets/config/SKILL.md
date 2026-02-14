@@ -18,11 +18,11 @@ When you encounter an error, discover a limitation, or find a workaround:
 
 ## Environment
 
-- **Binary path:** `/Users/caio_ze/Documents/Rust_projects/PROTOOLS_SDK_PTSL/target/debug/`
-- **Test session:** `/Users/caio_ze/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/Pro tools_EDITSESSION_V4.ptx`
-- **Audio files:** `/Users/caio_ze/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/Audio Files/`
-- **EXPO_IMPO folder:** `/Users/caio_ze/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/EXPO_IMPO/`
-- **Bounce folder:** `/Users/caio_ze/ProTools_Suite/Bounce/`
+- **Binary path:** `~/ProTools_Suite/tools/agent/`
+- **Test session:** `~/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/Pro tools_EDITSESSION_V4.ptx`
+- **Audio files:** `~/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/Audio Files/`
+- **EXPO_IMPO folder:** `~/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/EXPO_IMPO/`
+- **Bounce folder:** `~/ProTools_Suite/Bounce/`
 - **Known tracks:** LOC, V1, V2, V3, V4, TRILHA, Audio 1 (may vary per session)
 - **Session sample rate:** 48000 Hz
 - **GROQ_API_KEY:** set in environment (required for transcribe/extract/compare tools)
@@ -51,7 +51,7 @@ When you encounter an error, discover a limitation, or find a workaround:
 
 ## Tool Reference
 
-All binaries are at `$BIN=/Users/caio_ze/Documents/Rust_projects/PROTOOLS_SDK_PTSL/target/debug/`
+All binaries are at `$BIN=~/ProTools_Suite/tools/agent/`
 
 ---
 

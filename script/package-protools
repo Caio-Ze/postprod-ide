@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Build ProTools Studio and package everything into ~/ProTools_Suite/
+# Usage: ./script/package-protools [--skip-build]
+set -euo pipefail
+
+SUITE_ROOT="$HOME/ProTools_Suite"
+PTSL_SDK="$HOME/Documents/Rust_projects/PROTOOLS_SDK_PTSL"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+skip_build=false
+if [[ "${1:-}" == "--skip-build" ]]; then
+    skip_build=true
+fi
+
+echo "==> Creating workspace directories..."
+mkdir -p "$SUITE_ROOT/config"
+mkdir -p "$SUITE_ROOT/tools/agent"
+mkdir -p "$SUITE_ROOT/tools/runtime"
+
+if [[ "$skip_build" == false ]]; then
+    echo "==> Building protools-studio (release)..."
+    cargo build --release -p protools-studio --manifest-path "$REPO_ROOT/Cargo.toml"
+
+    if [[ -d "$PTSL_SDK" ]]; then
+        echo "==> Building agent-tools (release)..."
+        cargo build --release -p agent-tools --manifest-path "$PTSL_SDK/Cargo.toml"
+    else
+        echo "    PTSL SDK not found at $PTSL_SDK — skipping agent tools build"
+    fi
+fi
+
+# Copy agent tool binaries (release)
+if [[ -d "$PTSL_SDK/target/release" ]]; then
+    echo "==> Copying agent tool binaries..."
+    for bin in "$PTSL_SDK/target/release/agent-"*; do
+        [[ -f "$bin" && -x "$bin" ]] || continue
+        cp "$bin" "$SUITE_ROOT/tools/agent/"
+    done
+    echo "    $(ls "$SUITE_ROOT/tools/agent/" | wc -l | tr -d ' ') agent tools installed"
+fi
+
+# Copy runtime via rsync (preserves internal structure)
+if [[ -d "$PTSL_SDK/target/runtime" ]]; then
+    echo "==> Syncing runtime tools..."
+    rsync -a --delete "$PTSL_SDK/target/runtime/" "$SUITE_ROOT/tools/runtime/"
+fi
+
+# Extract default config files only if they don't exist (preserve user edits)
+echo "==> Checking config defaults..."
+for name in TOOLS.toml AUTOMATIONS.toml SKILL.md; do
+    dest="$SUITE_ROOT/config/$name"
+    if [[ ! -f "$dest" ]]; then
+        src="$REPO_ROOT/assets/config/$name"
+        if [[ -f "$src" ]]; then
+            cp "$src" "$dest"
+            echo "    Extracted default $name"
+        fi
+    else
+        echo "    $name exists — preserved"
+    fi
+done
+
+echo "==> Done. Workspace at $SUITE_ROOT"
+echo "    config/  — TOML + skills (user-editable)"
+echo "    tools/   — agent + runtime binaries"

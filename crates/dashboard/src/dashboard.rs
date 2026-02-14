@@ -3,8 +3,8 @@ use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager as NativeHotKeyManager,
 };
 use gpui::{
-    actions, Action, App, AppContext, AsyncApp, ClipboardItem, Context, DismissEvent, Entity,
-    EventEmitter, FocusHandle, Focusable, IntoElement, Keystroke, KeystrokeEvent, ParentElement,
+    actions, Action, App, AsyncApp, ClipboardItem, Context, DismissEvent, Entity, EventEmitter,
+    FocusHandle, Focusable, IntoElement, Keystroke, KeystrokeEvent, ParentElement,
     PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription, WeakEntity,
     Window,
 };
@@ -13,8 +13,8 @@ use serde::Deserialize;
 use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
 use ui::{
     prelude::*, Button, ButtonLike, ButtonStyle, Divider, DividerColor, Headline, HeadlineSize,
-    Icon, IconButton, IconName, IconSize, KeyBinding, Label, LabelSize, Modal, ModalFooter,
-    ModalHeader, Section, ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip,
+    Icon, IconButton, IconName, IconSize, Label, LabelSize, Modal, ModalFooter, ModalHeader,
+    Section, ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip,
     WithScrollbar as _,
 };
 use workspace::{
@@ -181,8 +181,28 @@ fn icon_for_tool(name: &str) -> IconName {
     }
 }
 
+fn load_tools_from_disk() -> Vec<ToolEntry> {
+    let path = tools_toml_path();
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    match toml::from_str::<ToolsFile>(&content) {
+        Ok(file) => file.tool,
+        Err(e) => {
+            log::error!("TOOLS.toml (disk): parse error: {e}");
+            Vec::new()
+        }
+    }
+}
+
 fn load_tools_registry(cx: &App) -> Vec<ToolEntry> {
-    match cx.asset_source().load("tools/TOOLS.toml") {
+    // Try disk first (user-editable), fall back to embedded asset
+    let disk_entries = load_tools_from_disk();
+    if !disk_entries.is_empty() {
+        return disk_entries;
+    }
+
+    match cx.asset_source().load("config/TOOLS.toml") {
         Ok(Some(data)) => {
             let text = match std::str::from_utf8(&data) {
                 Ok(s) => s,
@@ -229,11 +249,7 @@ struct AutomationsFile {
 }
 
 fn automations_toml_path() -> PathBuf {
-    suite_root()
-        .join("1_Sessões")
-        .join("Pro tools_EDITSESSION")
-        .join("agent-skills")
-        .join("AUTOMATIONS.toml")
+    config_dir().join("AUTOMATIONS.toml")
 }
 
 fn load_automations() -> Vec<AutomationEntry> {
@@ -261,34 +277,47 @@ fn icon_for_automation(name: &str) -> IconName {
     }
 }
 
-fn agent_skills_dir() -> PathBuf {
+fn old_agent_skills_dir() -> PathBuf {
     suite_root()
         .join("1_Sessões")
         .join("Pro tools_EDITSESSION")
         .join("agent-skills")
 }
 
-fn ensure_agent_skills_extracted(cx: &App) {
-    let dir = agent_skills_dir();
-    if !dir.exists() {
-        if std::fs::create_dir_all(&dir).is_err() {
-            return;
+fn ensure_config_extracted(cx: &App) {
+    let dir = config_dir();
+    let old_dir = old_agent_skills_dir();
+
+    // For each config file: if not in config/, try migrating from old location,
+    // then fall back to extracting from embedded assets.
+    for (name, asset_path) in [
+        ("SKILL.md", "config/SKILL.md"),
+        ("AUTOMATIONS.toml", "config/AUTOMATIONS.toml"),
+        ("TOOLS.toml", "config/TOOLS.toml"),
+    ] {
+        let target = dir.join(name);
+        if target.exists() {
+            continue;
         }
 
-        for (name, asset_path) in [
-            ("SKILL.md", "agent-skills/SKILL.md"),
-            ("AUTOMATIONS.toml", "agent-skills/AUTOMATIONS.toml"),
-        ] {
-            if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
-                std::fs::write(dir.join(name), data.as_ref()).log_err();
+        // Try migrating from old agent-skills/ location (preserves user edits)
+        let old_file = old_dir.join(name);
+        if old_file.exists() {
+            if std::fs::copy(&old_file, &target).is_ok() {
+                log::info!("config: migrated {name} from old agent-skills/ to config/");
+                continue;
             }
+        }
+
+        // Extract from embedded asset
+        if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
+            std::fs::write(&target, data.as_ref()).log_err();
+            log::info!("config: extracted default {name} to config/");
         }
     }
 
-    // Ensure global skill symlinks exist so Claude and Gemini pick up
-    // PTSL tools regardless of the working directory.
-    // - Claude reads from ~/.claude/skills/
-    // - Gemini reads from ~/.agents/skills/ (highest priority) and ~/.gemini/skills/
+    // Ensure global skill symlinks point to the new config/ location.
+    // If an existing symlink points to the old agent-skills/ path, recreate it.
     let skill_target = dir.join("SKILL.md");
     if skill_target.exists() {
         let home = util::paths::home_dir();
@@ -297,8 +326,23 @@ fn ensure_agent_skills_extracted(cx: &App) {
             home.join(".agents/skills/ptsl-tools"),
         ] {
             let skill_link = skill_dir.join("SKILL.md");
-            if !skill_link.exists() {
+
+            // Check if existing symlink points to old location
+            let needs_update = if skill_link.is_symlink() {
+                match std::fs::read_link(&skill_link) {
+                    Ok(existing_target) => existing_target != skill_target,
+                    Err(_) => true,
+                }
+            } else {
+                !skill_link.exists()
+            };
+
+            if needs_update {
                 std::fs::create_dir_all(&skill_dir).log_err();
+                // Remove stale symlink if it exists
+                if skill_link.is_symlink() || skill_link.exists() {
+                    std::fs::remove_file(&skill_link).log_err();
+                }
                 #[cfg(unix)]
                 std::os::unix::fs::symlink(&skill_target, &skill_link).log_err();
             }
@@ -490,6 +534,7 @@ pub struct GlobalHotkeyManager {
     native_manager: NativeHotKeyManager,
     hotkey_map: HashMap<u32, String>,
     registered_hotkeys: Vec<HotKey>,
+    last_config_content: String,
     _poll_task: gpui::Task<()>,
     _watch_task: gpui::Task<()>,
 }
@@ -586,8 +631,15 @@ pub fn init_global_hotkeys(cx: &mut App) {
                     .timer(Duration::from_secs(10))
                     .await;
 
+                let config_path = global_hotkeys_toml_path();
+                let new_content = std::fs::read_to_string(&config_path).unwrap_or_default();
+
                 let _ = this.update(cx, |manager: &mut GlobalHotkeyManager, _cx| {
-                    manager.register_hotkeys_from_config();
+                    if new_content != manager.last_config_content {
+                        log::info!("global hotkey: config changed, re-registering");
+                        manager.last_config_content = new_content;
+                        manager.register_hotkeys_from_config();
+                    }
                 });
             }
         });
@@ -596,6 +648,7 @@ pub fn init_global_hotkeys(cx: &mut App) {
             native_manager,
             hotkey_map: HashMap::new(),
             registered_hotkeys: Vec::new(),
+            last_config_content: String::new(),
             _poll_task: poll_task,
             _watch_task: watch_task,
         };
@@ -607,13 +660,6 @@ pub fn init_global_hotkeys(cx: &mut App) {
 }
 
 fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
-    let action = RunDashboardTool {
-        tool_id: tool_id.to_string(),
-    };
-
-    // Find an existing workspace window instead of creating a new one.
-    // cx.active_window() returns None when another app is focused,
-    // so we iterate all windows to find an existing Workspace.
     let workspace_handle = cx
         .active_window()
         .and_then(|w| w.downcast::<Workspace>())
@@ -625,10 +671,41 @@ fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
 
     if let Some(workspace) = workspace_handle {
         cx.activate(true);
+        let tool_id = tool_id.to_string();
         workspace
             .update(cx, |workspace, window, cx| {
                 ensure_dashboard(workspace, window, cx);
-                window.dispatch_action(action.boxed_clone(), cx);
+
+                let dashboard_data = workspace
+                    .panes()
+                    .iter()
+                    .flat_map(|pane| pane.read(cx).items())
+                    .find_map(|item| item.downcast::<Dashboard>())
+                    .map(|d| {
+                        let d = d.read(cx);
+                        (
+                            d.tools.iter().find(|t| t.id == tool_id).cloned(),
+                            d.runtime_path.clone(),
+                            d.agent_tools_path.clone(),
+                            d.session_path.clone(),
+                            d.pasta_ativa.clone(),
+                        )
+                    });
+
+                if let Some((Some(tool), runtime_path, agent_tools_path, session_path, pasta_ativa)) =
+                    dashboard_data
+                {
+                    Dashboard::spawn_tool_entry(
+                        &tool,
+                        &runtime_path,
+                        &agent_tools_path,
+                        &session_path,
+                        &pasta_ativa,
+                        workspace,
+                        window,
+                        cx,
+                    );
+                }
             })
             .log_err();
     }
@@ -870,6 +947,34 @@ fn suite_root() -> PathBuf {
     util::paths::home_dir().join("ProTools_Suite")
 }
 
+fn config_dir() -> PathBuf {
+    suite_root().join("config")
+}
+
+fn tools_dir() -> PathBuf {
+    suite_root().join("tools")
+}
+
+fn agent_tools_dir() -> PathBuf {
+    tools_dir().join("agent")
+}
+
+fn runtime_tools_dir() -> PathBuf {
+    tools_dir().join("runtime")
+}
+
+fn tools_toml_path() -> PathBuf {
+    config_dir().join("TOOLS.toml")
+}
+
+fn ensure_workspace_dirs() {
+    for dir in [config_dir(), agent_tools_dir(), runtime_tools_dir()] {
+        if !dir.exists() {
+            std::fs::create_dir_all(&dir).log_err();
+        }
+    }
+}
+
 fn scan_delivery_folder() -> DeliveryStatus {
     let dir = suite_root().join("4_Finalizados");
     let mut status = DeliveryStatus::default();
@@ -972,11 +1077,54 @@ fn read_pasta_ativa() -> Option<PathBuf> {
 
 fn write_pasta_ativa(path: &Path) {
     let _ = std::fs::write(pasta_ativa_file(), path.to_string_lossy().as_bytes());
+    add_to_recentes(path);
+}
+
+// ---------------------------------------------------------------------------
+// Pastas recentes helpers
+// ---------------------------------------------------------------------------
+
+fn pastas_recentes_file() -> PathBuf {
+    suite_root().join(".pastas_recentes")
+}
+
+fn read_pastas_recentes() -> Vec<PathBuf> {
+    let Ok(content) = std::fs::read_to_string(pastas_recentes_file()) else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .take(10)
+        .collect()
+}
+
+fn add_to_recentes(path: &Path) {
+    let mut recentes = read_pastas_recentes();
+    recentes.retain(|p| p != path);
+    recentes.insert(0, path.to_path_buf());
+    recentes.truncate(10);
+    let content = recentes
+        .iter()
+        .map(|p| p.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(pastas_recentes_file(), content).log_err();
 }
 
 // ---------------------------------------------------------------------------
 // Binary / runtime resolution
 // ---------------------------------------------------------------------------
+
+fn dir_has_content(dir: &Path) -> bool {
+    dir.is_dir()
+        && std::fs::read_dir(dir)
+            .ok()
+            .and_then(|mut entries| entries.next())
+            .is_some()
+}
 
 fn resolve_bin(name: &str) -> String {
     let candidates = [
@@ -993,26 +1141,47 @@ fn resolve_bin(name: &str) -> String {
 }
 
 /// Resolve the runtime path with priority:
-/// 1. `exe_dir/runtime/` (symlinked by build.rs)
-/// 2. `PROTOOLS_RUNTIME_PATH` env var
-/// 3. Default hardcoded path
+/// 1. `~/ProTools_Suite/tools/runtime/` (workspace — production)
+/// 2. `exe_dir/runtime/` (symlinked by build.rs — development)
+/// 3. `PROTOOLS_RUNTIME_PATH` env var (explicit override)
+/// 4. Workspace path as expected default
 fn resolve_runtime_path() -> PathBuf {
+    let workspace_runtime = runtime_tools_dir();
+    if dir_has_content(&workspace_runtime) {
+        return workspace_runtime;
+    }
+
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             let candidate = exe_dir.join("runtime");
-            if candidate.exists() {
+            if dir_has_content(&candidate) {
                 return candidate;
             }
         }
     }
 
-    std::env::var("PROTOOLS_RUNTIME_PATH")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            PathBuf::from(
-                "/Users/caio_ze/Documents/Rust_projects/PROTOOLS_SDK_PTSL/target/runtime",
-            )
-        })
+    if let Ok(path) = std::env::var("PROTOOLS_RUNTIME_PATH") {
+        return PathBuf::from(path);
+    }
+
+    workspace_runtime
+}
+
+/// Resolve the agent tools path with priority:
+/// 1. `~/ProTools_Suite/tools/agent/` (workspace — production)
+/// 2. `PROTOOLS_AGENT_TOOLS_PATH` env var (override for dev)
+/// 3. Workspace path as expected default
+fn resolve_agent_tools_path() -> PathBuf {
+    let workspace_agent = agent_tools_dir();
+    if dir_has_content(&workspace_agent) {
+        return workspace_agent;
+    }
+
+    if let Ok(path) = std::env::var("PROTOOLS_AGENT_TOOLS_PATH") {
+        return PathBuf::from(path);
+    }
+
+    workspace_agent
 }
 
 // ---------------------------------------------------------------------------
@@ -1087,6 +1256,7 @@ pub struct Dashboard {
     _session_poll_task: gpui::Task<()>,
     // Pasta ativa
     pasta_ativa: Option<PathBuf>,
+    pastas_recentes: Vec<PathBuf>,
     // Delivery status
     delivery_status: DeliveryStatus,
     _delivery_scan_task: gpui::Task<()>,
@@ -1094,6 +1264,7 @@ pub struct Dashboard {
     automations: Vec<AutomationEntry>,
     agent_backend: AgentBackend,
     _automations_reload_task: gpui::Task<()>,
+    _tools_reload_task: gpui::Task<()>,
     // Scroll
     scroll_handle: ScrollHandle,
 }
@@ -1102,17 +1273,13 @@ impl Dashboard {
     pub fn new(workspace: &Workspace, cx: &mut App) -> Entity<Self> {
         let runtime_path = resolve_runtime_path();
 
-        let agent_tools_path = std::env::var("PROTOOLS_AGENT_TOOLS_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                PathBuf::from(
-                    "/Users/caio_ze/Documents/Rust_projects/PROTOOLS_SDK_PTSL/target/debug",
-                )
-            });
+        let agent_tools_path = resolve_agent_tools_path();
 
-        ensure_agent_skills_extracted(cx);
+        ensure_workspace_dirs();
+        ensure_config_extracted(cx);
 
         let pasta_ativa = read_pasta_ativa();
+        let pastas_recentes = read_pastas_recentes();
         let automations = load_automations();
         let tools = load_tools_registry(cx);
 
@@ -1201,6 +1368,27 @@ impl Dashboard {
                 }
             });
 
+            // Spawn tools reload task (every 30 seconds)
+            let tools_reload_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_secs(30))
+                        .await;
+
+                    let entries = cx
+                        .background_executor()
+                        .spawn(async { load_tools_from_disk() })
+                        .await;
+
+                    if !entries.is_empty() {
+                        let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                            dashboard.tools = entries;
+                            cx.notify();
+                        });
+                    }
+                }
+            });
+
             Self {
                 workspace: workspace.weak_handle(),
                 focus_handle: cx.focus_handle(),
@@ -1211,17 +1399,19 @@ impl Dashboard {
                 session_name: None,
                 _session_poll_task: session_poll_task,
                 pasta_ativa,
+                pastas_recentes,
                 delivery_status: DeliveryStatus::default(),
                 _delivery_scan_task: delivery_scan_task,
                 automations,
                 agent_backend: AgentBackend::Claude,
                 _automations_reload_task: automations_reload_task,
+                _tools_reload_task: tools_reload_task,
                 scroll_handle: ScrollHandle::new(),
             }
         })
     }
 
-    fn spawn_tool_entry(
+    pub(crate) fn spawn_tool_entry(
         tool: &ToolEntry,
         runtime_path: &Path,
         agent_tools_path: &Path,
@@ -1267,7 +1457,7 @@ impl Dashboard {
             }
         }
 
-        let spawn = SpawnInTerminal {
+        let mut spawn = SpawnInTerminal {
             id: TaskId(format!("dashboard-{}", tool.id)),
             label: tool.label.clone(),
             full_label: tool.label.clone(),
@@ -1282,6 +1472,14 @@ impl Dashboard {
             show_rerun: true,
             ..Default::default()
         };
+
+        let ffmpeg_candidate = runtime_path.join("tools/ffmpeg");
+        if ffmpeg_candidate.exists() {
+            spawn.env.insert(
+                "FFMPEG_PATH".into(),
+                ffmpeg_candidate.to_string_lossy().into(),
+            );
+        }
 
         workspace.spawn_in_terminal(spawn, window, cx).detach();
     }
@@ -1374,41 +1572,11 @@ impl Dashboard {
                     write_pasta_ativa(&path);
                     let _ = this.update(cx, |this, cx| {
                         this.pasta_ativa = Some(path);
+                        this.pastas_recentes = read_pastas_recentes();
                         cx.notify();
                     });
                 }
             }
-        })
-        .detach();
-    }
-
-    /// Copy a keymap JSON snippet for this tool to the clipboard
-    /// and open keymap.json for editing.
-    fn create_shortcut_for_tool(
-        &self,
-        tool_id: &str,
-        tool_label: &str,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let snippet = format!(
-            // Provide a ready-to-paste snippet with a placeholder keystroke
-            "{{\n  \"context\": \"Dashboard\",\n  \"bindings\": {{\n    \"cmd-shift-CHANGE_ME\": [\"dashboard::RunDashboardTool\", {{ \"tool_id\": \"{}\" }}]\n  }}\n}}",
-            tool_id,
-        );
-        cx.write_to_clipboard(ClipboardItem::new_string_with_json_metadata(
-            snippet,
-            format!("Shortcut for {tool_label}"),
-        ));
-
-        let keymap_path = paths::keymap_file().clone();
-        let workspace = self.workspace.clone();
-        cx.spawn_in(window, async move |_this, cx| {
-            let _ = workspace.update_in(cx, |workspace, window, cx| {
-                workspace
-                    .open_abs_path(keymap_path, OpenOptions::default(), window, cx)
-                    .detach();
-            });
         })
         .detach();
     }
@@ -1488,6 +1656,7 @@ impl Dashboard {
                     )
                     .child(
                         v_flex()
+                            .items_start()
                             .child(
                                 Label::new("Pasta Ativa")
                                     .size(LabelSize::XSmall)
@@ -1499,6 +1668,52 @@ impl Dashboard {
             .on_click(cx.listener(|this, _, _window, cx| {
                 this.pick_pasta_ativa(cx);
             }))
+    }
+
+    fn render_pastas_recentes(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let recentes: Vec<_> = self
+            .pastas_recentes
+            .iter()
+            .filter(|p| Some(p.as_path()) != self.pasta_ativa.as_deref())
+            .take(5)
+            .cloned()
+            .collect();
+
+        if recentes.is_empty() {
+            return v_flex().into_any_element();
+        }
+
+        v_flex()
+            .pl_6()
+            .gap_0p5()
+            .children(recentes.into_iter().map(|path| {
+                let display: SharedString = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+                    .into();
+                let full_path = path.to_string_lossy().to_string();
+                let click_path = path;
+
+                Button::new(
+                    SharedString::from(format!("recente-{}", display)),
+                    display,
+                )
+                .style(ButtonStyle::Subtle)
+                .label_size(LabelSize::Small)
+                .icon(IconName::Folder)
+                .icon_size(IconSize::XSmall)
+                .icon_color(Color::Muted)
+                .tooltip(Tooltip::text(full_path))
+                .on_click(cx.listener(move |this, _, _window, cx| {
+                    write_pasta_ativa(&click_path);
+                    this.pasta_ativa = Some(click_path.clone());
+                    this.pastas_recentes = read_pastas_recentes();
+                    cx.notify();
+                }))
+            }))
+            .into_any_element()
     }
 
     fn render_delivery_status(&self, _cx: &App) -> impl IntoElement {
@@ -1608,21 +1823,10 @@ impl Dashboard {
                 let tool_id = tool.id.clone();
                 let tool_label: SharedString = tool.label.clone().into();
                 let tool_description: SharedString = tool.description.clone().into();
-                let tool_clone = tool.clone();
-
-                let shortcut_tool_id = tool_id.clone();
-                let shortcut_tool_label = tool_label.to_string();
 
                 let globe_tool_id = tool_id.clone();
                 let globe_tool_label = tool_label.to_string();
                 let globe_entity = entity.clone();
-
-                let action = RunDashboardTool {
-                    tool_id: tool.id,
-                };
-                let keybinding = KeyBinding::for_action(&action, cx);
-
-                let shortcut_entity = entity.clone();
 
                 let runtime_path = self.runtime_path.clone();
                 let agent_tools_path = self.agent_tools_path.clone();
@@ -1646,6 +1850,7 @@ impl Dashboard {
                             .child(
                                 v_flex()
                                     .flex_1()
+                                    .items_start()
                                     .child(Label::new(tool_label))
                                     .child(
                                         Label::new(tool_description)
@@ -1654,57 +1859,28 @@ impl Dashboard {
                                     ),
                             )
                             .child(
-                                h_flex()
-                                    .gap_1()
-                                    .child(keybinding)
-                                    .child(
-                                        IconButton::new(
-                                            SharedString::from(format!(
-                                                "shortcut-{}",
-                                                shortcut_tool_id
-                                            )),
-                                            IconName::Plus,
-                                        )
-                                        .icon_size(IconSize::XSmall)
-                                        .icon_color(Color::Muted)
-                                        .tooltip(Tooltip::text("Create keyboard shortcut"))
-                                        .on_click(move |_, window, cx| {
-                                            let tool_id = shortcut_tool_id.clone();
-                                            let tool_label = shortcut_tool_label.clone();
-                                            let _ = shortcut_entity.update(cx, |this, cx| {
-                                                this.create_shortcut_for_tool(
-                                                    &tool_id,
-                                                    &tool_label,
-                                                    window,
-                                                    cx,
-                                                );
-                                            });
-                                        }),
-                                    )
-                                    .child(
-                                        IconButton::new(
-                                            SharedString::from(format!(
-                                                "globe-{}",
-                                                globe_tool_id
-                                            )),
-                                            IconName::Keyboard,
-                                        )
-                                        .icon_size(IconSize::XSmall)
-                                        .icon_color(Color::Muted)
-                                        .tooltip(Tooltip::text("Create global shortcut"))
-                                        .on_click(move |_, window, cx| {
-                                            let tool_id = globe_tool_id.clone();
-                                            let tool_label = globe_tool_label.clone();
-                                            let _ = globe_entity.update(cx, |this, cx| {
-                                                this.open_global_shortcut_modal(
-                                                    tool_id,
-                                                    tool_label,
-                                                    window,
-                                                    cx,
-                                                );
-                                            });
-                                        }),
-                                    ),
+                                IconButton::new(
+                                    SharedString::from(format!(
+                                        "globe-{}",
+                                        globe_tool_id
+                                    )),
+                                    IconName::Keyboard,
+                                )
+                                .icon_size(IconSize::XSmall)
+                                .icon_color(Color::Muted)
+                                .tooltip(Tooltip::text("Create global shortcut"))
+                                .on_click(move |_, window, cx| {
+                                    let tool_id = globe_tool_id.clone();
+                                    let tool_label = globe_tool_label.clone();
+                                    let _ = globe_entity.update(cx, |this, cx| {
+                                        this.open_global_shortcut_modal(
+                                            tool_id,
+                                            tool_label,
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }),
                             ),
                     )
                     .on_click(move |_, window, cx| {
@@ -1712,7 +1888,6 @@ impl Dashboard {
                         let agent_tools_path = agent_tools_path.clone();
                         let pasta_ativa = pasta_ativa.clone();
                         let session_path = session_path.clone();
-                        let tool = tool_clone.clone();
                         let _ = workspace.update(cx, |workspace, cx| {
                             Self::spawn_tool_entry(
                                 &tool,
@@ -1767,21 +1942,10 @@ impl Dashboard {
                 let tool_id = tool.id.clone();
                 let tool_label: SharedString = tool.label.clone().into();
                 let tool_description = tool.description.clone();
-                let tool_clone = tool.clone();
-
-                let shortcut_tool_id = tool_id.clone();
-                let shortcut_tool_label = tool_label.to_string();
 
                 let globe_tool_id = tool_id.clone();
                 let globe_tool_label = tool_label.to_string();
                 let globe_entity = entity.clone();
-
-                let action = RunDashboardTool {
-                    tool_id: tool.id,
-                };
-                let keybinding = KeyBinding::for_action(&action, cx);
-
-                let shortcut_entity = entity.clone();
 
                 let runtime_path = self.runtime_path.clone();
                 let agent_tools_path = self.agent_tools_path.clone();
@@ -1809,31 +1973,6 @@ impl Dashboard {
                                     .into_any_element(),
                             )
                             .child(div().flex_grow())
-                            .child(keybinding)
-                            .child(
-                                IconButton::new(
-                                    SharedString::from(format!(
-                                        "shortcut-{}",
-                                        shortcut_tool_id
-                                    )),
-                                    IconName::Plus,
-                                )
-                                .icon_size(IconSize::XSmall)
-                                .icon_color(Color::Muted)
-                                .on_click(move |_, window, cx| {
-                                    let tool_id = shortcut_tool_id.clone();
-                                    let tool_label = shortcut_tool_label.clone();
-                                    let _ =
-                                        shortcut_entity.update(cx, |this, cx| {
-                                            this.create_shortcut_for_tool(
-                                                &tool_id,
-                                                &tool_label,
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                }),
-                            )
                             .child(
                                 IconButton::new(
                                     SharedString::from(format!(
@@ -1864,7 +2003,6 @@ impl Dashboard {
                         let agent_tools_path = agent_tools_path.clone();
                         let pasta_ativa = pasta_ativa.clone();
                         let session_path = session_path.clone();
-                        let tool = tool_clone.clone();
                         let _ = workspace.update(cx, |workspace, cx| {
                             Self::spawn_tool_entry(
                                 &tool,
@@ -2211,10 +2349,44 @@ impl Render for Dashboard {
                             .child(self.render_session_status(cx))
                             // Pasta ativa
                             .child(self.render_pasta_ativa(cx))
+                            .child(self.render_pastas_recentes(cx))
                             // Three-tier tool layout
                             .child(self.render_featured_section(cx))
                             .child(self.render_standard_section(cx))
                             .child(self.render_compact_section(cx))
+                            // Edit Tools button
+                            .child(
+                                ButtonLike::new("edit-tools-btn")
+                                    .full_width()
+                                    .size(ButtonSize::Medium)
+                                    .child(
+                                        h_flex()
+                                            .w_full()
+                                            .gap_2()
+                                            .child(
+                                                Icon::new(IconName::FileToml)
+                                                    .color(Color::Muted)
+                                                    .size(IconSize::Small),
+                                            )
+                                            .child(
+                                                Label::new("Edit Tools (TOML)")
+                                                    .color(Color::Muted)
+                                                    .size(LabelSize::Small),
+                                            ),
+                                    )
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        let toml_path = tools_toml_path();
+                                        let workspace = this.workspace.clone();
+                                        cx.spawn_in(window, async move |_this, cx| {
+                                            let _ = workspace.update_in(cx, |workspace, window, cx| {
+                                                workspace
+                                                    .open_abs_path(toml_path, OpenOptions::default(), window, cx)
+                                                    .detach();
+                                            });
+                                        })
+                                        .detach();
+                                    })),
+                            )
                             // AI Agents
                             .child(self.render_ai_agents_section(cx))
                             // Automations

@@ -45,7 +45,7 @@ label = "Batch Process Sessions"
 description = "Import, solo, bounce all sessions in folder"
 icon = "zap"
 prompt = """
-Using the PTSL agent tools, process all .ptx sessions in /Users/caio_ze/ProTools_Suite/1_Sessões/:
+Using the PTSL agent tools, process all .ptx sessions in ~/ProTools_Suite/1_Sessões/:
 For each session:
 1. Open the session
 2. List tracks and verify state
@@ -135,7 +135,7 @@ prompt = """
 I want to create a new one-click button for the ProTools Studio dashboard.
 
 Here's how it works (you don't need to understand this, I'll handle it):
-- All buttons live in a simple text file: ~/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/agent-skills/AUTOMATIONS.toml
+- All buttons live in a simple text file: ~/ProTools_Suite/config/AUTOMATIONS.toml
 - Each button has: an id (internal name), a label (what you see), a description (subtitle), an icon, and a prompt (what the agent does when you click)
 - Available icons: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
 - The variable {session_path} is automatically replaced with the current Pro Tools session
@@ -169,13 +169,13 @@ prompt = """
 I want to edit one of my existing dashboard buttons in ProTools Studio.
 
 Here's how it works (you don't need to understand this, I'll handle it):
-- All buttons live in a simple text file: ~/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/agent-skills/AUTOMATIONS.toml
+- All buttons live in a simple text file: ~/ProTools_Suite/config/AUTOMATIONS.toml
 - Each button has: an id, a label (button text), a description (subtitle), an icon, and a prompt (the steps the agent follows)
 - Available icons: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
 - The variable {session_path} is automatically replaced with the current Pro Tools session
 - Changes are picked up automatically — no restart needed
 
-First, read the file at ~/ProTools_Suite/1_Sessões/Pro tools_EDITSESSION/agent-skills/AUTOMATIONS.toml
+First, read the file at ~/ProTools_Suite/config/AUTOMATIONS.toml
 and show me a numbered list of all the buttons with their names and what they do.
 
 Then ask me:

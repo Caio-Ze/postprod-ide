@@ -209,11 +209,45 @@ Other entities can then register a callback to handle these events by doing `cx.
 
 - Use `./script/clippy` instead of `cargo clippy`
 
+## Internal documentation (`private/` — gitignored)
+
+All internal docs live in `private/` at the repo root. This folder is gitignored and never leaves the local machine. It has two clear sections:
+
+### Technical (project) — `private/`
+
+| File | What it contains |
+|------|-----------------|
+| `PROJECT_OVERVIEW.md` | Full architecture overview, crate map, fork history, what changed from Zed |
+| `PLAN.md` | Technical roadmap — features in progress, next steps, priorities |
+| `FORK_MAINTENANCE.md` | Cherry-pick log from upstream Zed, merge conflicts, version tracking |
+| `GITHUB_INSTRUCTIONS.md` | Detailed rules for the public repo — what can/cannot be committed |
+
+### Business (growth) — `private/growth/`
+
+| File/Dir | What it contains |
+|----------|-----------------|
+| `PLAN.md` | Go-to-market strategy, outreach tracks, pricing ideas |
+| `TONE.md` | Voice and writing guidelines for public communication |
+| `BRANDING.md` | Brand identity, naming, visual guidelines |
+| `client-prospects.md` | Full prospect database with contact info and status |
+| `contacts/` | Individual contact files (12 people) |
+| `prospects/` | Company-level prospect profiles |
+| `sectors/` | Market sector analyses (film/TV, dubbing, gaming, advertising, cross-media) |
+| `drafts/` | Content drafts (case studies, posts) |
+| `research/` | Market research (reddit threads, awesome-rust, online tools) |
+| `TASKS/` | Task tracking (TASKS-AI.md, TASKS-USER.md) |
+| `Assets_private/` | Confidential data (Arizona ROI numbers) |
+| `PRIVATE_TEST_ACCONTS/` | Test account credentials |
+
+**When making changes that affect project architecture** → read `private/PROJECT_OVERVIEW.md` and `private/PLAN.md` first.
+**When writing public-facing text** → read `private/growth/TONE.md` and `private/growth/BRANDING.md` first.
+**When cherry-picking from upstream Zed** → log in `private/FORK_MAINTENANCE.md`.
+
 ## GitHub & Privacy Rules
 
 **This is a public repository.** Follow these rules on every commit:
 
-1. **Never commit internal docs** — PROJECT_OVERVIEW.md, PLAN.md, FORK_MAINTENANCE.md, business plans go in `private/` (gitignored)
+1. **Never commit anything from `private/`** — it's gitignored, but never override that
 2. **Never commit hardcoded paths** — no `/Users/caio_ze/...` in committed code. Use env vars or `paths::config_dir()`
 3. **Never commit secrets** — no API keys, tokens, or credentials. Use environment variables
 4. **Never commit PROTOOLS_SDK_PTSL source code** — the tool binaries are proprietary, kept in a separate repo
@@ -221,7 +255,6 @@ Other entities can then register a callback to handle these events by doing `cx.
 6. **Review every diff before pushing** — `git diff --cached` before every commit
 7. **Git history is permanent** — even deleted files remain in history. If something sensitive is committed, it requires `git filter-repo` + force push to remove
 8. **Never merge upstream/main** — always cherry-pick individual Zed commits. Log in `private/FORK_MAINTENANCE.md`
-9. **Internal documentation lives in `private/`** — this folder is gitignored and never leaves the local machine
 
 Full instructions: `private/GITHUB_INSTRUCTIONS.md`
 
