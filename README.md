@@ -171,8 +171,3 @@ This repository (the IDE) is a fork of [Zed](https://github.com/zed-industries/z
 
 The companion tool binaries ([PostProd Tools](https://github.com/Caio-Ze/postprod-tools)) are distributed separately and are not covered by this license.
 
----
-
-<p align="center">
-  <sub>If this is useful to you, a ⭐ on the repo helps others find it.</sub>
-</p>
