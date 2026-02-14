@@ -1,5 +1,7 @@
 # ProTools Studio
 
+> **TL;DR:** A macOS app that sits next to Pro Tools and does the boring stuff for you. 30+ tools for bouncing, normalizing, batch processing, and file management — all talking to Pro Tools directly via gRPC. Plus AI agents that can chain it all together from a single prompt.
+
 A native macOS application for audio post-production. One app, one window — a dashboard with 30+ automation tools that talk directly to Avid Pro Tools, plus AI agents that can run entire delivery workflows autonomously.
 
 Built on top of [Zed](https://github.com/zed-industries/zed), the GPU-accelerated code editor.
