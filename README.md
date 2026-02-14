@@ -163,10 +163,16 @@ The application is in active daily use for real audio post-production work on ma
 - Code signing for macOS distribution
 - Installer and first-launch experience
 
-For developers interested in the tool binaries: see the companion [PROTOOLS_SDK_PTSL](https://github.com/Caio-Ze/PROTOOLS_SDK_PTSL) repository.
+For developers interested in the tool binaries: see the companion [PostProd Tools](https://github.com/Caio-Ze/postprod-tools) repository.
 
 ## License
 
 This repository (the IDE) is a fork of [Zed](https://github.com/zed-industries/zed) and is open source. The original Zed code is licensed under AGPL-3.0 and Apache-2.0. New code added for ProTools Studio is licensed under GPL-3.0-or-later.
 
-The companion tool binaries ([PROTOOLS_SDK_PTSL](https://github.com/Caio-Ze/PROTOOLS_SDK_PTSL)) are distributed separately and are not covered by this license.
+The companion tool binaries ([PostProd Tools](https://github.com/Caio-Ze/postprod-tools)) are distributed separately and are not covered by this license.
+
+---
+
+<p align="center">
+  <sub>If this is useful to you, a ⭐ on the repo helps others find it.</sub>
+</p>
