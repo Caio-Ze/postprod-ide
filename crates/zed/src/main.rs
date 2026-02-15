@@ -283,7 +283,8 @@ fn main() {
         .unwrap();
 
     log::info!(
-        "========== starting protools-studio version {}, sha {} ==========",
+        "========== starting protools-studio {} (base {}), sha {} ==========",
+        env!("PROTOOLS_VERSION"),
         app_version,
         app_commit_sha
             .as_ref()

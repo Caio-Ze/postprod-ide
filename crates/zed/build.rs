@@ -69,6 +69,27 @@ fn main() {
         }
     }
 
+    // Extract ProTools version from git tags (v1.0.0 → 1.0.0).
+    // Falls back to CARGO_PKG_VERSION if no tags exist.
+    println!("cargo:rerun-if-changed=../../.git/refs/tags");
+    let protools_version = if let Ok(output) = Command::new("git")
+        .args(["describe", "--tags", "--abbrev=0"])
+        .output()
+        && output.status.success()
+    {
+        let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let version = tag.strip_prefix('v').unwrap_or(&tag).to_string();
+        if let Ok(build_profile) = std::env::var("PROFILE")
+            && build_profile == "release"
+        {
+            println!("cargo::warning=Info: using '{version}' from git tag for PROTOOLS_VERSION");
+        }
+        version
+    } else {
+        std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0-dev".to_string())
+    };
+    println!("cargo:rustc-env=PROTOOLS_VERSION={protools_version}");
+
     #[cfg(target_os = "windows")]
     {
         #[cfg(target_env = "msvc")]

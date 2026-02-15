@@ -4643,6 +4643,7 @@ dependencies = [
  "serde",
  "smol",
  "task",
+ "tempfile",
  "toml 0.8.23",
  "ui",
  "util",

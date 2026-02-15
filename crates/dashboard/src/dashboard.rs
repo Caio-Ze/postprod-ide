@@ -24,9 +24,11 @@ use workspace::{
 
 use util::ResultExt as _;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+const APP_VERSION: &str = env!("PROTOOLS_VERSION");
 
 // ---------------------------------------------------------------------------
 // Actions
@@ -150,6 +152,10 @@ struct ToolEntry {
     tier: ToolTier,
     #[serde(default)]
     needs_session: bool,
+    #[serde(default)]
+    extra_args: Vec<String>,
+    #[serde(default)]
+    hidden: bool,
 }
 
 #[derive(Deserialize)]
@@ -181,53 +187,62 @@ fn icon_for_tool(name: &str) -> IconName {
     }
 }
 
-fn load_tools_from_disk() -> Vec<ToolEntry> {
-    let path = tools_toml_path();
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return Vec::new();
+fn load_toml_tools(path: &Path) -> (Vec<ToolEntry>, Option<String>) {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return (Vec::new(), None);
     };
     match toml::from_str::<ToolsFile>(&content) {
-        Ok(file) => file.tool,
+        Ok(file) => (file.tool, None),
         Err(e) => {
-            log::error!("TOOLS.toml (disk): parse error: {e}");
-            Vec::new()
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let err = format!("{filename}: {e}");
+            log::error!("config: {err}");
+            (Vec::new(), Some(err))
         }
     }
 }
 
-fn load_tools_registry(cx: &App) -> Vec<ToolEntry> {
-    // Try disk first (user-editable), fall back to embedded asset
-    let disk_entries = load_tools_from_disk();
-    if !disk_entries.is_empty() {
-        return disk_entries;
+fn merge_tools(defaults: Vec<ToolEntry>, user: Vec<ToolEntry>) -> Vec<ToolEntry> {
+    let user_by_id: HashMap<String, ToolEntry> = user
+        .iter()
+        .map(|t| (t.id.clone(), t.clone()))
+        .collect();
+
+    let mut merged: Vec<ToolEntry> = defaults
+        .into_iter()
+        .map(|default| {
+            match user_by_id.get(&default.id) {
+                Some(user_entry) => user_entry.clone(),
+                None => default,
+            }
+        })
+        .collect();
+
+    let default_ids: HashSet<String> = merged.iter().map(|t| t.id.clone()).collect();
+    for (id, entry) in &user_by_id {
+        if !default_ids.contains(id.as_str()) {
+            merged.push(entry.clone());
+        }
     }
 
-    match cx.asset_source().load("config/TOOLS.toml") {
-        Ok(Some(data)) => {
-            let text = match std::str::from_utf8(&data) {
-                Ok(s) => s,
-                Err(_) => {
-                    log::error!("TOOLS.toml: invalid UTF-8");
-                    return Vec::new();
-                }
-            };
-            match toml::from_str::<ToolsFile>(text) {
-                Ok(file) => file.tool,
-                Err(e) => {
-                    log::error!("TOOLS.toml: parse error: {e}");
-                    Vec::new()
-                }
-            }
-        }
-        Ok(None) => {
-            log::warn!("TOOLS.toml: asset not found (check RustEmbed includes)");
-            Vec::new()
-        }
-        Err(e) => {
-            log::error!("TOOLS.toml: failed to load asset: {e}");
-            Vec::new()
-        }
+    merged
+}
+
+fn load_tools_registry() -> (Vec<ToolEntry>, Option<String>) {
+    let base_path = find_latest_update("TOOLS").unwrap_or_else(tools_toml_path);
+    let (defaults, defaults_err) = load_toml_tools(&base_path);
+    let (user, user_err) = load_toml_tools(&tools_user_toml_path());
+
+    if !defaults.is_empty() || !user.is_empty() {
+        let merged = merge_tools(defaults, user);
+        let error = defaults_err.or(user_err);
+        return (merged, error);
     }
+
+    (Vec::new(), defaults_err.or(user_err))
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +256,8 @@ struct AutomationEntry {
     description: String,
     icon: String,
     prompt: String,
+    #[serde(default)]
+    hidden: bool,
 }
 
 #[derive(Deserialize)]
@@ -252,15 +269,62 @@ fn automations_toml_path() -> PathBuf {
     config_dir().join("AUTOMATIONS.toml")
 }
 
-fn load_automations() -> Vec<AutomationEntry> {
-    let path = automations_toml_path();
-    let Ok(content) = std::fs::read_to_string(&path) else {
-        return Vec::new();
+fn load_toml_automations(path: &Path) -> (Vec<AutomationEntry>, Option<String>) {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return (Vec::new(), None);
     };
-    let Ok(file) = toml::from_str::<AutomationsFile>(&content) else {
-        return Vec::new();
-    };
-    file.automation
+    match toml::from_str::<AutomationsFile>(&content) {
+        Ok(file) => (file.automation, None),
+        Err(e) => {
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let err = format!("{filename}: {e}");
+            log::error!("config: {err}");
+            (Vec::new(), Some(err))
+        }
+    }
+}
+
+fn merge_automations(defaults: Vec<AutomationEntry>, user: Vec<AutomationEntry>) -> Vec<AutomationEntry> {
+    let user_by_id: HashMap<String, AutomationEntry> = user
+        .iter()
+        .map(|a| (a.id.clone(), a.clone()))
+        .collect();
+
+    let mut merged: Vec<AutomationEntry> = defaults
+        .into_iter()
+        .map(|default| {
+            match user_by_id.get(&default.id) {
+                Some(user_entry) => user_entry.clone(),
+                None => default,
+            }
+        })
+        .collect();
+
+    let default_ids: HashSet<String> = merged.iter().map(|a| a.id.clone()).collect();
+    for (id, entry) in &user_by_id {
+        if !default_ids.contains(id.as_str()) {
+            merged.push(entry.clone());
+        }
+    }
+
+    merged
+}
+
+fn load_automations_registry() -> (Vec<AutomationEntry>, Option<String>) {
+    let base_path = find_latest_update("AUTOMATIONS").unwrap_or_else(automations_toml_path);
+    let (defaults, defaults_err) = load_toml_automations(&base_path);
+    let (user, user_err) = load_toml_automations(&automations_user_toml_path());
+
+    if !defaults.is_empty() || !user.is_empty() {
+        let merged = merge_automations(defaults, user);
+        let error = defaults_err.or(user_err);
+        return (merged, error);
+    }
+
+    (Vec::new(), defaults_err.or(user_err))
 }
 
 fn icon_for_automation(name: &str) -> IconName {
@@ -288,31 +352,51 @@ fn ensure_config_extracted(cx: &App) {
     let dir = config_dir();
     let old_dir = old_agent_skills_dir();
 
-    // For each config file: if not in config/, try migrating from old location,
-    // then fall back to extracting from embedded assets.
-    for (name, asset_path) in [
-        ("SKILL.md", "config/SKILL.md"),
-        ("AUTOMATIONS.toml", "config/AUTOMATIONS.toml"),
-        ("TOOLS.toml", "config/TOOLS.toml"),
+    // SKILL.md — keep old behavior (never overwrite user edits)
+    let skill_target = dir.join("SKILL.md");
+    if !skill_target.exists() {
+        let old_file = old_dir.join("SKILL.md");
+        if old_file.exists() {
+            if std::fs::copy(&old_file, &skill_target).is_ok() {
+                log::info!("config: migrated SKILL.md from old agent-skills/ to config/");
+            }
+        } else if let Ok(Some(data)) = cx.asset_source().load("config/SKILL.md") {
+            std::fs::write(&skill_target, data.as_ref()).log_err();
+            log::info!("config: extracted default SKILL.md to config/");
+        }
+    }
+
+    // TOOLS.toml + AUTOMATIONS.toml — two-layer: always overwrite defaults
+    for (name, user_name, asset_path) in [
+        ("TOOLS.toml", "TOOLS.user.toml", "config/TOOLS.toml"),
+        (
+            "AUTOMATIONS.toml",
+            "AUTOMATIONS.user.toml",
+            "config/AUTOMATIONS.toml",
+        ),
     ] {
-        let target = dir.join(name);
-        if target.exists() {
-            continue;
+        let defaults_file = dir.join(name);
+        let user_file = dir.join(user_name);
+
+        // Migration: V1 → V2. User has old single-file config.
+        if !user_file.exists() && defaults_file.exists() {
+            std::fs::rename(&defaults_file, &user_file).log_err();
+            log::info!("config: migrated {name} → {user_name} (two-layer upgrade)");
         }
 
-        // Try migrating from old agent-skills/ location (preserves user edits)
-        let old_file = old_dir.join(name);
-        if old_file.exists() {
-            if std::fs::copy(&old_file, &target).is_ok() {
-                log::info!("config: migrated {name} from old agent-skills/ to config/");
-                continue;
+        // Also check old agent-skills/ location for migration
+        if !user_file.exists() {
+            let old_file = old_dir.join(name);
+            if old_file.exists() {
+                if std::fs::copy(&old_file, &user_file).is_ok() {
+                    log::info!("config: migrated {name} from old agent-skills/ → {user_name}");
+                }
             }
         }
 
-        // Extract from embedded asset
+        // Always overwrite defaults from embedded asset
         if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
-            std::fs::write(&target, data.as_ref()).log_err();
-            log::info!("config: extracted default {name} to config/");
+            std::fs::write(&defaults_file, data.as_ref()).log_err();
         }
     }
 
@@ -347,6 +431,36 @@ fn ensure_config_extracted(cx: &App) {
                 std::os::unix::fs::symlink(&skill_target, &skill_link).log_err();
             }
         }
+    }
+
+    // Version tracking: detect new deployments and purge stale updates
+    check_version_and_purge(APP_VERSION, &release_version_path(), &updates_dir());
+}
+
+/// Compare the running version against the version on disk.
+/// If they differ, purge the `updates_dir` and write the new version.
+fn check_version_and_purge(app_version: &str, version_file: &Path, updates_dir: &Path) {
+    let disk_version = std::fs::read_to_string(version_file)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    if disk_version != app_version {
+        if !disk_version.is_empty() {
+            log::info!(
+                "config: new deployment {} → {}, cleaning updates/",
+                disk_version,
+                app_version
+            );
+            if updates_dir.is_dir() {
+                if let Err(e) = std::fs::remove_dir_all(updates_dir) {
+                    log::warn!("config: failed to clean updates/: {e}");
+                }
+                std::fs::create_dir_all(updates_dir).log_err();
+            }
+        }
+        std::fs::write(version_file, app_version).log_err();
+        log::info!("config: .release_version = {}", app_version);
     }
 }
 
@@ -605,6 +719,9 @@ pub fn init_global_hotkeys(cx: &mut App) {
                         .await;
 
                     while let Ok(event) = receiver.try_recv() {
+                        if event.state() == global_hotkey::HotKeyState::Released {
+                            continue;
+                        }
                         let hotkey_id = event.id();
                         let tool_id = this
                             .update(cx, |manager: &mut GlobalHotkeyManager, _cx| {
@@ -616,7 +733,6 @@ pub fn init_global_hotkeys(cx: &mut App) {
                         if let Some(tool_id) = tool_id {
                             log::info!("global hotkey: triggered tool '{tool_id}'");
                             cx.update(|cx| {
-                                cx.activate(true);
                                 dispatch_global_tool(&tool_id, cx);
                             });
                         }
@@ -670,7 +786,6 @@ fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
         });
 
     if let Some(workspace) = workspace_handle {
-        cx.activate(true);
         let tool_id = tool_id.to_string();
         workspace
             .update(cx, |workspace, window, cx| {
@@ -689,22 +804,35 @@ fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
                             d.agent_tools_path.clone(),
                             d.session_path.clone(),
                             d.pasta_ativa.clone(),
+                            d.background_tools.contains(&tool_id),
                         )
                     });
 
-                if let Some((Some(tool), runtime_path, agent_tools_path, session_path, pasta_ativa)) =
+                if let Some((Some(tool), runtime_path, agent_tools_path, session_path, pasta_ativa, is_background)) =
                     dashboard_data
                 {
-                    Dashboard::spawn_tool_entry(
-                        &tool,
-                        &runtime_path,
-                        &agent_tools_path,
-                        &session_path,
-                        &pasta_ativa,
-                        workspace,
-                        window,
-                        cx,
-                    );
+                    if is_background {
+                        Dashboard::spawn_tool_background(
+                            &tool,
+                            &runtime_path,
+                            &agent_tools_path,
+                            &session_path,
+                            &pasta_ativa,
+                            cx,
+                        );
+                    } else {
+                        cx.activate(true);
+                        Dashboard::spawn_tool_entry(
+                            &tool,
+                            &runtime_path,
+                            &agent_tools_path,
+                            &session_path,
+                            &pasta_ativa,
+                            workspace,
+                            window,
+                            cx,
+                        );
+                    }
                 }
             })
             .log_err();
@@ -967,8 +1095,63 @@ fn tools_toml_path() -> PathBuf {
     config_dir().join("TOOLS.toml")
 }
 
+fn tools_user_toml_path() -> PathBuf {
+    config_dir().join("TOOLS.user.toml")
+}
+
+fn automations_user_toml_path() -> PathBuf {
+    config_dir().join("AUTOMATIONS.user.toml")
+}
+
+fn updates_dir() -> PathBuf {
+    config_dir().join("updates")
+}
+
+fn release_version_path() -> PathBuf {
+    config_dir().join(".release_version")
+}
+
+/// Scan `updates/` for files matching `{prefix}.update.N.toml` and return
+/// the path with the highest N. Returns `None` if no update files exist.
+fn find_latest_update(prefix: &str) -> Option<PathBuf> {
+    find_latest_update_in(prefix, &updates_dir())
+}
+
+fn find_latest_update_in(prefix: &str, dir: &Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+
+    let pattern_prefix = format!("{prefix}.update.");
+
+    let mut best: Option<(u32, PathBuf)> = None;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+
+        let Some(rest) = name.strip_prefix(&pattern_prefix) else {
+            continue;
+        };
+
+        let Some(num_str) = rest.strip_suffix(".toml") else {
+            continue;
+        };
+
+        let Ok(n) = num_str.parse::<u32>() else {
+            continue;
+        };
+
+        if best.as_ref().map_or(true, |(current, _)| n > *current) {
+            best = Some((n, path));
+        }
+    }
+
+    best.map(|(_, path)| path)
+}
+
 fn ensure_workspace_dirs() {
-    for dir in [config_dir(), agent_tools_dir(), runtime_tools_dir()] {
+    for dir in [config_dir(), agent_tools_dir(), runtime_tools_dir(), updates_dir()] {
         if !dir.exists() {
             std::fs::create_dir_all(&dir).log_err();
         }
@@ -1112,6 +1295,32 @@ fn add_to_recentes(path: &Path) {
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(pastas_recentes_file(), content).log_err();
+}
+
+// ---------------------------------------------------------------------------
+// Background tools persistence
+// ---------------------------------------------------------------------------
+
+fn background_tools_file() -> PathBuf {
+    config_dir().join(".background_tools")
+}
+
+fn read_background_tools() -> HashSet<String> {
+    let Ok(content) = std::fs::read_to_string(background_tools_file()) else {
+        return HashSet::new();
+    };
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim().to_string())
+        .collect()
+}
+
+fn write_background_tools(set: &HashSet<String>) {
+    let mut entries: Vec<_> = set.iter().cloned().collect();
+    entries.sort();
+    let content = entries.join("\n");
+    std::fs::write(background_tools_file(), content).log_err();
 }
 
 // ---------------------------------------------------------------------------
@@ -1265,6 +1474,11 @@ pub struct Dashboard {
     agent_backend: AgentBackend,
     _automations_reload_task: gpui::Task<()>,
     _tools_reload_task: gpui::Task<()>,
+    // Background execution mode per tool
+    background_tools: HashSet<String>,
+    // Config parse errors
+    tools_error: Option<String>,
+    automations_error: Option<String>,
     // Scroll
     scroll_handle: ScrollHandle,
 }
@@ -1280,8 +1494,9 @@ impl Dashboard {
 
         let pasta_ativa = read_pasta_ativa();
         let pastas_recentes = read_pastas_recentes();
-        let automations = load_automations();
-        let tools = load_tools_registry(cx);
+        let (automations, automations_error) = load_automations_registry();
+        let (tools, tools_error) = load_tools_registry();
+        let background_tools = read_background_tools();
 
         cx.new(|cx| {
             // Spawn session polling task (every 5 seconds)
@@ -1356,13 +1571,14 @@ impl Dashboard {
                         .timer(Duration::from_secs(30))
                         .await;
 
-                    let entries = cx
+                    let (merged, error) = cx
                         .background_executor()
-                        .spawn(async { load_automations() })
+                        .spawn(async { load_automations_registry() })
                         .await;
 
                     let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
-                        dashboard.automations = entries;
+                        dashboard.automations = merged;
+                        dashboard.automations_error = error;
                         cx.notify();
                     });
                 }
@@ -1375,17 +1591,16 @@ impl Dashboard {
                         .timer(Duration::from_secs(30))
                         .await;
 
-                    let entries = cx
+                    let (merged, error) = cx
                         .background_executor()
-                        .spawn(async { load_tools_from_disk() })
+                        .spawn(async { load_tools_registry() })
                         .await;
 
-                    if !entries.is_empty() {
-                        let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
-                            dashboard.tools = entries;
-                            cx.notify();
-                        });
-                    }
+                    let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                        dashboard.tools = merged;
+                        dashboard.tools_error = error;
+                        cx.notify();
+                    });
                 }
             });
 
@@ -1406,21 +1621,21 @@ impl Dashboard {
                 agent_backend: AgentBackend::Claude,
                 _automations_reload_task: automations_reload_task,
                 _tools_reload_task: tools_reload_task,
+                background_tools,
+                tools_error,
+                automations_error,
                 scroll_handle: ScrollHandle::new(),
             }
         })
     }
 
-    pub(crate) fn spawn_tool_entry(
+    fn resolve_tool_command(
         tool: &ToolEntry,
         runtime_path: &Path,
         agent_tools_path: &Path,
         session_path: &Option<String>,
         pasta_ativa: &Option<PathBuf>,
-        workspace: &mut Workspace,
-        window: &mut Window,
-        cx: &mut Context<Workspace>,
-    ) {
+    ) -> (String, Vec<String>, PathBuf, HashMap<String, String>) {
         let is_agent_tool = tool.source == ToolSource::Agent;
 
         let (command, cwd) = if is_agent_tool {
@@ -1457,6 +1672,33 @@ impl Dashboard {
             }
         }
 
+        args.extend(tool.extra_args.iter().cloned());
+
+        let mut env = HashMap::new();
+        let ffmpeg_candidate = runtime_path.join("tools/ffmpeg");
+        if ffmpeg_candidate.exists() {
+            env.insert(
+                "FFMPEG_PATH".to_string(),
+                ffmpeg_candidate.to_string_lossy().to_string(),
+            );
+        }
+
+        (command, args, cwd, env)
+    }
+
+    pub(crate) fn spawn_tool_entry(
+        tool: &ToolEntry,
+        runtime_path: &Path,
+        agent_tools_path: &Path,
+        session_path: &Option<String>,
+        pasta_ativa: &Option<PathBuf>,
+        workspace: &mut Workspace,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) {
+        let (command, args, cwd, env) =
+            Self::resolve_tool_command(tool, runtime_path, agent_tools_path, session_path, pasta_ativa);
+
         let mut spawn = SpawnInTerminal {
             id: TaskId(format!("dashboard-{}", tool.id)),
             label: tool.label.clone(),
@@ -1473,15 +1715,52 @@ impl Dashboard {
             ..Default::default()
         };
 
-        let ffmpeg_candidate = runtime_path.join("tools/ffmpeg");
-        if ffmpeg_candidate.exists() {
-            spawn.env.insert(
-                "FFMPEG_PATH".into(),
-                ffmpeg_candidate.to_string_lossy().into(),
-            );
+        for (key, value) in env {
+            spawn.env.insert(key, value);
         }
 
         workspace.spawn_in_terminal(spawn, window, cx).detach();
+    }
+
+    pub(crate) fn spawn_tool_background(
+        tool: &ToolEntry,
+        runtime_path: &Path,
+        agent_tools_path: &Path,
+        session_path: &Option<String>,
+        pasta_ativa: &Option<PathBuf>,
+        cx: &mut Context<Workspace>,
+    ) {
+        let (command, args, cwd, env) =
+            Self::resolve_tool_command(tool, runtime_path, agent_tools_path, session_path, pasta_ativa);
+        let tool_label = tool.label.clone();
+
+        cx.spawn(async move |_this: WeakEntity<Workspace>, cx: &mut AsyncApp| {
+            let result = cx.background_executor().spawn(async move {
+                let mut cmd = smol::process::Command::new(&command);
+                cmd.args(&args).current_dir(&cwd);
+                for (key, value) in &env {
+                    cmd.env(key, value);
+                }
+                cmd.output().await
+            }).await;
+
+            match result {
+                Ok(output) if output.status.success() => {
+                    log::info!("background tool '{}': success", tool_label);
+                }
+                Ok(output) => {
+                    log::warn!(
+                        "background tool '{}': exit {}: {}",
+                        tool_label,
+                        output.status,
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                Err(e) => {
+                    log::error!("background tool '{}': {}", tool_label, e);
+                }
+            }
+        }).detach();
     }
 
     /// Best working directory for AI agents. Priority:
@@ -1806,7 +2085,7 @@ impl Dashboard {
         let tools: Vec<ToolEntry> = self
             .tools
             .iter()
-            .filter(|t| t.tier == tier)
+            .filter(|t| t.tier == tier && !t.hidden)
             .cloned()
             .collect();
 
@@ -1823,6 +2102,11 @@ impl Dashboard {
                 let tool_id = tool.id.clone();
                 let tool_label: SharedString = tool.label.clone().into();
                 let tool_description: SharedString = tool.description.clone().into();
+
+                let is_background = self.background_tools.contains(&tool_id);
+
+                let toggle_tool_id = tool_id.clone();
+                let toggle_entity = entity.clone();
 
                 let globe_tool_id = tool_id.clone();
                 let globe_tool_label = tool_label.to_string();
@@ -1861,6 +2145,38 @@ impl Dashboard {
                             .child(
                                 IconButton::new(
                                     SharedString::from(format!(
+                                        "bg-toggle-{}",
+                                        toggle_tool_id
+                                    )),
+                                    IconName::ToolTerminal,
+                                )
+                                .icon_size(IconSize::XSmall)
+                                .icon_color(if is_background {
+                                    Color::Muted
+                                } else {
+                                    Color::Accent
+                                })
+                                .tooltip(Tooltip::text(if is_background {
+                                    "Background mode (click to switch to terminal)"
+                                } else {
+                                    "Terminal mode (click to switch to background)"
+                                }))
+                                .on_click(move |_, _, cx| {
+                                    let tool_id = toggle_tool_id.clone();
+                                    let _ = toggle_entity.update(cx, |this, cx| {
+                                        if this.background_tools.contains(&tool_id) {
+                                            this.background_tools.remove(&tool_id);
+                                        } else {
+                                            this.background_tools.insert(tool_id);
+                                        }
+                                        write_background_tools(&this.background_tools);
+                                        cx.notify();
+                                    });
+                                }),
+                            )
+                            .child(
+                                IconButton::new(
+                                    SharedString::from(format!(
                                         "globe-{}",
                                         globe_tool_id
                                     )),
@@ -1888,18 +2204,31 @@ impl Dashboard {
                         let agent_tools_path = agent_tools_path.clone();
                         let pasta_ativa = pasta_ativa.clone();
                         let session_path = session_path.clone();
-                        let _ = workspace.update(cx, |workspace, cx| {
-                            Self::spawn_tool_entry(
-                                &tool,
-                                &runtime_path,
-                                &agent_tools_path,
-                                &session_path,
-                                &pasta_ativa,
-                                workspace,
-                                window,
-                                cx,
-                            );
-                        });
+                        if is_background {
+                            let _ = workspace.update(cx, |_workspace, cx| {
+                                Self::spawn_tool_background(
+                                    &tool,
+                                    &runtime_path,
+                                    &agent_tools_path,
+                                    &session_path,
+                                    &pasta_ativa,
+                                    cx,
+                                );
+                            });
+                        } else {
+                            let _ = workspace.update(cx, |workspace, cx| {
+                                Self::spawn_tool_entry(
+                                    &tool,
+                                    &runtime_path,
+                                    &agent_tools_path,
+                                    &session_path,
+                                    &pasta_ativa,
+                                    workspace,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        }
                     })
             })
             .collect()
@@ -1911,6 +2240,13 @@ impl Dashboard {
             .w_full()
             .gap_1()
             .child(Self::section_header(ToolTier::Featured.label()))
+            .when_some(self.tools_error.as_ref(), |el, err| {
+                el.child(
+                    Label::new(format!("Parse error: {}", err))
+                        .color(Color::Error)
+                        .size(LabelSize::XSmall),
+                )
+            })
             .children(buttons)
     }
 
@@ -1930,11 +2266,10 @@ impl Dashboard {
         let compact: Vec<ToolEntry> = self
             .tools
             .iter()
-            .filter(|t| t.tier == ToolTier::Compact)
+            .filter(|t| t.tier == ToolTier::Compact && !t.hidden)
             .cloned()
             .collect();
 
-        // Pre-compute keybindings outside the closure to avoid capturing cx
         let compact_buttons: Vec<_> = compact
             .into_iter()
             .map(|tool| {
@@ -1942,6 +2277,11 @@ impl Dashboard {
                 let tool_id = tool.id.clone();
                 let tool_label: SharedString = tool.label.clone().into();
                 let tool_description = tool.description.clone();
+
+                let is_background = self.background_tools.contains(&tool_id);
+
+                let toggle_tool_id = tool_id.clone();
+                let toggle_entity = entity.clone();
 
                 let globe_tool_id = tool_id.clone();
                 let globe_tool_label = tool_label.to_string();
@@ -1976,6 +2316,38 @@ impl Dashboard {
                             .child(
                                 IconButton::new(
                                     SharedString::from(format!(
+                                        "bg-toggle-{}",
+                                        toggle_tool_id
+                                    )),
+                                    IconName::ToolTerminal,
+                                )
+                                .icon_size(IconSize::XSmall)
+                                .icon_color(if is_background {
+                                    Color::Muted
+                                } else {
+                                    Color::Accent
+                                })
+                                .tooltip(Tooltip::text(if is_background {
+                                    "Background mode"
+                                } else {
+                                    "Terminal mode"
+                                }))
+                                .on_click(move |_, _, cx| {
+                                    let tool_id = toggle_tool_id.clone();
+                                    let _ = toggle_entity.update(cx, |this, cx| {
+                                        if this.background_tools.contains(&tool_id) {
+                                            this.background_tools.remove(&tool_id);
+                                        } else {
+                                            this.background_tools.insert(tool_id);
+                                        }
+                                        write_background_tools(&this.background_tools);
+                                        cx.notify();
+                                    });
+                                }),
+                            )
+                            .child(
+                                IconButton::new(
+                                    SharedString::from(format!(
                                         "globe-{}",
                                         globe_tool_id
                                     )),
@@ -2003,18 +2375,31 @@ impl Dashboard {
                         let agent_tools_path = agent_tools_path.clone();
                         let pasta_ativa = pasta_ativa.clone();
                         let session_path = session_path.clone();
-                        let _ = workspace.update(cx, |workspace, cx| {
-                            Self::spawn_tool_entry(
-                                &tool,
-                                &runtime_path,
-                                &agent_tools_path,
-                                &session_path,
-                                &pasta_ativa,
-                                workspace,
-                                window,
-                                cx,
-                            );
-                        });
+                        if is_background {
+                            let _ = workspace.update(cx, |_workspace, cx| {
+                                Self::spawn_tool_background(
+                                    &tool,
+                                    &runtime_path,
+                                    &agent_tools_path,
+                                    &session_path,
+                                    &pasta_ativa,
+                                    cx,
+                                );
+                            });
+                        } else {
+                            let _ = workspace.update(cx, |workspace, cx| {
+                                Self::spawn_tool_entry(
+                                    &tool,
+                                    &runtime_path,
+                                    &agent_tools_path,
+                                    &session_path,
+                                    &pasta_ativa,
+                                    workspace,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        }
                     })
             })
             .collect();
@@ -2033,7 +2418,7 @@ impl Dashboard {
     }
 
     fn render_automations_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let automations = self.automations.clone();
+        let automations: Vec<AutomationEntry> = self.automations.iter().filter(|a| !a.hidden).cloned().collect();
         let backend = self.agent_backend;
         let badge_label: SharedString = backend.badge_label().into();
         let badge_color = backend.badge_color();
@@ -2088,6 +2473,13 @@ impl Dashboard {
                         .auto_width()
                     }),
             )
+            .when_some(self.automations_error.as_ref(), |el, err| {
+                el.child(
+                    Label::new(format!("Parse error: {}", err))
+                        .color(Color::Error)
+                        .size(LabelSize::XSmall),
+                )
+            })
             .when(automations.is_empty(), |el| {
                 el.child(
                     h_flex()
@@ -2128,6 +2520,7 @@ impl Dashboard {
                                 .child(
                                     v_flex()
                                         .flex_1()
+                                        .items_start()
                                         .child(Label::new(entry_label))
                                         .child(
                                             Label::new(entry_description)
@@ -2174,12 +2567,15 @@ impl Dashboard {
                             ),
                     )
                     .on_click(cx.listener(|this, _, window, cx| {
-                        let toml_path = automations_toml_path();
+                        let user_path = automations_user_toml_path();
+                        if !user_path.exists() {
+                            std::fs::write(&user_path, "# User automation overrides — entries here override defaults in AUTOMATIONS.toml\n# Add hidden = true to hide a default automation, or define custom ones.\n\n").log_err();
+                        }
                         let workspace = this.workspace.clone();
                         cx.spawn_in(window, async move |_this, cx| {
                             let _ = workspace.update_in(cx, |workspace, window, cx| {
                                 workspace
-                                    .open_abs_path(toml_path, OpenOptions::default(), window, cx)
+                                    .open_abs_path(user_path, OpenOptions::default(), window, cx)
                                     .detach();
                             });
                         })
@@ -2278,22 +2674,36 @@ impl Render for Dashboard {
             .on_action(cx.listener(|this, action: &RunDashboardTool, window, cx| {
                 if let Some(tool) = this.tools.iter().find(|t| t.id == action.tool_id) {
                     let tool = tool.clone();
+                    let is_background = this.background_tools.contains(&action.tool_id);
                     let runtime_path = this.runtime_path.clone();
                     let agent_tools_path = this.agent_tools_path.clone();
                     let session_path = this.session_path.clone();
                     let pasta_ativa = this.pasta_ativa.clone();
-                    let _ = this.workspace.update(cx, |workspace, cx| {
-                        Self::spawn_tool_entry(
-                            &tool,
-                            &runtime_path,
-                            &agent_tools_path,
-                            &session_path,
-                            &pasta_ativa,
-                            workspace,
-                            window,
-                            cx,
-                        );
-                    });
+                    if is_background {
+                        let _ = this.workspace.update(cx, |_workspace, cx| {
+                            Self::spawn_tool_background(
+                                &tool,
+                                &runtime_path,
+                                &agent_tools_path,
+                                &session_path,
+                                &pasta_ativa,
+                                cx,
+                            );
+                        });
+                    } else {
+                        let _ = this.workspace.update(cx, |workspace, cx| {
+                            Self::spawn_tool_entry(
+                                &tool,
+                                &runtime_path,
+                                &agent_tools_path,
+                                &session_path,
+                                &pasta_ativa,
+                                workspace,
+                                window,
+                                cx,
+                            );
+                        });
+                    }
                 }
             }))
             .size_full()
@@ -2375,12 +2785,15 @@ impl Render for Dashboard {
                                             ),
                                     )
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        let toml_path = tools_toml_path();
+                                        let user_path = tools_user_toml_path();
+                                        if !user_path.exists() {
+                                            std::fs::write(&user_path, "# User tool overrides — entries here override defaults in TOOLS.toml\n# Add hidden = true to hide a default tool, or define custom tools.\n\n").log_err();
+                                        }
                                         let workspace = this.workspace.clone();
                                         cx.spawn_in(window, async move |_this, cx| {
                                             let _ = workspace.update_in(cx, |workspace, window, cx| {
                                                 workspace
-                                                    .open_abs_path(toml_path, OpenOptions::default(), window, cx)
+                                                    .open_abs_path(user_path, OpenOptions::default(), window, cx)
                                                     .detach();
                                             });
                                         })
@@ -2428,5 +2841,178 @@ impl Item for Dashboard {
 
     fn to_item_events(event: &Self::Event, mut f: impl FnMut(ItemEvent)) {
         f(*event)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn find_latest_update_returns_none_on_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(find_latest_update_in("TOOLS", dir.path()).is_none());
+    }
+
+    #[test]
+    fn find_latest_update_returns_none_when_no_matching_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("unrelated.toml"), "").unwrap();
+        fs::write(dir.path().join("TOOLS.toml"), "").unwrap();
+        assert!(find_latest_update_in("TOOLS", dir.path()).is_none());
+    }
+
+    #[test]
+    fn find_latest_update_picks_highest_number() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("TOOLS.update.1.toml"), "").unwrap();
+        fs::write(dir.path().join("TOOLS.update.5.toml"), "").unwrap();
+        fs::write(dir.path().join("TOOLS.update.3.toml"), "").unwrap();
+
+        let result = find_latest_update_in("TOOLS", dir.path()).unwrap();
+        assert_eq!(result.file_name().unwrap(), "TOOLS.update.5.toml");
+    }
+
+    #[test]
+    fn find_latest_update_ignores_non_numeric() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("TOOLS.update.abc.toml"), "").unwrap();
+        fs::write(dir.path().join("TOOLS.update.2.toml"), "").unwrap();
+        fs::write(dir.path().join("TOOLS.update..toml"), "").unwrap();
+
+        let result = find_latest_update_in("TOOLS", dir.path()).unwrap();
+        assert_eq!(result.file_name().unwrap(), "TOOLS.update.2.toml");
+    }
+
+    #[test]
+    fn find_latest_update_ignores_wrong_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("AUTOMATIONS.update.10.toml"), "").unwrap();
+        fs::write(dir.path().join("TOOLS.update.1.toml"), "").unwrap();
+
+        let tools = find_latest_update_in("TOOLS", dir.path()).unwrap();
+        assert_eq!(tools.file_name().unwrap(), "TOOLS.update.1.toml");
+
+        let autos = find_latest_update_in("AUTOMATIONS", dir.path()).unwrap();
+        assert_eq!(autos.file_name().unwrap(), "AUTOMATIONS.update.10.toml");
+    }
+
+    #[test]
+    fn find_latest_update_ignores_wrong_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("TOOLS.update.1.json"), "").unwrap();
+        fs::write(dir.path().join("TOOLS.update.2.txt"), "").unwrap();
+        assert!(find_latest_update_in("TOOLS", dir.path()).is_none());
+    }
+
+    #[test]
+    fn find_latest_update_single_file() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("TOOLS.update.42.toml"), "").unwrap();
+
+        let result = find_latest_update_in("TOOLS", dir.path()).unwrap();
+        assert_eq!(result.file_name().unwrap(), "TOOLS.update.42.toml");
+    }
+
+    #[test]
+    fn version_check_writes_new_version_on_fresh_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let version_file = dir.path().join(".release_version");
+        let updates = dir.path().join("updates");
+        fs::create_dir_all(&updates).unwrap();
+
+        check_version_and_purge("1.0.0", &version_file, &updates);
+
+        assert_eq!(fs::read_to_string(&version_file).unwrap(), "1.0.0");
+        // updates/ should still exist (not purged on fresh install)
+        assert!(updates.is_dir());
+    }
+
+    #[test]
+    fn version_check_noop_when_versions_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let version_file = dir.path().join(".release_version");
+        let updates = dir.path().join("updates");
+        fs::create_dir_all(&updates).unwrap();
+        fs::write(dir.path().join("updates/TOOLS.update.1.toml"), "keep").unwrap();
+        fs::write(&version_file, "1.0.0").unwrap();
+
+        check_version_and_purge("1.0.0", &version_file, &updates);
+
+        // Update file should survive — versions match
+        assert!(dir.path().join("updates/TOOLS.update.1.toml").exists());
+        assert_eq!(fs::read_to_string(&version_file).unwrap(), "1.0.0");
+    }
+
+    #[test]
+    fn version_check_purges_updates_on_version_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let version_file = dir.path().join(".release_version");
+        let updates = dir.path().join("updates");
+        fs::create_dir_all(&updates).unwrap();
+        fs::write(dir.path().join("updates/TOOLS.update.1.toml"), "stale").unwrap();
+        fs::write(dir.path().join("updates/TOOLS.update.2.toml"), "stale").unwrap();
+        fs::write(&version_file, "1.0.0").unwrap();
+
+        check_version_and_purge("1.1.0", &version_file, &updates);
+
+        // Version file updated
+        assert_eq!(fs::read_to_string(&version_file).unwrap(), "1.1.0");
+        // updates/ recreated empty
+        assert!(updates.is_dir());
+        assert_eq!(fs::read_dir(&updates).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn merge_tools_user_overrides_default() {
+        let defaults = vec![tool("a", "Default A"), tool("b", "Default B")];
+        let user = vec![tool("a", "Custom A")];
+
+        let merged = merge_tools(defaults, user);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].label, "Custom A");
+        assert_eq!(merged[1].label, "Default B");
+    }
+
+    #[test]
+    fn merge_tools_user_adds_new() {
+        let defaults = vec![tool("a", "Default A")];
+        let user = vec![tool("c", "User Only")];
+
+        let merged = merge_tools(defaults, user);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].label, "Default A");
+        assert_eq!(merged[1].label, "User Only");
+    }
+
+    #[test]
+    fn merge_tools_empty_defaults() {
+        let defaults = vec![];
+        let user = vec![tool("a", "User A")];
+
+        let merged = merge_tools(defaults, user);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].label, "User A");
+    }
+
+    fn tool(id: &str, label: &str) -> ToolEntry {
+        ToolEntry {
+            id: id.to_string(),
+            label: label.to_string(),
+            description: String::new(),
+            icon: String::new(),
+            binary: String::new(),
+            cwd: String::new(),
+            source: ToolSource::Runtime,
+            tier: ToolTier::Standard,
+            needs_session: false,
+            extra_args: vec![],
+            hidden: false,
+        }
     }
 }

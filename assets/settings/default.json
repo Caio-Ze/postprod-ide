@@ -3,7 +3,7 @@
   /// The displayed name of this project. If not set or null, the root directory name
   /// will be displayed.
   "project_name": null,
-  // The name of the Zed theme to use for the UI.
+  // The name of the theme to use for the UI.
   //
   // `mode` is one of:
   // - "system": Use the theme that corresponds to the system's appearance
@@ -123,9 +123,9 @@
   // Time to wait in milliseconds before showing the informational hover box.
   // This delay also applies to auto signature help when `auto_signature_help` is enabled.
   "hover_popover_delay": 300,
-  // Whether to confirm before quitting Zed.
+  // Whether to confirm before quitting the application.
   "confirm_quit": false,
-  // Whether to restore last closed project when fresh Zed instance is opened
+  // Whether to restore last closed project when a fresh instance is opened
   // May take 3 values:
   //  1. All workspaces open during last session
   //         "restore_on_startup": "last_session"
@@ -180,23 +180,23 @@
   //
   // Default: true
   "zoomed_padding": true,
-  // What draws Zed's window decorations (titlebar):
-  // 1. Client application (Zed) draws its own window decorations
+  // What draws the window decorations (titlebar):
+  // 1. Client application draws its own window decorations
   //    "client"
   // 2. Display server draws the window decorations. Not supported by GNOME Wayland.
   //    "server"
   //
-  // This requires restarting Zed for changes to take effect.
+  // This requires restarting the application for changes to take effect.
   //
   // Default: "client"
   "window_decorations": "client",
   // Whether to use the system provided dialogs for Open and Save As.
-  // When set to false, Zed will use the built-in keyboard-first pickers.
+  // When set to false, the app will use the built-in keyboard-first pickers.
   "use_system_path_prompts": true,
   // Whether to use the system provided dialogs for prompts, such as confirmation
   // prompts.
-  // When set to false, Zed will use its built-in prompts. Note that on Linux,
-  // this option is ignored and Zed will always use the built-in prompts.
+  // When set to false, the app will use its built-in prompts. Note that on Linux,
+  // this option is ignored and the app will always use the built-in prompts.
   "use_system_prompts": true,
   // Whether the cursor blinks in the editor.
   "cursor_blink": true,
@@ -351,11 +351,11 @@
   "use_on_type_format": true,
   // Whether to automatically add matching closing characters when typing
   // opening parenthesis, bracket, brace, single or double quote characters.
-  // For example, when you type '(', Zed will add a closing ) at the correct position.
+  // For example, when you type '(', the editor will add a closing ) at the correct position.
   "use_autoclose": true,
   // Whether to automatically surround selected text when typing opening parenthesis,
   // bracket, brace, single or double quote characters.
-  // For example, when you select text and type '(', Zed will surround the text with ().
+  // For example, when you select text and type '(', the editor will surround the text with ().
   "use_auto_surround": true,
   // Whether indentation should be adjusted based on the context whilst typing.
   "auto_indent": true,
@@ -413,7 +413,7 @@
     "space": "•",
     "tab": "→",
   },
-  // Settings related to calls in Zed
+  // Settings related to calls
   "calls": {
     // Join calls with the microphone live by default
     "mute_on_join": false,
@@ -463,7 +463,7 @@
     // loud you sound to others.
     //
     // Recommended: off (default)
-    // Microphones are too quite in zed, until everyone is on experimental
+    // Microphones are too quiet by default, until everyone is on experimental
     // audio and has auto speaker volume on this will make you very loud
     // compared to other speakers.
     "experimental.auto_microphone_volume": false,
@@ -1119,7 +1119,7 @@
   //
   // 1. Never automatically save:
   //     "autosave": "off",
-  // 2. Save when changing focus away from the Zed window:
+  // 2. Save when changing focus away from the application window:
   //     "autosave": "on_window_change",
   // 3. Save when changing focus away from a specific buffer:
   //     "autosave": "on_focus_change",
@@ -1237,11 +1237,11 @@
     // Whether to show the git status in the file finder.
     "git_status": true,
     // Whether to use gitignored files when searching.
-    // Only the file Zed had indexed will be used, not necessary all the gitignored files.
+    // Only the files that have been indexed will be used, not necessarily all the gitignored files.
     //
     // Can accept 3 values:
     //   * "all": Use all gitignored files
-    //   * "indexed": Use only the files Zed had indexed
+    //   * "indexed": Use only the files that have been indexed
     //   * "smart": Be smart and search for ignored when called from a gitignored worktree
     "include_ignored": "smart",
   },
@@ -1262,7 +1262,7 @@
   "format_on_save": "on",
   // How to perform a buffer format. This setting can take multiple values:
   //
-  // 1. Default. Format files using Zed's Prettier integration (if applicable),
+  // 1. Default. Format files using the built-in Prettier integration (if applicable),
   //    or falling back to formatting via language server:
   //     "formatter": "auto"
   // 2. Format code using the current language server:
@@ -1313,18 +1313,18 @@
   //
   // Default: true
   "word_diff_enabled": true,
-  // Control what info is collected by Zed.
+  // Control what info is collected.
   "telemetry": {
     // Send debug info like crash reports.
     "diagnostics": true,
-    // Send anonymized usage data like what languages you're using Zed with.
+    // Send anonymized usage data like what languages you're using.
     "metrics": true,
   },
-  // Whether to disable all AI features in Zed.
+  // Whether to disable all AI features.
   //
   // Default: false
   "disable_ai": false,
-  // Automatically update Zed. This setting may be ignored on Linux if
+  // Automatically update the application. This setting may be ignored on Linux if
   // installed through a package manager.
   "auto_update": true,
   // How to render LSP `textDocument/documentColor` colors in the editor.
@@ -1348,7 +1348,7 @@
     //
     // Default: true
     "include_warnings": true,
-    // Settings for using LSP pull diagnostics mechanism in Zed.
+    // Settings for using LSP pull diagnostics mechanism.
     "lsp_pull_diagnostics": {
       // Whether to pull for diagnostics or not.
       "enabled": true,
@@ -1375,7 +1375,7 @@
       "max_severity": null,
     },
   },
-  // Files or globs of files that will be excluded by Zed entirely. They will be skipped during file
+  // Files or globs of files that will be excluded entirely. They will be skipped during file
   // scans, file searches, and not be displayed in the project file tree. Takes precedence over `file_scan_inclusions`.
   "file_scan_exclusions": [
     "**/.git",
@@ -1792,13 +1792,13 @@
   "tasks": {
     "variables": {},
     "enabled": true,
-    // Use LSP tasks over Zed language extension ones.
+    // Use LSP tasks over language extension ones.
     // If no LSP tasks are returned due to error/timeout or regular execution,
-    // Zed language extension tasks will be used instead.
+    // language extension tasks will be used instead.
     //
-    // Other Zed tasks will still be shown:
-    // * Zed task from either of the task config file
-    // * Zed task from history (e.g. one-off task was spawned before)
+    // Other tasks will still be shown:
+    // * Tasks from either of the task config files
+    // * Tasks from history (e.g. one-off task was spawned before)
     //
     // Default: true
     "prefer_lsp": true,
@@ -1828,11 +1828,11 @@
   // Settings for which version of Node.js and NPM to use when installing
   // language servers and Copilot.
   //
-  // Note: changing this setting currently requires restarting Zed.
+  // Note: changing this setting currently requires restarting the application.
   "node": {
-    // By default, Zed will look for `node` and `npm` on your `$PATH`, and use the
+    // By default, the app will look for `node` and `npm` on your `$PATH`, and use the
     // existing executables if their version is recent enough. Set this to `true`
-    // to prevent this, and force Zed to always download and install its own
+    // to prevent this, and force the app to always download and install its own
     // version of Node.
     "ignore_system_version": false,
     // You can also specify alternative paths to Node and NPM. If you specify
@@ -1841,7 +1841,7 @@
     "path": null,
     "npm_path": null,
   },
-  // The extensions that Zed should automatically install on startup.
+  // The extensions to automatically install on startup.
   //
   // If you don't want any of these extensions, add this field to your settings
   // and change the value to `false`.
@@ -1891,7 +1891,7 @@
     // When LSP servers give an `InsertReplaceEdit` completion, they provides two ranges: `insert` and `replace`. Usually, `insert`
     // contains the word prefix before your cursor and `replace` contains the whole word.
     //
-    // Effectively, this setting just changes whether Zed will use the received range for `insert` or `replace`, so the results may
+    // Effectively, this setting just changes whether the app will use the received range for `insert` or `replace`, so the results may
     // differ depending on the underlying LSP server.
     //
     // Possible values:
@@ -2185,7 +2185,7 @@
     // Default: false
     "trust_all_worktrees": false,
   },
-  // Zed's Prettier integration settings.
+  // Prettier integration settings.
   // Allows to enable/disable formatting with Prettier
   // and configure default Prettier, used when no project-level Prettier installation is found.
   "prettier": {
@@ -2213,7 +2213,7 @@
     // "rust-analyzer": {
     //     // A special flag for rust-analyzer integration, to use server-provided tasks
     //     enable_lsp_tasks": true,
-    //     // These initialization options are merged into Zed's defaults
+    //     // These initialization options are merged into the defaults
     //     "initialization_options": {
     //         "check": {
     //             "command": "clippy" // rust-analyzer.check.command (default: "check")
@@ -2329,23 +2329,23 @@
   // The server to connect to. If the environment variable
   // ZED_SERVER_URL is set, it will override this setting.
   "server_url": "https://zed.dev",
-  // Settings overrides to use when using Zed Preview.
-  // Mostly useful for developers who are managing multiple instances of Zed.
+  // Settings overrides to use when using the Preview channel.
+  // Mostly useful for developers who are managing multiple instances.
   "preview": {
     // "theme": "Andromeda"
   },
-  // Settings overrides to use when using Zed Nightly.
-  // Mostly useful for developers who are managing multiple instances of Zed.
+  // Settings overrides to use when using the Nightly channel.
+  // Mostly useful for developers who are managing multiple instances.
   "nightly": {
     // "theme": "Andromeda"
   },
-  // Settings overrides to use when using Zed Stable.
-  // Mostly useful for developers who are managing multiple instances of Zed.
+  // Settings overrides to use when using the Stable channel.
+  // Mostly useful for developers who are managing multiple instances.
   "stable": {
     // "theme": "Andromeda"
   },
-  // Settings overrides to use when using Zed Dev.
-  // Mostly useful for developers who are managing multiple instances of Zed.
+  // Settings overrides to use when using the Dev channel.
+  // Mostly useful for developers who are managing multiple instances.
   "dev": {
     // "theme": "Andromeda"
   },
@@ -2373,7 +2373,7 @@
   // Supported URI scheme: `http`, `https`, `socks4`, `socks4a`, `socks5`,
   // `socks5h`. `http` will be used when no scheme is specified.
   //
-  // By default no proxy will be used, or Zed will try get proxy settings from
+  // By default no proxy will be used, or the app will try to get proxy settings from
   // environment variables. If certain hosts should not be proxied,
   // set the `no_proxy` environment variable and provide a comma-separated list.
   //
@@ -2391,7 +2391,7 @@
   "command_aliases": {},
   // ssh_connections is an array of ssh connections.
   // You can configure these from `project: Open Remote` in the command palette.
-  // Zed's ssh support will pull configuration from your ~/.ssh too.
+  // SSH support will pull configuration from your ~/.ssh too.
   // Examples:
   // [
   //   {

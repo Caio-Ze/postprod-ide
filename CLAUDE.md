@@ -209,6 +209,51 @@ Other entities can then register a callback to handle these events by doing `cx.
 
 - Use `./script/clippy` instead of `cargo clippy`
 
+## Versioning & Distribution
+
+### Version source
+
+The version comes from **git tags** via `build.rs` (both `crates/zed/build.rs` and `crates/dashboard/build.rs`):
+
+```
+git tag v1.0.0 → build.rs → env!("PROTOOLS_VERSION") = "1.0.0"
+```
+
+No tag → falls back to `CARGO_PKG_VERSION`. The packaging script names archives `ProToolsStudio-dev-*` when untagged.
+
+### Three-layer config
+
+```
+~/ProTools_Suite/config/
+  TOOLS.toml              ← release defaults (overwritten every launch from embedded)
+  updates/
+    TOOLS.update.N.toml   ← inter-release updates (delivered by external installer)
+  TOOLS.user.toml         ← user overrides (NEVER touched by the app)
+  .release_version        ← version stamp for detecting new deployments
+```
+
+**Load priority:** highest `updates/TOOLS.update.N.toml` → `TOOLS.toml` → merge `TOOLS.user.toml` on top. Same pattern for `AUTOMATIONS`. User entries win by `id`. Reload every 30s.
+
+**Version tracking:** On launch, if `.release_version` differs from the binary version, `updates/` is purged and the new version is written. This ensures inter-release update files don't persist across releases.
+
+### Packaging
+
+```bash
+./script/package-protools              # build + deploy locally + create archive
+./script/package-protools --skip-build  # skip cargo build, just package
+```
+
+**Environment:** `PROTOOLS_SDK_PATH` overrides the default PTSL SDK location.
+
+**Output:** `target/ProToolsStudio-{VERSION}-{ARCH}.tar.gz`
+
+### Rules for versioning code
+
+1. **Never modify `.user.toml` files programmatically.** They belong to the user.
+2. **Never write to `updates/` from the app.** Only external installers create files there.
+3. **`find_latest_update()` and `check_version_and_purge()` are testable** — they accept path params. Run `cargo test -p dashboard` to verify.
+4. **Full deployment guide:** `private/DEPLOYMENT_GUIDE.md`
+
 ## Internal documentation (`private/` — gitignored)
 
 All internal docs live in `private/` at the repo root. This folder is gitignored and never leaves the local machine. It has two clear sections:
@@ -221,6 +266,8 @@ All internal docs live in `private/` at the repo root. This folder is gitignored
 | `PLAN.md` | Technical roadmap — features in progress, next steps, priorities |
 | `FORK_MAINTENANCE.md` | Cherry-pick log from upstream Zed, merge conflicts, version tracking |
 | `GITHUB_INSTRUCTIONS.md` | Detailed rules for the public repo — what can/cannot be committed |
+| `DEPLOYMENT_GUIDE.md` | Step-by-step versioning, building, packaging, and shipping workflow |
+| `DESIGN_CHOICES.md` | Architectural decisions and rationale (config layers, update system, hotkeys) |
 
 ### Business (growth) — `private/growth/`
 
