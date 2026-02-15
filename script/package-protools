@@ -1,19 +1,32 @@
 #!/usr/bin/env bash
 # Build ProTools Studio and package everything into ~/ProTools_Suite/
+# Optionally creates a distributable .tar.gz archive.
+#
 # Usage: ./script/package-protools [--skip-build]
+#
+# Environment variables:
+#   PROTOOLS_SDK_PATH  — path to PROTOOLS_SDK_PTSL repo (default: ~/Documents/Rust_projects/PROTOOLS_SDK_PTSL)
 set -euo pipefail
 
 SUITE_ROOT="$HOME/ProTools_Suite"
-PTSL_SDK="$HOME/Documents/Rust_projects/PROTOOLS_SDK_PTSL"
+PTSL_SDK="${PROTOOLS_SDK_PATH:-$HOME/Documents/Rust_projects/PROTOOLS_SDK_PTSL}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Version from git tag (v1.0.0 → 1.0.0), fallback to "dev"
+RAW_VERSION=$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null || echo "dev")
+VERSION="${RAW_VERSION#v}"
+ARCH="$(uname -m)"
 
 skip_build=false
 if [[ "${1:-}" == "--skip-build" ]]; then
     skip_build=true
 fi
 
+echo "==> ProTools Studio $VERSION ($ARCH)"
+
 echo "==> Creating workspace directories..."
 mkdir -p "$SUITE_ROOT/config"
+mkdir -p "$SUITE_ROOT/config/updates"
 mkdir -p "$SUITE_ROOT/tools/agent"
 mkdir -p "$SUITE_ROOT/tools/runtime"
 
@@ -60,6 +73,74 @@ for name in TOOLS.toml AUTOMATIONS.toml SKILL.md; do
     fi
 done
 
+# Deploy centralized .env.example and create .env if missing
+env_example="$PTSL_SDK/templates/.env.example"
+if [[ -f "$env_example" ]]; then
+    cp "$env_example" "$SUITE_ROOT/config/.env.example"
+    echo "    Updated .env.example"
+    if [[ ! -f "$SUITE_ROOT/config/.env" ]]; then
+        cp "$env_example" "$SUITE_ROOT/config/.env"
+        echo "    Created .env from template (fill in your API keys)"
+    else
+        echo "    .env exists — preserved"
+    fi
+fi
+
 echo "==> Done. Workspace at $SUITE_ROOT"
 echo "    config/  — TOML + skills (user-editable)"
 echo "    tools/   — agent + runtime binaries"
+
+# ---------------------------------------------------------------------------
+# Create distributable archive
+# ---------------------------------------------------------------------------
+
+ARCHIVE_NAME="ProToolsStudio-${VERSION}-${ARCH}"
+ARCHIVE_DIR="$REPO_ROOT/target/$ARCHIVE_NAME"
+ARCHIVE_PATH="$REPO_ROOT/target/${ARCHIVE_NAME}.tar.gz"
+
+echo ""
+echo "==> Creating distributable archive..."
+
+rm -rf "$ARCHIVE_DIR"
+mkdir -p "$ARCHIVE_DIR/config"
+mkdir -p "$ARCHIVE_DIR/tools/agent"
+mkdir -p "$ARCHIVE_DIR/tools/runtime"
+
+# Include .env.example in archive
+if [[ -f "$SUITE_ROOT/config/.env.example" ]]; then
+    cp "$SUITE_ROOT/config/.env.example" "$ARCHIVE_DIR/config/"
+fi
+
+# App binary
+BINARY="$REPO_ROOT/target/release/protools-studio"
+if [[ -f "$BINARY" ]]; then
+    cp "$BINARY" "$ARCHIVE_DIR/"
+else
+    echo "    WARNING: protools-studio binary not found at $BINARY"
+fi
+
+# Agent tools
+if [[ -d "$SUITE_ROOT/tools/agent" ]]; then
+    for bin in "$SUITE_ROOT/tools/agent/agent-"*; do
+        [[ -f "$bin" && -x "$bin" ]] || continue
+        cp "$bin" "$ARCHIVE_DIR/tools/agent/"
+    done
+fi
+
+# Runtime tools
+if [[ -d "$SUITE_ROOT/tools/runtime" ]] && ls "$SUITE_ROOT/tools/runtime/"* >/dev/null 2>&1; then
+    rsync -a "$SUITE_ROOT/tools/runtime/" "$ARCHIVE_DIR/tools/runtime/"
+fi
+
+# Create archive
+tar -czf "$ARCHIVE_PATH" -C "$REPO_ROOT/target" "$ARCHIVE_NAME"
+rm -rf "$ARCHIVE_DIR"
+
+ARCHIVE_SIZE=$(du -h "$ARCHIVE_PATH" | cut -f1)
+echo "==> Archive ready: $ARCHIVE_PATH ($ARCHIVE_SIZE)"
+echo ""
+echo "Install instructions:"
+echo "  1. Extract:  tar xzf ${ARCHIVE_NAME}.tar.gz"
+echo "  2. Clear quarantine:  xattr -cr ${ARCHIVE_NAME}/"
+echo "  3. Copy binary to /Applications/ or ~/ProTools_Suite/"
+echo "  4. Copy tools/ to ~/ProTools_Suite/tools/"
