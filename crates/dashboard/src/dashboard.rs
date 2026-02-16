@@ -1884,11 +1884,14 @@ impl Dashboard {
     }
 
     /// Best working directory for AI agents. Priority:
-    /// 1. Open Pro Tools session's parent folder (the session folder itself,
-    ///    containing .ptx, Audio Files/, LOC/, Bounced Files/, etc.)
-    /// 2. Pasta ativa (user-selected working folder)
+    /// 1. Pasta ativa (user-selected working folder — defines the agent's
+    ///    workspace and file-system permissions)
+    /// 2. Open Pro Tools session's parent folder (contextual hint)
     /// 3. suite_root (~/ProTools_Suite)
     fn agent_cwd(&self) -> PathBuf {
+        if let Some(pa) = &self.pasta_ativa {
+            return pa.clone();
+        }
         if let Some(session) = &self.session_path {
             let session_path = Path::new(session);
             if let Some(parent) = session_path.parent() {
@@ -1897,7 +1900,7 @@ impl Dashboard {
                 }
             }
         }
-        self.pasta_ativa.clone().unwrap_or_else(suite_root)
+        suite_root()
     }
 
     fn run_automation(
