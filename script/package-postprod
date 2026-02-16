@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Build ProTools Studio and package everything into ~/ProTools_Suite/
+# Build PostProd Tools and package everything into ~/ProTools_Suite/
 # Optionally creates a distributable .tar.gz archive.
 #
-# Usage: ./script/package-protools [--skip-build]
+# Usage: ./script/package-postprod [--skip-build]
 #
 # Environment variables:
 #   PROTOOLS_SDK_PATH  — path to PROTOOLS_SDK_PTSL repo (default: ~/Documents/Rust_projects/PROTOOLS_SDK_PTSL)
@@ -22,7 +22,7 @@ if [[ "${1:-}" == "--skip-build" ]]; then
     skip_build=true
 fi
 
-echo "==> ProTools Studio $VERSION ($ARCH)"
+echo "==> PostProd Tools $VERSION ($ARCH)"
 
 echo "==> Creating workspace directories..."
 mkdir -p "$SUITE_ROOT/config"
@@ -31,8 +31,8 @@ mkdir -p "$SUITE_ROOT/tools/agent"
 mkdir -p "$SUITE_ROOT/tools/runtime"
 
 if [[ "$skip_build" == false ]]; then
-    echo "==> Building protools-studio (release)..."
-    cargo build --release -p protools-studio --manifest-path "$REPO_ROOT/Cargo.toml"
+    echo "==> Building postprod-ide (release)..."
+    cargo build --release -p postprod-ide --manifest-path "$REPO_ROOT/Cargo.toml"
 
     if [[ -d "$PTSL_SDK" ]]; then
         echo "==> Building agent-tools (release)..."
@@ -94,7 +94,7 @@ echo "    tools/   — agent + runtime binaries"
 # Create distributable archive
 # ---------------------------------------------------------------------------
 
-ARCHIVE_NAME="ProToolsStudio-${VERSION}-${ARCH}"
+ARCHIVE_NAME="PostProdTools-${VERSION}-${ARCH}"
 ARCHIVE_DIR="$REPO_ROOT/target/$ARCHIVE_NAME"
 ARCHIVE_PATH="$REPO_ROOT/target/${ARCHIVE_NAME}.tar.gz"
 
@@ -112,11 +112,11 @@ if [[ -f "$SUITE_ROOT/config/.env.example" ]]; then
 fi
 
 # App binary
-BINARY="$REPO_ROOT/target/release/protools-studio"
+BINARY="$REPO_ROOT/target/release/postprod-ide"
 if [[ -f "$BINARY" ]]; then
     cp "$BINARY" "$ARCHIVE_DIR/"
 else
-    echo "    WARNING: protools-studio binary not found at $BINARY"
+    echo "    WARNING: postprod-ide binary not found at $BINARY"
 fi
 
 # Agent tools

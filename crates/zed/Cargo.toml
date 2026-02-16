@@ -1,12 +1,12 @@
 [package]
 description = "Native macOS audio post-production IDE."
 edition.workspace = true
-name = "protools-studio"
+name = "postprod-ide"
 version = "0.224.0"
 publish.workspace = true
 license = "GPL-3.0-or-later"
 authors = ["Caio-Ze"]
-default-run = "protools-studio"
+default-run = "postprod-ide"
 
 [lints]
 workspace = true
@@ -53,7 +53,7 @@ visual-tests = [
 ]
 
 [[bin]]
-name = "protools-studio"
+name = "postprod-ide"
 path = "src/main.rs"
 
 [[bin]]
@@ -260,35 +260,35 @@ repl = { workspace = true, features = ["test-support"] }
 
 [package.metadata.bundle-dev]
 icon = ["resources/app-icon-dev@2x.png", "resources/app-icon-dev.png"]
-identifier = "com.caio-ze.protools-studio.Dev"
-name = "ProTools Studio Dev"
+identifier = "com.caio-ze.postprod-ide.Dev"
+name = "PostProd Tools Dev"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["protools-studio"]
+osx_url_schemes = ["postprod-ide"]
 
 [package.metadata.bundle-nightly]
 icon = ["resources/app-icon-nightly@2x.png", "resources/app-icon-nightly.png"]
-identifier = "com.caio-ze.protools-studio.Nightly"
-name = "ProTools Studio Nightly"
+identifier = "com.caio-ze.postprod-ide.Nightly"
+name = "PostProd Tools Nightly"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["protools-studio"]
+osx_url_schemes = ["postprod-ide"]
 
 [package.metadata.bundle-preview]
 icon = ["resources/app-icon-preview@2x.png", "resources/app-icon-preview.png"]
-identifier = "com.caio-ze.protools-studio.Preview"
-name = "ProTools Studio Preview"
+identifier = "com.caio-ze.postprod-ide.Preview"
+name = "PostProd Tools Preview"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["protools-studio"]
+osx_url_schemes = ["postprod-ide"]
 
 [package.metadata.bundle-stable]
 icon = ["resources/app-icon@2x.png", "resources/app-icon.png"]
-identifier = "com.caio-ze.protools-studio"
-name = "ProTools Studio"
+identifier = "com.caio-ze.postprod-ide"
+name = "PostProd Tools"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
-osx_url_schemes = ["protools-studio"]
+osx_url_schemes = ["postprod-ide"]
 
 [package.metadata.cargo-machete]
 ignored = ["profiling", "zstd", "tracing"]

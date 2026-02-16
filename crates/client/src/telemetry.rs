@@ -610,7 +610,7 @@ impl Telemetry {
     }
 
     pub async fn flush_events_inner(self: &Arc<Self>) -> Result<()> {
-        // ProTools Studio: telemetry disabled — only write to local log file, never send to server
+        // PostProd Tools: telemetry disabled — only write to local log file, never send to server
         let mut state = self.state.lock();
         state.first_event_date_time = None;
         let events = mem::take(&mut state.events_queue);

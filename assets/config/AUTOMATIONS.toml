@@ -1,4 +1,4 @@
-## ProTools Studio — Automation Prompts
+## PostProd Tools — Automation Prompts
 ## Each [[automation]] block becomes a one-click button on the Dashboard.
 ## Edit this file to add/remove/change automations — no recompilation needed.
 ## The dashboard re-reads this file periodically.
@@ -192,7 +192,7 @@ label = "Create New Button"
 description = "I'll help you create a new dashboard button"
 icon = "sparkle"
 prompt = """
-I want to create a new one-click button for the ProTools Studio dashboard.
+I want to create a new one-click button for the PostProd Tools dashboard.
 
 Important: You are talking to a sound engineer, not a programmer. Use plain, simple language. Avoid technical jargon, code terms, or developer speak.
 
@@ -233,7 +233,7 @@ label = "Edit a Button"
 description = "I'll help you change an existing dashboard button"
 icon = "replace"
 prompt = """
-I want to edit one of my existing dashboard buttons in ProTools Studio.
+I want to edit one of my existing dashboard buttons in PostProd Tools.
 
 Important: You are talking to a sound engineer, not a programmer. Use plain, simple language. Avoid technical jargon, code terms, or developer speak.
 

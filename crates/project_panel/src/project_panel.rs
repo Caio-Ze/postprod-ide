@@ -6679,7 +6679,7 @@ impl Render for ProjectPanel {
                 .gap_2()
                 .track_focus(&self.focus_handle(cx))
                 .child(
-                    Label::new("ProTools Studio")
+                    Label::new("PostProd Tools")
                         .size(LabelSize::Large)
                         .color(Color::Muted),
                 )

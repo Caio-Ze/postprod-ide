@@ -1,4 +1,4 @@
-# ProTools Studio
+# PostProd Tools
 
 > **TL;DR:** A macOS app that sits next to Pro Tools and does the boring stuff for you. 30+ tools for bouncing, normalizing, batch processing, and file management — all talking to Pro Tools directly via gRPC. Plus AI agents that can chain it all together from a single prompt.
 
@@ -6,7 +6,7 @@ A native macOS application for audio post-production. One app, one window — a 
 
 Built on top of [Zed](https://github.com/zed-industries/zed), the GPU-accelerated code editor.
 
-![ProTools Studio Dashboard](DOCS/dashboard-screenshot.png)
+![PostProd Tools Dashboard](DOCS/dashboard-screenshot.png)
 
 **Expected launch: March 13, 2026** — The application is in active daily use for real production work. The remaining work is packaging everything into a single `.app` bundle that runs out of the box with no setup.
 
@@ -18,13 +18,13 @@ Audio post-production for broadcast, advertising, and streaming is a volume game
 
 These are hours of mechanical, repetitive work that require precision but not creativity. A missed normalization, a wrong filename, a forgotten MP3 conversion — any of these means a rejected delivery and wasted time.
 
-ProTools Studio was built for this reality. It replaces the manual repetition with one-click tools and AI-driven workflows that handle the entire chain — from open session to verified delivery — while the engineer focuses on the actual creative work.
+PostProd Tools was built for this reality. It replaces the manual repetition with one-click tools and AI-driven workflows that handle the entire chain — from open session to verified delivery — while the engineer focuses on the actual creative work.
 
 ### Independent creators and YouTubers
 
 You don't need a production company to have a production problem. If you're a YouTuber, a podcaster, or an independent audio creator, you know the feeling: the creative work takes an hour, the file management takes another hour. Renaming episodes, converting formats, normalizing loudness for different platforms, organizing folders — none of this is creative work, but it still eats your time.
 
-ProTools Studio is not limited to Pro Tools. Many of the tools work directly on files and folders — no DAW required:
+PostProd Tools is not limited to Pro Tools. Many of the tools work directly on files and folders — no DAW required:
 
 - **File renaming** — Batch rename audio files to match naming conventions, strip prefixes, add dates, convert between naming standards
 - **Format conversion** — Convert between WAV, MP3, and other formats in bulk
@@ -38,7 +38,7 @@ These tools run from the dashboard with a single click. If Pro Tools is running,
 
 ### A single application
 
-Download, open, and start working. ProTools Studio is a native macOS app — not a browser tool, not a plugin, not a collection of scripts you need to install separately. Every tool is bundled inside the application. The dashboard shows your tools, your sessions, and your delivery status in one window.
+Download, open, and start working. PostProd Tools is a native macOS app — not a browser tool, not a plugin, not a collection of scripts you need to install separately. Every tool is bundled inside the application. The dashboard shows your tools, your sessions, and your delivery status in one window.
 
 ### 30+ tools that control Pro Tools directly
 
@@ -57,7 +57,7 @@ Every tool communicates with Pro Tools over the PTSL gRPC protocol. This means:
 
 ### Session Monitor — the always-on autopilot
 
-Session Monitor is the centerpiece of ProTools Studio. It runs in the background and watches what happens in Pro Tools — when you open a session, when you save, when you close. And it acts on it.
+Session Monitor is the centerpiece of PostProd Tools. It runs in the background and watches what happens in Pro Tools — when you open a session, when you save, when you close. And it acts on it.
 
 ![Session Monitor](DOCS/session-monitor-screenshot.png)
 
@@ -105,9 +105,9 @@ A background scan checks your delivery folder and reports what's ready: TV versi
 
 ## AI agents — not just an assistant
 
-ProTools Studio integrates autonomous AI agents (Claude Code, Gemini CLI) that run in the built-in terminal. This is fundamentally different from chat-based assistants like SoundFlow's [Session Assistant](https://soundflow.org/session-assistant):
+PostProd Tools integrates autonomous AI agents (Claude Code, Gemini CLI) that run in the built-in terminal. This is fundamentally different from chat-based assistants like SoundFlow's [Session Assistant](https://soundflow.org/session-assistant):
 
-| | **ProTools Studio agents** | **SoundFlow Session Assistant** |
+| | **PostProd Tools agents** | **SoundFlow Session Assistant** |
 |---|---|---|
 | Reads your file tree | Yes — sees sessions, audio, exports | No — only sees Pro Tools session state |
 | Creates/edits files | Yes — renames exports, moves deliveries, writes scripts | No — limited to Pro Tools track operations |
@@ -121,7 +121,7 @@ Automations are defined in a simple TOML file. Add or edit them at any time — 
 
 ## How it compares
 
-| | **ProTools Studio** | **[SoundFlow](https://soundflow.org/)** | **[Keyboard Maestro](https://www.keyboardmaestro.com/)** | **Custom scripts** |
+| | **PostProd Tools** | **[SoundFlow](https://soundflow.org/)** | **[Keyboard Maestro](https://www.keyboardmaestro.com/)** | **Custom scripts** |
 |---|---|---|---|---|
 | **How it talks to PT** | gRPC (PTSL protocol) | SFX protocol + GUI hooks | GUI simulation (clicks, keystrokes) | AppleScript / osascript |
 | **Breaks on UI changes** | No | Partially | Yes | Often |
@@ -134,9 +134,9 @@ Automations are defined in a simple TOML file. Add or edit them at any time — 
 
 [SoundFlow](https://soundflow.org/) is a well-established automation tool for Pro Tools. It ships with 1,700+ pre-built macros, supports Stream Deck and MIDI triggers, and has a JavaScript scripting engine. For individual editors who want ready-made macros and a polished UI, SoundFlow is a solid choice.
 
-### Where ProTools Studio is different
+### Where PostProd Tools is different
 
-ProTools Studio is not trying to replace SoundFlow's macro library. It solves a different problem: **automating the entire post-production pipeline** — not just what happens inside Pro Tools, but everything around it. File management, audio processing, format conversion, delivery verification, and the repetitive session-to-session workflow that eats hours every day.
+PostProd Tools is not trying to replace SoundFlow's macro library. It solves a different problem: **automating the entire post-production pipeline** — not just what happens inside Pro Tools, but everything around it. File management, audio processing, format conversion, delivery verification, and the repetitive session-to-session workflow that eats hours every day.
 
 The tools don't simulate the Pro Tools interface. They talk to the engine directly. And the AI agents don't just execute single commands — they run multi-step workflows end-to-end, reading your project structure and making decisions based on what they find.
 
@@ -167,7 +167,7 @@ For developers interested in the tool binaries: see the companion [PostProd Tool
 
 ## License
 
-This repository (the IDE) is a fork of [Zed](https://github.com/zed-industries/zed) and is open source. The original Zed code is licensed under AGPL-3.0 and Apache-2.0. New code added for ProTools Studio is licensed under GPL-3.0-or-later.
+This repository (the IDE) is a fork of [Zed](https://github.com/zed-industries/zed) and is open source. The original Zed code is licensed under AGPL-3.0 and Apache-2.0. New code added for PostProd Tools is licensed under GPL-3.0-or-later.
 
 The companion tool binaries ([PostProd Tools](https://github.com/Caio-Ze/postprod-tools)) are distributed separately and are not covered by this license.
 

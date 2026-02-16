@@ -37,7 +37,7 @@ const APP_VERSION: &str = env!("PROTOOLS_VERSION");
 actions!(
     dashboard,
     [
-        /// Show the ProTools Studio Dashboard.
+        /// Show the PostProd Tools Dashboard.
         ShowDashboard
     ]
 );
@@ -578,8 +578,8 @@ fn ensure_global_hotkeys_config() {
         std::fs::create_dir_all(parent).log_err();
     }
     let header = "\
-# ProTools Studio — Global Hotkeys
-# These shortcuts work even when ProTools Studio is not focused.
+# PostProd Tools — Global Hotkeys
+# These shortcuts work even when PostProd Tools is not focused.
 # Requires \"Input Monitoring\" permission in System Settings.
 #
 # [[hotkey]]
@@ -2876,7 +2876,7 @@ impl Render for Dashboard {
                                     .child(
                                         v_flex()
                                             .child(
-                                                Headline::new("ProTools Studio Dashboard")
+                                                Headline::new("PostProd Tools Dashboard")
                                                     .size(HeadlineSize::Small),
                                             )
                                             .child(

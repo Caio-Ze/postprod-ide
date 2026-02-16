@@ -872,7 +872,7 @@ lto = false
 codegen-units = 16
 
 [profile.release.package]
-protools-studio = { codegen-units = 16 }
+postprod-ide = { codegen-units = 16 }
 
 [profile.release-fast]
 inherits = "release"

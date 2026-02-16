@@ -65,7 +65,7 @@ echo -e "${BOLD}--- Packaging (--skip-build, fake binaries) ---${RESET}"
 
 # Create a fake ~/ProTools_Suite in /tmp so the script doesn't need real binaries
 FAKE_SUITE=$(mktemp -d)
-FAKE_BINARY="$REPO_ROOT/target/release/protools-studio"
+FAKE_BINARY="$REPO_ROOT/target/release/postprod-ide"
 
 # Create fake binary if the real one doesn't exist (so archive creation works)
 if [[ ! -f "$FAKE_BINARY" ]]; then
@@ -78,9 +78,9 @@ else
 fi
 
 # Run packaging script with --skip-build
-SUITE_ROOT="$FAKE_SUITE" "$REPO_ROOT/script/package-protools" --skip-build > /dev/null 2>&1 || true
+SUITE_ROOT="$FAKE_SUITE" "$REPO_ROOT/script/package-postprod" --skip-build > /dev/null 2>&1 || true
 
-ARCHIVE_NAME="ProToolsStudio-${VERSION}-${ARCH}"
+ARCHIVE_NAME="PostProdTools-${VERSION}-${ARCH}"
 ARCHIVE_PATH="$REPO_ROOT/target/${ARCHIVE_NAME}.tar.gz"
 ARCHIVE_DIR="$REPO_ROOT/target/$ARCHIVE_NAME"
 
@@ -95,8 +95,8 @@ echo -e "${BOLD}--- Archive structure ---${RESET}"
 if [[ -f "$ARCHIVE_PATH" ]]; then
     CONTENTS=$(tar tzf "$ARCHIVE_PATH" 2>/dev/null || echo "")
 
-    check "contains protools-studio binary" \
-        "echo '$CONTENTS' | grep -q '${ARCHIVE_NAME}/protools-studio'" \
+    check "contains postprod-ide binary" \
+        "echo '$CONTENTS' | grep -q '${ARCHIVE_NAME}/postprod-ide'" \
         "binary not in archive"
 
     check "contains tools/agent/ dir" \

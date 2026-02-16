@@ -5023,7 +5023,7 @@ impl Workspace {
         }
 
         if title.is_empty() {
-            title = "ProTools Studio".to_string();
+            title = "PostProd Tools".to_string();
         }
 
         // Append Pro Tools session name if available

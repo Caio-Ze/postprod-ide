@@ -1,4 +1,4 @@
-## ProTools Studio — Tool Registry
+## PostProd Tools — Tool Registry
 ## Each [[tool]] block becomes a button on the Dashboard.
 ## Adding a new entry here auto-creates the button — no Rust code changes needed.
 ## The dashboard embeds this file at compile time.

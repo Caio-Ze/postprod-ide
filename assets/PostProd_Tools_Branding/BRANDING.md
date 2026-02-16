@@ -44,10 +44,10 @@ All default Zed icons have been replaced with the PPT hexagonal icon across ever
 
 Already configured in `crates/zed/Cargo.toml` for all release channels:
 
-- `com.caio-ze.protools-studio` (stable)
-- `com.caio-ze.protools-studio-dev` (dev)
-- `com.caio-ze.protools-studio-nightly` (nightly)
-- `com.caio-ze.protools-studio-preview` (preview)
+- `com.caio-ze.postprod-ide` (stable)
+- `com.caio-ze.postprod-ide.Dev` (dev)
+- `com.caio-ze.postprod-ide.Nightly` (nightly)
+- `com.caio-ze.postprod-ide.Preview` (preview)
 
 ## Not Yet Implemented
 

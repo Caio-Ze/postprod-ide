@@ -68,7 +68,7 @@ use crate::zed::{OpenRequestKind, eager_load_active_theme_and_icon_theme};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn files_not_created_on_launch(errors: HashMap<io::ErrorKind, Vec<&Path>>) {
-    let message = "ProTools Studio failed to launch";
+    let message = "PostProd Tools failed to launch";
     let error_details = errors
         .into_iter()
         .flat_map(|(kind, paths)| {
@@ -130,7 +130,7 @@ fn fail_to_open_window_async(e: anyhow::Error, cx: &mut AsyncApp) {
 
 fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
     eprintln!(
-        "ProTools Studio failed to open a window: {e:?}."
+        "PostProd Tools failed to open a window: {e:?}."
     );
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     {
@@ -146,11 +146,11 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
                 process::exit(1);
             };
 
-            let notification_id = "com.caio-ze.protools-studio.Oops";
+            let notification_id = "com.caio-ze.postprod-ide.Oops";
             proxy
                 .add_notification(
                     notification_id,
-                    Notification::new("ProTools Studio failed to launch")
+                    Notification::new("PostProd Tools failed to launch")
                         .body(Some(
                             format!(
                                 "{e:?}."
@@ -271,7 +271,7 @@ fn main() {
             app_commit_sha,
             *release_channel::RELEASE_CHANNEL,
         );
-        println!("ProTools Studio System Specs (from CLI):\n{}", system_specs);
+        println!("PostProd Tools System Specs (from CLI):\n{}", system_specs);
         return;
     }
 
@@ -283,7 +283,7 @@ fn main() {
         .unwrap();
 
     log::info!(
-        "========== starting protools-studio {} (base {}), sha {} ==========",
+        "========== starting postprod-ide {} (base {}), sha {} ==========",
         env!("PROTOOLS_VERSION"),
         app_version,
         app_commit_sha
@@ -342,7 +342,7 @@ fn main() {
         }
     };
     if failed_single_instance_check {
-        println!("protools-studio is already running");
+        println!("postprod-ide is already running");
         return;
     }
 
@@ -443,7 +443,7 @@ fn main() {
         handle_keymap_file_changes(user_keymap_file_rx, user_keymap_watcher, cx);
 
         let user_agent = format!(
-            "ProToolsStudio/{} ({}; {})",
+            "PostProdIDE/{} ({}; {})",
             AppVersion::global(cx),
             std::env::consts::OS,
             std::env::consts::ARCH
@@ -1157,7 +1157,7 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
 }
 
 async fn authenticate(_client: Arc<Client>, _cx: &AsyncApp) -> Result<()> {
-    // ProTools Studio: Zed account authentication disabled
+    // PostProd Tools: Zed account authentication disabled
     Ok(())
 }
 
@@ -1444,7 +1444,7 @@ fn stdout_is_a_pty() -> bool {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "protools-studio", disable_version_flag = true, max_term_width = 100)]
+#[command(name = "postprod-ide", disable_version_flag = true, max_term_width = 100)]
 struct Args {
     /// A sequence of space-separated paths or urls that you want to open.
     ///

@@ -28,10 +28,10 @@ pub static RELEASE_CHANNEL: LazyLock<ReleaseChannel> =
 #[cfg(target_os = "windows")]
 pub fn app_identifier() -> &'static str {
     match *RELEASE_CHANNEL {
-        ReleaseChannel::Dev => "ProTools-Studio-Dev",
-        ReleaseChannel::Nightly => "ProTools-Studio-Nightly",
-        ReleaseChannel::Preview => "ProTools-Studio-Preview",
-        ReleaseChannel::Stable => "ProTools-Studio-Stable",
+        ReleaseChannel::Dev => "PostProd-IDE-Dev",
+        ReleaseChannel::Nightly => "PostProd-IDE-Nightly",
+        ReleaseChannel::Preview => "PostProd-IDE-Preview",
+        ReleaseChannel::Stable => "PostProd-IDE-Stable",
     }
 }
 
@@ -167,17 +167,17 @@ impl ReleaseChannel {
 
     /// Returns whether we want to poll for updates for this [`ReleaseChannel`]
     pub fn poll_for_updates(&self) -> bool {
-        // ProTools Studio: auto-update disabled
+        // PostProd Tools: auto-update disabled
         false
     }
 
     /// Returns the display name for this [`ReleaseChannel`].
     pub fn display_name(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "ProTools Studio Dev",
-            ReleaseChannel::Nightly => "ProTools Studio Nightly",
-            ReleaseChannel::Preview => "ProTools Studio Preview",
-            ReleaseChannel::Stable => "ProTools Studio",
+            ReleaseChannel::Dev => "PostProd Tools Dev",
+            ReleaseChannel::Nightly => "PostProd Tools Nightly",
+            ReleaseChannel::Preview => "PostProd Tools Preview",
+            ReleaseChannel::Stable => "PostProd Tools",
         }
     }
 
@@ -196,10 +196,10 @@ impl ReleaseChannel {
     /// This also has to match the bundle identifier for Zed on macOS.
     pub fn app_id(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "com.caio-ze.protools-studio.Dev",
-            ReleaseChannel::Nightly => "com.caio-ze.protools-studio.Nightly",
-            ReleaseChannel::Preview => "com.caio-ze.protools-studio.Preview",
-            ReleaseChannel::Stable => "com.caio-ze.protools-studio",
+            ReleaseChannel::Dev => "com.caio-ze.postprod-ide.Dev",
+            ReleaseChannel::Nightly => "com.caio-ze.postprod-ide.Nightly",
+            ReleaseChannel::Preview => "com.caio-ze.postprod-ide.Preview",
+            ReleaseChannel::Stable => "com.caio-ze.postprod-ide",
         }
     }
 

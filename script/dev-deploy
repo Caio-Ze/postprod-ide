@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build ProTools Studio and deploy the workspace, so you can test
+# Build PostProd Tools and deploy the workspace, so you can test
 # the distribution as a real user would experience it.
 #
 # This replaces bare `cargo build --release` as the standard dev workflow.
@@ -46,8 +46,8 @@ mkdir -p "$SUITE_ROOT/tools/runtime"
 
 # --- Build ---
 if [[ "$skip_build" == false ]]; then
-    echo "==> Building protools-studio (release)..."
-    cargo build --release -p protools-studio --manifest-path "$REPO_ROOT/Cargo.toml"
+    echo "==> Building postprod-ide (release)..."
+    cargo build --release -p postprod-ide --manifest-path "$REPO_ROOT/Cargo.toml"
 fi
 
 # --- Agent tools (debug binaries — fast, no release build needed) ---
@@ -98,13 +98,13 @@ fi
 
 echo ""
 echo "==> Dev deploy complete."
-echo "    Binary:    $REPO_ROOT/target/release/protools-studio"
+echo "    Binary:    $REPO_ROOT/target/release/postprod-ide"
 echo "    Workspace: $SUITE_ROOT"
 
 if [[ "$run_after" == true ]]; then
     echo ""
-    echo "==> Launching protools-studio..."
-    exec "$REPO_ROOT/target/release/protools-studio"
+    echo "==> Launching postprod-ide..."
+    exec "$REPO_ROOT/target/release/postprod-ide"
 else
     echo ""
     echo "    Run: ./script/dev-deploy --run"

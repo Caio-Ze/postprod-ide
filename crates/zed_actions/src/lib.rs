@@ -60,7 +60,7 @@ actions!(
         OpenServerSettings,
         /// Quits the application.
         Quit,
-        /// Shows information about ProTools Studio.
+        /// Shows information about PostProd Tools.
         About,
         /// Opens the documentation website.
         OpenDocs,

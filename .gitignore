@@ -20,6 +20,7 @@
 .swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
 .venv
 .vscode
+*.code-workspace
 .wrangler
 .perf-runs
 /private/
