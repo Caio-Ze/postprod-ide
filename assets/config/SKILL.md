@@ -1,7 +1,7 @@
 ---
 name: ptsl-tools
 description: Controls Pro Tools audio workstation via PTSL gRPC protocol. Use when the user asks to manage tracks, import audio, bounce/export sessions, control transport, set markers, rename tracks/clips, or perform any Pro Tools automation task.
-compatibility: Requires Pro Tools running with PTSL gRPC endpoint at http://[::1]:31416
+compatibility: Requires Pro Tools running with PTSL enabled
 ---
 
 # Pro Tools Agent Skills
@@ -46,7 +46,7 @@ When you encounter an error, discover a limitation, or find a workaround:
 - **`--output-json` flag ordering**: For subcommand tools (`agent-transport`, `agent-timeline-selection`, `agent-manage-tracks`), `--output-json` must come **before** the subcommand: `agent-transport --output-json status` (not `agent-transport status --output-json`).
 - **`agent-transport` requires open session**: Transport state returns "Unknown" when no session is open in Pro Tools. Play/stop commands require an open session.
 - **`agent-rename-clip` operates on open session**: Unlike other tools, it does NOT open/close a session — it operates on whatever session is currently open in Pro Tools.
-- **`agent-track-volume` SET works, GET not yet implemented**: SET (command 150) works — value is direct dB (e.g. `2.0` = +2dB). Requires `track_id` internally (the tool handles this automatically). **Track automation mode must be Read, Touch, or Latch** — if the track is in "Off" mode the fader will not move. GET (command 149) returns `PT_UnsupportedCommand`, so the `get`, `up`, `down` subcommands will fail until Avid adds support.
+- **`agent-track-volume` SET works, GET not yet implemented**: SET works — value is direct dB (e.g. `2.0` = +2dB). The tool handles track identification automatically. **Track automation mode must be Read, Touch, or Latch** — if the track is in "Off" mode the fader will not move. The `get`, `up`, `down` subcommands are not yet available.
 - **`agent-mute-solo` cannot mute Video/MasterFader tracks**: Same restriction as inactivate — some track types don't support mute/solo via PTSL.
 
 ## Tool Reference
@@ -212,7 +212,7 @@ $BIN/agent-mute-solo --session <SESSION.ptx> --track <NAME> --output-json unsolo
 #### agent-track-volume
 Set track fader volume in dB. Value is direct dB: `0.0` = unity, `2.0` = +2dB, `-6.0` = -6dB.
 **Requires track automation mode = Read/Touch/Latch** (fader won't move if automation is "Off").
-Only `set` works — `get`/`up`/`down` require command 149 which Pro Tools hasn't implemented yet.
+Only `set` works — `get`/`up`/`down` are not yet available.
 ```
 $BIN/agent-track-volume --session <SESSION.ptx> --track <NAME> --output-json set --value 2.0
 $BIN/agent-track-volume --session <SESSION.ptx> --track <NAME> --output-json set --value -6.0
@@ -465,8 +465,6 @@ $BIN/agent-bounce-normalize-tv "/path/to/EXPO_IMPO/exported.wav" --output-json
 
 <!-- Agents: add dated entries here when you discover new information -->
 
-- [2026-02-12] SetTrackControlBreakpoints (cmd 150) requires track_id, not track_name
-- [2026-02-12] Value for volume is direct dB (2.0 = +2dB)
+- [2026-02-12] Volume value is direct dB (2.0 = +2dB)
 - [2026-02-12] Track automation mode must be Read/Touch/Latch for volume changes
 - [2026-02-12] select-clips defaults to TRILHA when --track is omitted
-- [2026-02-12] GetTrackControlBreakpoints (cmd 149) returns PT_UnsupportedCommand — not yet implemented by Avid

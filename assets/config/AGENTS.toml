@@ -1,0 +1,103 @@
+## ──────────────────────────────────────────────────────────────────────
+## Agent Backend Configuration
+## ──────────────────────────────────────────────────────────────────────
+## Controls how the dashboard launches Claude Code and Gemini CLI
+## when you click an automation button.
+##
+## This file ships with safe defaults (interactive mode).
+## To customize, create AGENTS.user.toml in this same folder.
+## Your overrides are NEVER overwritten by updates.
+##
+## ──────────────────────────────────────────────────────────────────────
+## HOW IT WORKS
+## ──────────────────────────────────────────────────────────────────────
+## Each [[backend]] block configures one agent backend.
+## The dashboard builds the command like this:
+##
+##   {command} {flags} {prompt_flag} 'your automation prompt here'
+##
+## If prompt_flag is empty, the prompt is passed as a positional argument:
+##
+##   {command} {flags} 'your automation prompt here'
+##
+## ──────────────────────────────────────────────────────────────────────
+## FIELDS
+## ──────────────────────────────────────────────────────────────────────
+##   id          — "claude" or "gemini" (maps to the UI backend toggle)
+##   label       — badge text shown on automation buttons
+##   command     — binary name (resolved via ~/.local/bin, /opt/homebrew/bin, PATH)
+##   flags       — CLI flags: model selection, permission mode, etc.
+##   prompt_flag — flag that passes the prompt (or empty for positional arg)
+##
+## ──────────────────────────────────────────────────────────────────────
+## MODES
+## ──────────────────────────────────────────────────────────────────────
+##
+## AUTO-APPROVE + INTERACTIVE (default — what ships below):
+##   The prompt goes to the agent, the terminal stays open, you see
+##   everything and can type follow-ups. Tool calls are auto-approved.
+##
+##   Claude:  flags = "--dangerously-skip-permissions"  prompt_flag = ""
+##            → claude --dangerously-skip-permissions 'prompt...'
+##            (opens interactive REPL, skips permission prompts)
+##
+##   Gemini:  flags = "--yolo -m ..."  prompt_flag = "-i"
+##            → gemini --yolo -m ... -i 'prompt...'
+##            (prompt-interactive, auto-approves tool calls)
+##
+## SUPERVISED (opt-in — ask before each action):
+##   Same as above but the agent asks for permission before each
+##   tool call. Useful when you want full control.
+##
+##   Claude:  flags = ""  prompt_flag = ""
+##            → claude 'prompt...'  (interactive REPL, asks permission)
+##
+##   Gemini:  flags = "-m ..."  prompt_flag = "-i"
+##            → gemini -m ... -i 'prompt...'  (interactive, asks permission)
+##
+## HEADLESS (opt-in — for unattended automation):
+##   The agent runs the prompt to completion without asking anything.
+##   No terminal interaction. Use only for trusted, fire-and-forget tasks.
+##
+##   Claude:  flags = "--dangerously-skip-permissions"  prompt_flag = "-p"
+##            → claude --dangerously-skip-permissions -p 'prompt...'
+##
+##   Gemini:  flags = "--yolo -m ..."  prompt_flag = "-i"
+##            → gemini --yolo -m ... -i 'prompt...'
+##
+## ──────────────────────────────────────────────────────────────────────
+## CLAUDE CODE FLAGS (https://code.claude.com/docs/en/cli-reference)
+## ──────────────────────────────────────────────────────────────────────
+##   (no flag)                       — interactive REPL, prompt as positional arg
+##   -p                              — non-interactive "print" mode (run, exit)
+##   --dangerously-skip-permissions  — skip all permission prompts
+##   --model <name>                  — sonnet, opus, haiku, or full model ID
+##
+## ──────────────────────────────────────────────────────────────────────
+## GEMINI CLI FLAGS (https://geminicli.com/docs/cli/cli-reference)
+## ──────────────────────────────────────────────────────────────────────
+##   -i / --prompt-interactive       — execute prompt, keep session alive
+##   --yolo / -y                     — auto-approve all tool calls
+##   -m / --model <name>             — model selection (see below)
+##
+## Available Gemini models:
+##   gemini-3-pro-preview            (smartest, slower)
+##   gemini-3-flash-preview          (fast, good for most tasks)
+##   gemini-2.5-pro                  (previous gen pro)
+##   gemini-2.5-flash                (previous gen flash)
+##   Aliases: pro, flash
+## ──────────────────────────────────────────────────────────────────────
+
+[[backend]]
+id = "claude"
+label = "run with Claude"
+command = "claude"
+flags = "--dangerously-skip-permissions"
+prompt_flag = ""
+
+[[backend]]
+id = "gemini"
+label = "run with Gemini"
+command = "gemini"
+flags = "--yolo -m gemini-3-flash-preview"
+prompt_flag = "-i"

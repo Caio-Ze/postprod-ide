@@ -1,0 +1,111 @@
+#!/usr/bin/env bash
+# Build ProTools Studio and deploy the workspace, so you can test
+# the distribution as a real user would experience it.
+#
+# This replaces bare `cargo build --release` as the standard dev workflow.
+# After running, dashboard tool buttons, agent skills, and config extraction
+# all work exactly like production.
+#
+# Usage:
+#   ./script/dev-deploy              # build + deploy (incremental)
+#   ./script/dev-deploy --run        # build + deploy + launch the app
+#   ./script/dev-deploy --fresh      # wipe workspace first (first-install experience)
+#   ./script/dev-deploy --skip-build # deploy only, skip cargo build
+#
+# Environment:
+#   PROTOOLS_SDK_PATH — path to PROTOOLS_SDK_PTSL repo
+#                       (default: ~/Documents/Rust_projects/PROTOOLS_SDK_PTSL)
+set -euo pipefail
+
+SUITE_ROOT="$HOME/ProTools_Suite"
+PTSL_SDK="${PROTOOLS_SDK_PATH:-$HOME/Documents/Rust_projects/PROTOOLS_SDK_PTSL}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+fresh=false
+skip_build=false
+run_after=false
+for arg in "$@"; do
+    case "$arg" in
+        --fresh) fresh=true ;;
+        --skip-build) skip_build=true ;;
+        --run) run_after=true ;;
+        *) echo "Unknown flag: $arg"; exit 1 ;;
+    esac
+done
+
+# --fresh: wipe workspace to simulate a first install
+if [[ "$fresh" == true ]]; then
+    echo "==> Wiping workspace (--fresh)..."
+    rm -rf "$SUITE_ROOT"
+fi
+
+echo "==> Creating workspace directories..."
+mkdir -p "$SUITE_ROOT/config/updates"
+mkdir -p "$SUITE_ROOT/tools/agent"
+mkdir -p "$SUITE_ROOT/tools/runtime"
+
+# --- Build ---
+if [[ "$skip_build" == false ]]; then
+    echo "==> Building protools-studio (release)..."
+    cargo build --release -p protools-studio --manifest-path "$REPO_ROOT/Cargo.toml"
+fi
+
+# --- Agent tools (debug binaries — fast, no release build needed) ---
+if [[ -d "$PTSL_SDK/target/debug" ]]; then
+    echo "==> Deploying agent tools (debug)..."
+    count=0
+    for bin in "$PTSL_SDK/target/debug/agent-"*; do
+        # Skip non-files, non-executables, and .d dependency files
+        [[ -f "$bin" && -x "$bin" && "$bin" != *.d ]] || continue
+        cp "$bin" "$SUITE_ROOT/tools/agent/"
+        ((count++))
+    done
+    echo "    $count agent tools deployed"
+else
+    echo "    PTSL SDK not found at $PTSL_SDK — skipping agent tools"
+fi
+
+# --- Runtime tools ---
+if [[ -d "$PTSL_SDK/target/runtime" ]]; then
+    echo "==> Syncing runtime tools..."
+    rsync -a --delete "$PTSL_SDK/target/runtime/" "$SUITE_ROOT/tools/runtime/"
+fi
+
+# --- Config defaults (only if missing — preserves user edits) ---
+echo "==> Checking config defaults..."
+for name in TOOLS.toml AUTOMATIONS.toml AGENTS.toml SKILL.md; do
+    dest="$SUITE_ROOT/config/$name"
+    if [[ ! -f "$dest" ]]; then
+        src="$REPO_ROOT/assets/config/$name"
+        if [[ -f "$src" ]]; then
+            cp "$src" "$dest"
+            echo "    Extracted $name"
+        fi
+    else
+        echo "    $name — preserved"
+    fi
+done
+
+# --- .env template ---
+env_example="$PTSL_SDK/templates/.env.example"
+if [[ -f "$env_example" ]]; then
+    cp "$env_example" "$SUITE_ROOT/config/.env.example"
+    if [[ ! -f "$SUITE_ROOT/config/.env" ]]; then
+        cp "$env_example" "$SUITE_ROOT/config/.env"
+        echo "    Created .env from template"
+    fi
+fi
+
+echo ""
+echo "==> Dev deploy complete."
+echo "    Binary:    $REPO_ROOT/target/release/protools-studio"
+echo "    Workspace: $SUITE_ROOT"
+
+if [[ "$run_after" == true ]]; then
+    echo ""
+    echo "==> Launching protools-studio..."
+    exec "$REPO_ROOT/target/release/protools-studio"
+else
+    echo ""
+    echo "    Run: ./script/dev-deploy --run"
+fi

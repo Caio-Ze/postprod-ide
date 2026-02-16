@@ -262,6 +262,8 @@ struct AutomationEntry {
 
 #[derive(Deserialize)]
 struct AutomationsFile {
+    #[serde(default)]
+    gemini_model: Option<String>,
     automation: Vec<AutomationEntry>,
 }
 
@@ -269,12 +271,12 @@ fn automations_toml_path() -> PathBuf {
     config_dir().join("AUTOMATIONS.toml")
 }
 
-fn load_toml_automations(path: &Path) -> (Vec<AutomationEntry>, Option<String>) {
+fn load_toml_automations(path: &Path) -> (Vec<AutomationEntry>, Option<String>, Option<String>) {
     let Ok(content) = std::fs::read_to_string(path) else {
-        return (Vec::new(), None);
+        return (Vec::new(), None, None);
     };
     match toml::from_str::<AutomationsFile>(&content) {
-        Ok(file) => (file.automation, None),
+        Ok(file) => (file.automation, file.gemini_model, None),
         Err(e) => {
             let filename = path
                 .file_name()
@@ -282,7 +284,7 @@ fn load_toml_automations(path: &Path) -> (Vec<AutomationEntry>, Option<String>) 
                 .to_string_lossy();
             let err = format!("{filename}: {e}");
             log::error!("config: {err}");
-            (Vec::new(), Some(err))
+            (Vec::new(), None, Some(err))
         }
     }
 }
@@ -313,18 +315,20 @@ fn merge_automations(defaults: Vec<AutomationEntry>, user: Vec<AutomationEntry>)
     merged
 }
 
-fn load_automations_registry() -> (Vec<AutomationEntry>, Option<String>) {
+fn load_automations_registry() -> (Vec<AutomationEntry>, Option<String>, Option<String>) {
     let base_path = find_latest_update("AUTOMATIONS").unwrap_or_else(automations_toml_path);
-    let (defaults, defaults_err) = load_toml_automations(&base_path);
-    let (user, user_err) = load_toml_automations(&automations_user_toml_path());
+    let (defaults, base_model, defaults_err) = load_toml_automations(&base_path);
+    let (user, user_model, user_err) = load_toml_automations(&automations_user_toml_path());
+
+    let gemini_model = user_model.or(base_model);
 
     if !defaults.is_empty() || !user.is_empty() {
         let merged = merge_automations(defaults, user);
         let error = defaults_err.or(user_err);
-        return (merged, error);
+        return (merged, gemini_model, error);
     }
 
-    (Vec::new(), defaults_err.or(user_err))
+    (Vec::new(), gemini_model, defaults_err.or(user_err))
 }
 
 fn icon_for_automation(name: &str) -> IconName {
@@ -339,6 +343,85 @@ fn icon_for_automation(name: &str) -> IconName {
         "arrow_up_right" => IconName::ArrowUpRight,
         _ => IconName::Sparkle,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Agent backends — loaded from TOML at runtime
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Clone)]
+struct BackendEntry {
+    id: String,
+    label: String,
+    command: String,
+    #[serde(default)]
+    flags: String,
+    #[serde(default)]
+    prompt_flag: String,
+}
+
+#[derive(Deserialize)]
+struct AgentsFile {
+    backend: Vec<BackendEntry>,
+}
+
+fn load_toml_agents(path: &Path) -> (Vec<BackendEntry>, Option<String>) {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return (Vec::new(), None);
+    };
+    match toml::from_str::<AgentsFile>(&content) {
+        Ok(file) => (file.backend, None),
+        Err(e) => {
+            let filename = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
+            let err = format!("{filename}: {e}");
+            log::error!("config: {err}");
+            (Vec::new(), Some(err))
+        }
+    }
+}
+
+fn merge_backends(
+    defaults: Vec<BackendEntry>,
+    user: Vec<BackendEntry>,
+) -> Vec<BackendEntry> {
+    let user_by_id: HashMap<String, BackendEntry> = user
+        .iter()
+        .map(|b| (b.id.clone(), b.clone()))
+        .collect();
+
+    let mut merged: Vec<BackendEntry> = defaults
+        .into_iter()
+        .map(|default| match user_by_id.get(&default.id) {
+            Some(user_entry) => user_entry.clone(),
+            None => default,
+        })
+        .collect();
+
+    let default_ids: HashSet<String> = merged.iter().map(|b| b.id.clone()).collect();
+    for (id, entry) in &user_by_id {
+        if !default_ids.contains(id.as_str()) {
+            merged.push(entry.clone());
+        }
+    }
+
+    merged
+}
+
+fn load_agents_config() -> (Vec<BackendEntry>, Option<String>) {
+    let base_path = find_latest_update("AGENTS").unwrap_or_else(agents_toml_path);
+    let (defaults, defaults_err) = load_toml_agents(&base_path);
+    let (user, user_err) = load_toml_agents(&agents_user_toml_path());
+
+    if !defaults.is_empty() || !user.is_empty() {
+        let merged = merge_backends(defaults, user);
+        let error = defaults_err.or(user_err);
+        return (merged, error);
+    }
+
+    (Vec::new(), defaults_err.or(user_err))
 }
 
 fn old_agent_skills_dir() -> PathBuf {
@@ -374,6 +457,7 @@ fn ensure_config_extracted(cx: &App) {
             "AUTOMATIONS.user.toml",
             "config/AUTOMATIONS.toml",
         ),
+        ("AGENTS.toml", "AGENTS.user.toml", "config/AGENTS.toml"),
     ] {
         let defaults_file = dir.join(name);
         let user_file = dir.join(user_name);
@@ -408,6 +492,7 @@ fn ensure_config_extracted(cx: &App) {
         for skill_dir in [
             home.join(".claude/skills/ptsl-tools"),
             home.join(".agents/skills/ptsl-tools"),
+            home.join(".gemini/skills/ptsl-tools"),
         ] {
             let skill_link = skill_dir.join("SKILL.md");
 
@@ -1103,6 +1188,14 @@ fn automations_user_toml_path() -> PathBuf {
     config_dir().join("AUTOMATIONS.user.toml")
 }
 
+fn agents_toml_path() -> PathBuf {
+    config_dir().join("AGENTS.toml")
+}
+
+fn agents_user_toml_path() -> PathBuf {
+    config_dir().join("AGENTS.user.toml")
+}
+
 fn updates_dir() -> PathBuf {
     config_dir().join("updates")
 }
@@ -1378,12 +1471,22 @@ fn resolve_runtime_path() -> PathBuf {
 
 /// Resolve the agent tools path with priority:
 /// 1. `~/ProTools_Suite/tools/agent/` (workspace — production)
-/// 2. `PROTOOLS_AGENT_TOOLS_PATH` env var (override for dev)
-/// 3. Workspace path as expected default
+/// 2. `exe_dir/agent/` (symlinked by build.rs — development)
+/// 3. `PROTOOLS_AGENT_TOOLS_PATH` env var (explicit override)
+/// 4. Workspace path as expected default
 fn resolve_agent_tools_path() -> PathBuf {
     let workspace_agent = agent_tools_dir();
     if dir_has_content(&workspace_agent) {
         return workspace_agent;
+    }
+
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            let candidate = exe_dir.join("agent");
+            if dir_has_content(&candidate) {
+                return candidate;
+            }
+        }
     }
 
     if let Ok(path) = std::env::var("PROTOOLS_AGENT_TOOLS_PATH") {
@@ -1414,11 +1517,22 @@ impl AgentBackend {
         }
     }
 
-    fn badge_label(self) -> &'static str {
+    fn backend_id(self) -> &'static str {
         match self {
-            Self::Claude => "run with Claude",
-            Self::Gemini => "run with Gemini",
-            Self::CopyOnly => "(copy prompt)",
+            Self::Claude => "claude",
+            Self::Gemini => "gemini",
+            Self::CopyOnly => "",
+        }
+    }
+
+    fn badge_label(self, backends: &[BackendEntry]) -> SharedString {
+        match self {
+            Self::CopyOnly => "(copy prompt)".into(),
+            _ => backends
+                .iter()
+                .find(|b| b.id == self.backend_id())
+                .map(|b| SharedString::from(b.label.clone()))
+                .unwrap_or_else(|| "run".into()),
         }
     }
 
@@ -1426,24 +1540,6 @@ impl AgentBackend {
         match self {
             Self::Claude | Self::Gemini => Color::Accent,
             Self::CopyOnly => Color::Muted,
-        }
-    }
-
-    fn command(self) -> Option<String> {
-        match self {
-            Self::Claude => Some(resolve_bin("claude")),
-            Self::Gemini => Some(resolve_bin("gemini")),
-            Self::CopyOnly => None,
-        }
-    }
-
-    /// Flags required for headless `-p` mode so the agent can actually
-    /// execute tools (Bash, file ops, etc.) without interactive approval.
-    fn headless_flags(self) -> &'static str {
-        match self {
-            Self::Claude => "--dangerously-skip-permissions",
-            Self::Gemini => "--yolo -m gemini-3-flash-preview",
-            Self::CopyOnly => "",
         }
     }
 }
@@ -1472,8 +1568,10 @@ pub struct Dashboard {
     // Automations (loaded from TOML)
     automations: Vec<AutomationEntry>,
     agent_backend: AgentBackend,
+    backends: Vec<BackendEntry>,
     _automations_reload_task: gpui::Task<()>,
     _tools_reload_task: gpui::Task<()>,
+    _agents_reload_task: gpui::Task<()>,
     // Background execution mode per tool
     background_tools: HashSet<String>,
     // Config parse errors
@@ -1494,8 +1592,9 @@ impl Dashboard {
 
         let pasta_ativa = read_pasta_ativa();
         let pastas_recentes = read_pastas_recentes();
-        let (automations, automations_error) = load_automations_registry();
+        let (automations, _gemini_model, automations_error) = load_automations_registry();
         let (tools, tools_error) = load_tools_registry();
+        let (backends, _agents_error) = load_agents_config();
         let background_tools = read_background_tools();
 
         cx.new(|cx| {
@@ -1571,7 +1670,7 @@ impl Dashboard {
                         .timer(Duration::from_secs(30))
                         .await;
 
-                    let (merged, error) = cx
+                    let (merged, _model, error) = cx
                         .background_executor()
                         .spawn(async { load_automations_registry() })
                         .await;
@@ -1604,6 +1703,25 @@ impl Dashboard {
                 }
             });
 
+            // Spawn agents config reload task (every 30 seconds)
+            let agents_reload_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_secs(30))
+                        .await;
+
+                    let (backends, _err) = cx
+                        .background_executor()
+                        .spawn(async { load_agents_config() })
+                        .await;
+
+                    let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                        dashboard.backends = backends;
+                        cx.notify();
+                    });
+                }
+            });
+
             Self {
                 workspace: workspace.weak_handle(),
                 focus_handle: cx.focus_handle(),
@@ -1619,8 +1737,10 @@ impl Dashboard {
                 _delivery_scan_task: delivery_scan_task,
                 automations,
                 agent_backend: AgentBackend::Claude,
+                backends,
                 _automations_reload_task: automations_reload_task,
                 _tools_reload_task: tools_reload_task,
+                _agents_reload_task: agents_reload_task,
                 background_tools,
                 tools_error,
                 automations_error,
@@ -1764,16 +1884,16 @@ impl Dashboard {
     }
 
     /// Best working directory for AI agents. Priority:
-    /// 1. Open Pro Tools session's grandparent (gives context for the session
-    ///    folder AND its sibling folders)
+    /// 1. Open Pro Tools session's parent folder (the session folder itself,
+    ///    containing .ptx, Audio Files/, LOC/, Bounced Files/, etc.)
     /// 2. Pasta ativa (user-selected working folder)
     /// 3. suite_root (~/ProTools_Suite)
     fn agent_cwd(&self) -> PathBuf {
         if let Some(session) = &self.session_path {
             let session_path = Path::new(session);
-            if let Some(grandparent) = session_path.parent().and_then(|p| p.parent()) {
-                if grandparent.is_dir() {
-                    return grandparent.to_path_buf();
+            if let Some(parent) = session_path.parent() {
+                if parent.is_dir() {
+                    return parent.to_path_buf();
                 }
             }
         }
@@ -1794,6 +1914,12 @@ impl Dashboard {
             prompt.replace("{session_path}", "<no session open>")
         };
 
+        let resolved_prompt = if let Some(pa) = &self.pasta_ativa {
+            resolved_prompt.replace("{pasta_ativa}", &pa.to_string_lossy())
+        } else {
+            resolved_prompt.replace("{pasta_ativa}", "<no active folder selected>")
+        };
+
         // Collapse multi-line prompts into a single line to avoid
         // `zsh: parse error near '\n'` when spawning `claude -p "..."`.
         let resolved_prompt = resolved_prompt
@@ -1803,17 +1929,25 @@ impl Dashboard {
             .collect::<Vec<_>>()
             .join(" ");
 
-        let Some(command) = self.agent_backend.command() else {
+        if self.agent_backend == AgentBackend::CopyOnly {
             cx.write_to_clipboard(ClipboardItem::new_string(resolved_prompt));
+            return;
+        }
+
+        let backend_id = self.agent_backend.backend_id();
+        let Some(config) = self.backends.iter().find(|b| b.id == backend_id) else {
+            log::warn!("dashboard: no backend config for '{backend_id}'");
             return;
         };
 
         // Shell-escape the prompt with single quotes (POSIX-safe) and bake
         // it into the command string so `build_no_quote` doesn't split it
         // into separate unquoted tokens.
+        let command = resolve_bin(&config.command);
         let escaped = resolved_prompt.replace("'", "'\\''");
-        let flags = self.agent_backend.headless_flags();
-        let full_command = format!("{command} {flags} -p '{escaped}'");
+        let flags = &config.flags;
+        let prompt_flag = &config.prompt_flag;
+        let full_command = format!("{command} {flags} {prompt_flag} '{escaped}'");
 
         let spawn = SpawnInTerminal {
             id: TaskId(format!("automation-{}", entry_id)),
@@ -2420,7 +2554,7 @@ impl Dashboard {
     fn render_automations_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let automations: Vec<AutomationEntry> = self.automations.iter().filter(|a| !a.hidden).cloned().collect();
         let backend = self.agent_backend;
-        let badge_label: SharedString = backend.badge_label().into();
+        let badge_label = backend.badge_label(&self.backends);
         let badge_color = backend.badge_color();
 
         let entity = cx.entity().downgrade();

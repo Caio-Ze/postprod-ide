@@ -40,6 +40,20 @@ fn main() {
                 );
             }
         }
+
+        // Symlink agent tool debug binaries so the dashboard finds them in dev mode.
+        let agent_src = std::path::Path::new("../../../PROTOOLS_SDK_PTSL/target/debug");
+        let agent_dst = target_profile_dir.join("agent");
+
+        if agent_src.exists() && !agent_dst.exists() {
+            if let Ok(canonical) = agent_src.canonicalize() {
+                std::os::unix::fs::symlink(&canonical, &agent_dst).ok();
+                println!(
+                    "cargo::warning=Linked agent tools → {}",
+                    agent_dst.display()
+                );
+            }
+        }
     }
 
     // Populate git sha environment variable if git is available

@@ -12,6 +12,11 @@
 ##
 ## Variables:
 ##   {session_path}  — replaced at runtime with the current Pro Tools session path
+##   {pasta_ativa}   — replaced at runtime with the active folder path (selected on the dashboard)
+
+## Gemini model used when the agent backend is set to Gemini.
+## Override in AUTOMATIONS.user.toml to use a different model.
+gemini_model = "gemini-3-pro-preview"
 
 [[automation]]
 id = "bounce-trilha"
@@ -20,7 +25,9 @@ description = "Select clips, set timeline, bounce to WAV"
 icon = "play"
 prompt = """
 Using the PTSL agent tools:
-1. Open the session at {session_path}
+Important: Ignore backup files — skip anything inside 'Session File Backups' folders or with .bak in the name. Pro Tools creates these automatically.
+If you need to ask the user anything, remember you are talking to a sound engineer, not a programmer. Keep it simple and clear.
+1. Check if {session_path} is already open; only open it if it isn't
 2. Run select-clips on TRILHA to set the full timeline
 3. Bounce to WAV format
 4. Report the output file path
@@ -33,21 +40,27 @@ description = "Import tracks from source, solo LOC, verify"
 icon = "sparkle"
 prompt = """
 Using the PTSL agent tools:
-1. Ask me for the source session path
-2. Import all tracks from source into {session_path}
-3. Solo the LOC track (hide+inactivate everything else)
-4. Verify with list that only LOC is active
+Important: Ignore backup files — skip anything inside 'Session File Backups' folders or with .bak in the name. Pro Tools creates these automatically.
+If you need to ask the user anything, remember you are talking to a sound engineer, not a programmer. Keep it simple and clear.
+1. Check if {session_path} is already open; only open it if it isn't
+2. Ask me for the source session path
+3. Import all tracks from source into {session_path}
+4. Solo the LOC track (hide+inactivate everything else)
+5. Verify with list that only LOC is active
 """
 
 [[automation]]
 id = "batch-process"
 label = "Batch Process Sessions"
-description = "Import, solo, bounce all sessions in folder"
+description = "Import, solo, bounce all sessions in active folder"
 icon = "zap"
 prompt = """
-Using the PTSL agent tools, process all .ptx sessions in ~/ProTools_Suite/1_Sessões/:
+Using the PTSL agent tools, process all .ptx sessions in {pasta_ativa}.
+Exclude backup files — skip any files inside 'Session File Backups' folders or with .bak in the name.
+If you need to ask the user anything, remember you are talking to a sound engineer, not a programmer. Keep it simple and clear.
+Pro Tools folder structure: each session lives in its own subfolder containing a .ptx file, Audio Files/, LOC/, and optionally Bounced Files/. Look for .ptx files inside these subfolders, not at the root of the active folder.
 For each session:
-1. Open the session
+1. Check if the session is already open; only open it if it isn't
 2. List tracks and verify state
 3. Select all clips on LOC to set timeline
 4. Bounce to WAV
@@ -62,7 +75,9 @@ description = "List tracks and rename interactively"
 icon = "replace"
 prompt = """
 Using the PTSL agent tools:
-1. Open the session at {session_path}
+Important: Ignore backup files — skip anything inside 'Session File Backups' folders or with .bak in the name. Pro Tools creates these automatically.
+If you need to ask the user anything, remember you are talking to a sound engineer, not a programmer. Keep it simple and clear.
+1. Check if {session_path} is already open; only open it if it isn't
 2. List all tracks
 3. Show me the track list and ask which tracks I want to rename
 4. For each track I specify, rename it to the new name I provide
@@ -76,10 +91,13 @@ description = "Export LOC, normalize -23 LUFS, convert MP3"
 icon = "audio"
 prompt = """
 Using the PTSL agent tools:
-1. Export the LOC track from {session_path}
-2. Normalize the exported WAV to -23 LUFS using agent-bounce-normalize-tv
-3. Convert the normalized file to MP3 using agent-convert-mp3
-4. Report all output file paths
+Important: Ignore backup files — skip anything inside 'Session File Backups' folders or with .bak in the name. Pro Tools creates these automatically.
+If you need to ask the user anything, remember you are talking to a sound engineer, not a programmer. Keep it simple and clear.
+1. Check if {session_path} is already open; only open it if it isn't
+2. Export the LOC track from {session_path}
+3. Normalize the exported WAV to -23 LUFS using agent-bounce-normalize-tv
+4. Convert the normalized file to MP3 using agent-convert-mp3
+5. Report all output file paths
 """
 
 [[automation]]
@@ -89,7 +107,9 @@ description = "Set track volume (automation must be Read mode)"
 icon = "audio"
 prompt = """
 Using the PTSL agent tools:
-1. Open the session at {session_path}
+Important: Ignore backup files — skip anything inside 'Session File Backups' folders or with .bak in the name. Pro Tools creates these automatically.
+If you need to ask the user anything, remember you are talking to a sound engineer, not a programmer. Keep it simple and clear.
+1. Check if {session_path} is already open; only open it if it isn't
 2. List all tracks
 3. Ask me which track and what dB value to set
 4. Set the track volume using agent-track-volume
@@ -103,13 +123,16 @@ description = "Bounce, normalize, MP3, organize to Finalizados"
 icon = "zap"
 prompt = """
 Using the PTSL agent tools, perform full delivery for {session_path}:
-1. Select all clips on LOC to set timeline
-2. Bounce to WAV
-3. Apply audio filter (agent-apply-audio-filter)
-4. Normalize to -23 LUFS (agent-bounce-normalize-tv)
-5. Convert to MP3 (agent-convert-mp3)
-6. Organize files to ~/ProTools_Suite/4_Finalizados/ (TV/, NET/, MP3/)
-7. Report the final file inventory
+Important: Ignore backup files — skip anything inside 'Session File Backups' folders or with .bak in the name. Pro Tools creates these automatically.
+If you need to ask the user anything, remember you are talking to a sound engineer, not a programmer. Keep it simple and clear.
+1. Check if {session_path} is already open; only open it if it isn't
+2. Select all clips on LOC to set timeline
+3. Bounce to WAV
+4. Apply audio filter (agent-apply-audio-filter)
+5. Normalize to -23 LUFS (agent-bounce-normalize-tv)
+6. Convert to MP3 (agent-convert-mp3)
+7. Organize files to ~/ProTools_Suite/4_Finalizados/ (TV/, NET/, MP3/)
+8. Report the final file inventory
 """
 
 [[automation]]
@@ -119,11 +142,48 @@ description = "Transcribe audio, extract reference, compare"
 icon = "mic"
 prompt = """
 Using the PTSL agent tools:
+Important: Ignore backup files — skip anything inside 'Session File Backups' folders or with .bak in the name. Pro Tools creates these automatically.
+If you need to ask the user anything, remember you are talking to a sound engineer, not a programmer. Keep it simple and clear.
 1. Ask me for the audio file path and the reference document path
 2. Transcribe the audio using agent-transcribe-audio
 3. Extract text from the reference document using agent-extract-text
 4. Compare both texts using agent-compare-texts
 5. Report the differences found
+"""
+
+[[automation]]
+id = "vol-up-bounce-all"
+label = "Vol +1dB & Bounce All"
+description = "Increase LOC by 1 dB and bounce every session in active folder"
+icon = "zap"
+prompt = """
+Using the PTSL agent tools, process all .ptx sessions in {pasta_ativa}.
+Exclude backup files — skip any files inside 'Session File Backups' folders or with .bak in the name.
+If you need to ask the user anything, remember you are talking to a sound engineer, not a programmer. Keep it simple and clear.
+Pro Tools folder structure: each session lives in its own subfolder containing a .ptx file, Audio Files/, LOC/, and optionally Bounced Files/. Look for .ptx files inside these subfolders, not at the root of the active folder.
+For each session:
+1. Check if the session is already open; only open it if it isn't
+2. Increase the LOC track volume by 1 dB using agent-track-volume
+3. Bounce to WAV — save the file in that session's own Bounced Files folder
+4. Wait 5 seconds before moving to the next session
+Report progress after each session.
+"""
+
+[[automation]]
+id = "vol-up-all"
+label = "Vol +1dB All"
+description = "Increase LOC by 1 dB in every session in active folder"
+icon = "audio"
+prompt = """
+Using the PTSL agent tools, process all .ptx sessions in {pasta_ativa}.
+Exclude backup files — skip any files inside 'Session File Backups' folders or with .bak in the name.
+If you need to ask the user anything, remember you are talking to a sound engineer, not a programmer. Keep it simple and clear.
+Pro Tools folder structure: each session lives in its own subfolder containing a .ptx file, Audio Files/, LOC/, and optionally Bounced Files/. Look for .ptx files inside these subfolders, not at the root of the active folder.
+For each session:
+1. Check if the session is already open; only open it if it isn't
+2. Increase the LOC track volume by 1 dB using agent-track-volume
+3. Wait 5 seconds before moving to the next session
+Report progress after each session.
 """
 
 [[automation]]
@@ -134,29 +194,36 @@ icon = "sparkle"
 prompt = """
 I want to create a new one-click button for the ProTools Studio dashboard.
 
+Important: You are talking to a sound engineer, not a programmer. Use plain, simple language. Avoid technical jargon, code terms, or developer speak.
+
 Here's how it works (you don't need to understand this, I'll handle it):
-- All buttons live in a simple text file: ~/ProTools_Suite/config/AUTOMATIONS.toml
+- Default buttons are in ~/ProTools_Suite/config/AUTOMATIONS.toml (read-only — overwritten on app updates)
+- YOUR custom buttons go in ~/ProTools_Suite/config/AUTOMATIONS.user.toml (never overwritten)
 - Each button has: an id (internal name), a label (what you see), a description (subtitle), an icon, and a prompt (what the agent does when you click)
 - Available icons: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
-- The variable {session_path} is automatically replaced with the current Pro Tools session
-- The dashboard picks up changes automatically — no restart needed
 
-Here are the existing buttons so you know what's already there:
-- Bounce TRILHA — select clips, set timeline, bounce to WAV
-- Import & Solo Track — import tracks from another session, solo LOC
-- Batch Process Sessions — process all sessions in a folder
-- Rename All Tracks — list tracks and rename them one by one
-- Export & Normalize — export LOC, normalize -23 LUFS, convert MP3
-- Volume Adjust — set a track's volume in dB
-- Full Delivery — bounce, normalize, MP3, organize to Finalizados
-- Compare Texts — transcribe audio and compare with a reference document
+The dashboard gives the user two ways to tell a button what to work on:
+- The active folder ("Pasta Ativa") — a folder the user selects on the dashboard. It points to a folder that contains multiple Pro Tools session subfolders. Use this when the button should process many sessions at once (batch operations). The variable {pasta_ativa} is replaced at runtime with this folder path.
+- The current session — the Pro Tools session file (.ptx) that is currently open. Use this when the button works on a single session. The variable {session_path} is replaced at runtime with this file path.
 
-Now ask me:
+Pro Tools folder structure: the active folder contains session subfolders. Each subfolder holds a .ptx file, Audio Files/, LOC/, and optionally Bounced Files/ and Session File Backups/. When scanning for sessions, look for .ptx files inside these subfolders, not at the root of the active folder.
+
+The dashboard picks up changes automatically — no restart needed.
+
+First, read ~/ProTools_Suite/config/AUTOMATIONS.toml to see the existing default buttons.
+Also read ~/ProTools_Suite/config/AUTOMATIONS.user.toml if it exists to see user customizations.
+Show me a summary of all existing buttons so I know what's already there.
+
+Then ask me:
 1. What should the button be called? (short name, 2-3 words)
 2. What should it do? (describe the steps in plain language — e.g. "bounce only the MIX track to MP3")
-3. Which icon fits best? Show me the options: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
+3. Should it work on the current session or on all sessions in the active folder?
+4. Which icon fits best? Show me the options: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
 
-Then create the new [[automation]] block and add it to the AUTOMATIONS.toml file.
+Based on the answer to question 3, use {session_path} (single session) or {pasta_ativa} (batch/active folder) in the prompt you write.
+
+Then create the new [[automation]] block and add it to AUTOMATIONS.user.toml (create the file if it doesn't exist).
+Never modify AUTOMATIONS.toml — it gets overwritten on app updates.
 After saving, confirm it was added and tell me the button will appear on the dashboard automatically.
 """
 
@@ -168,15 +235,24 @@ icon = "replace"
 prompt = """
 I want to edit one of my existing dashboard buttons in ProTools Studio.
 
+Important: You are talking to a sound engineer, not a programmer. Use plain, simple language. Avoid technical jargon, code terms, or developer speak.
+
 Here's how it works (you don't need to understand this, I'll handle it):
-- All buttons live in a simple text file: ~/ProTools_Suite/config/AUTOMATIONS.toml
+- Default buttons are in ~/ProTools_Suite/config/AUTOMATIONS.toml (read-only — overwritten on app updates)
+- User customizations go in ~/ProTools_Suite/config/AUTOMATIONS.user.toml (never overwritten)
 - Each button has: an id, a label (button text), a description (subtitle), an icon, and a prompt (the steps the agent follows)
 - Available icons: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
-- The variable {session_path} is automatically replaced with the current Pro Tools session
-- Changes are picked up automatically — no restart needed
 
-First, read the file at ~/ProTools_Suite/config/AUTOMATIONS.toml
-and show me a numbered list of all the buttons with their names and what they do.
+The dashboard gives the user two ways to tell a button what to work on:
+- The active folder ("Pasta Ativa") — a folder the user selects on the dashboard. It points to a folder that contains multiple Pro Tools session subfolders. The variable {pasta_ativa} is replaced at runtime with this folder path. Used for batch operations.
+- The current session — the Pro Tools session file (.ptx) currently open. The variable {session_path} is replaced at runtime with this file path. Used for single-session operations.
+
+Pro Tools folder structure: the active folder contains session subfolders. Each subfolder holds a .ptx file, Audio Files/, LOC/, and optionally Bounced Files/ and Session File Backups/. When scanning for sessions, look for .ptx files inside these subfolders, not at the root of the active folder.
+
+Changes are picked up automatically — no restart needed.
+
+First, read both ~/ProTools_Suite/config/AUTOMATIONS.toml (defaults) and ~/ProTools_Suite/config/AUTOMATIONS.user.toml (user customizations, if it exists).
+Show me a numbered list of all the buttons with their names and what they do. For each button, indicate whether it works on the current session ({session_path}) or on all sessions in the active folder ({pasta_ativa}).
 
 Then ask me:
 1. Which button do I want to change? (by number)
@@ -185,8 +261,10 @@ Then ask me:
    - The description (subtitle)
    - What it does (the steps)
    - The icon
+   - Whether it works on the current session or the active folder
    - Delete it entirely
 3. What should the new value be? (in plain language — I'll translate it for you)
 
-Make the change in the TOML file, save it, and confirm what was changed.
+Make the change in AUTOMATIONS.user.toml (create the file if it doesn't exist). To override a default button, copy its [[automation]] block with the same id into the user file and modify it there. To hide a default button, add its id with hidden = true.
+Never modify AUTOMATIONS.toml — it gets overwritten on app updates.
 """

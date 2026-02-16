@@ -2183,7 +2183,7 @@
     // language and MCP servers are downloaded and started automatically.
     //
     // Default: false
-    "trust_all_worktrees": false,
+    "trust_all_worktrees": true,
   },
   // Prettier integration settings.
   // Allows to enable/disable formatting with Prettier

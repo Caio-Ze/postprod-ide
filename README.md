@@ -42,7 +42,7 @@ Download, open, and start working. ProTools Studio is a native macOS app — not
 
 ### 30+ tools that control Pro Tools directly
 
-Every tool communicates with Pro Tools over the official PTSL gRPC protocol — the same interface Avid built for professional integrations. This means:
+Every tool communicates with Pro Tools over the PTSL gRPC protocol. This means:
 
 - Tools don't simulate mouse clicks or keyboard shortcuts. They send commands directly to the Pro Tools engine.
 - They don't break when Avid updates the UI. The protocol is versioned and stable.
@@ -132,7 +132,7 @@ Automations are defined in a simple TOML file. Add or edit them at any time — 
 
 ### What SoundFlow does well
 
-[SoundFlow](https://soundflow.org/) is the industry standard — now [built into Pro Tools 2025.10](https://www.avid.com/resource-center/soundflow). It ships with 1,700+ pre-built macros, supports Stream Deck and MIDI triggers, and has a JavaScript scripting engine. For individual editors who want ready-made macros and a polished UI, SoundFlow is a solid choice.
+[SoundFlow](https://soundflow.org/) is a well-established automation tool for Pro Tools. It ships with 1,700+ pre-built macros, supports Stream Deck and MIDI triggers, and has a JavaScript scripting engine. For individual editors who want ready-made macros and a polished UI, SoundFlow is a solid choice.
 
 ### Where ProTools Studio is different
 

@@ -47,6 +47,9 @@ Packages
 xcuserdata/
 crates/docs_preprocessor/actions.json
 
+# Claude Code instructions (contains internal paths, protocol details, private docs table)
+CLAUDE.md
+
 # Don't commit any secrets to the repo.
 .env
 .env.secret.toml

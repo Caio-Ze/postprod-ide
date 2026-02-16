@@ -60,7 +60,7 @@ fi
 
 # Extract default config files only if they don't exist (preserve user edits)
 echo "==> Checking config defaults..."
-for name in TOOLS.toml AUTOMATIONS.toml SKILL.md; do
+for name in TOOLS.toml AUTOMATIONS.toml AGENTS.toml SKILL.md; do
     dest="$SUITE_ROOT/config/$name"
     if [[ ! -f "$dest" ]]; then
         src="$REPO_ROOT/assets/config/$name"
