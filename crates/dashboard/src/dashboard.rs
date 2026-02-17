@@ -28,8 +28,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-const APP_VERSION: &str = env!("PROTOOLS_VERSION");
-
 // ---------------------------------------------------------------------------
 // Actions
 // ---------------------------------------------------------------------------
@@ -205,48 +203,12 @@ fn load_toml_tools(path: &Path) -> (Vec<ToolEntry>, Option<String>) {
     }
 }
 
-fn merge_tools(defaults: Vec<ToolEntry>, user: Vec<ToolEntry>) -> Vec<ToolEntry> {
-    let user_by_id: HashMap<String, ToolEntry> = user
-        .iter()
-        .map(|t| (t.id.clone(), t.clone()))
-        .collect();
-
-    let mut merged: Vec<ToolEntry> = defaults
-        .into_iter()
-        .map(|default| {
-            match user_by_id.get(&default.id) {
-                Some(user_entry) => user_entry.clone(),
-                None => default,
-            }
-        })
-        .collect();
-
-    let default_ids: HashSet<String> = merged.iter().map(|t| t.id.clone()).collect();
-    for (id, entry) in &user_by_id {
-        if !default_ids.contains(id.as_str()) {
-            merged.push(entry.clone());
-        }
-    }
-
-    merged
-}
-
 fn load_tools_registry() -> (Vec<ToolEntry>, Option<String>) {
-    let base_path = find_latest_update("TOOLS").unwrap_or_else(tools_toml_path);
-    let (defaults, defaults_err) = load_toml_tools(&base_path);
-    let (user, user_err) = load_toml_tools(&tools_user_toml_path());
-
-    if !defaults.is_empty() || !user.is_empty() {
-        let merged = merge_tools(defaults, user);
-        let error = defaults_err.or(user_err);
-        return (merged, error);
-    }
-
-    (Vec::new(), defaults_err.or(user_err))
+    load_toml_tools(&tools_toml_path())
 }
 
 // ---------------------------------------------------------------------------
-// Automations — loaded from TOML at runtime
+// Automations — each automation is a separate .toml in config/automations/
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Clone)]
@@ -260,75 +222,85 @@ struct AutomationEntry {
     hidden: bool,
 }
 
-#[derive(Deserialize)]
-struct AutomationsFile {
-    #[serde(default)]
-    gemini_model: Option<String>,
-    automation: Vec<AutomationEntry>,
+fn automations_dir() -> PathBuf {
+    config_dir().join("automations")
 }
 
-fn automations_toml_path() -> PathBuf {
-    config_dir().join("AUTOMATIONS.toml")
+fn load_single_automation(path: &Path) -> Result<AutomationEntry, String> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    toml::from_str::<AutomationEntry>(&content).map_err(|e| {
+        let filename = path.file_name().unwrap_or_default().to_string_lossy();
+        format!("{filename}: {e}")
+    })
 }
 
-fn load_toml_automations(path: &Path) -> (Vec<AutomationEntry>, Option<String>, Option<String>) {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return (Vec::new(), None, None);
+fn load_automations_registry() -> (Vec<AutomationEntry>, Option<String>) {
+    let dir = automations_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return (Vec::new(), Some(format!("cannot read {}", dir.display())));
     };
-    match toml::from_str::<AutomationsFile>(&content) {
-        Ok(file) => (file.automation, file.gemini_model, None),
-        Err(e) => {
-            let filename = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy();
-            let err = format!("{filename}: {e}");
-            log::error!("config: {err}");
-            (Vec::new(), None, Some(err))
-        }
-    }
-}
 
-fn merge_automations(defaults: Vec<AutomationEntry>, user: Vec<AutomationEntry>) -> Vec<AutomationEntry> {
-    let user_by_id: HashMap<String, AutomationEntry> = user
-        .iter()
-        .map(|a| (a.id.clone(), a.clone()))
+    let mut automations = Vec::new();
+    let mut errors = Vec::new();
+
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "toml"))
         .collect();
+    paths.sort();
 
-    let mut merged: Vec<AutomationEntry> = defaults
-        .into_iter()
-        .map(|default| {
-            match user_by_id.get(&default.id) {
-                Some(user_entry) => user_entry.clone(),
-                None => default,
+    for path in paths {
+        match load_single_automation(&path) {
+            Ok(entry) => automations.push(entry),
+            Err(e) => {
+                log::error!("config: {e}");
+                errors.push(e);
             }
-        })
-        .collect();
-
-    let default_ids: HashSet<String> = merged.iter().map(|a| a.id.clone()).collect();
-    for (id, entry) in &user_by_id {
-        if !default_ids.contains(id.as_str()) {
-            merged.push(entry.clone());
         }
     }
 
-    merged
+    let error = if errors.is_empty() {
+        None
+    } else {
+        Some(errors.join("; "))
+    };
+    (automations, error)
 }
 
-fn load_automations_registry() -> (Vec<AutomationEntry>, Option<String>, Option<String>) {
-    let base_path = find_latest_update("AUTOMATIONS").unwrap_or_else(automations_toml_path);
-    let (defaults, base_model, defaults_err) = load_toml_automations(&base_path);
-    let (user, user_model, user_err) = load_toml_automations(&automations_user_toml_path());
+/// Migrate old `AUTOMATIONS.toml` (with `[[automation]]` array) into individual files.
+fn migrate_automations_toml_to_dir(source: &Path, dest_dir: &Path) {
+    let Ok(content) = std::fs::read_to_string(source) else {
+        return;
+    };
 
-    let gemini_model = user_model.or(base_model);
-
-    if !defaults.is_empty() || !user.is_empty() {
-        let merged = merge_automations(defaults, user);
-        let error = defaults_err.or(user_err);
-        return (merged, gemini_model, error);
+    #[derive(Deserialize)]
+    struct LegacyAutomationsFile {
+        #[serde(default)]
+        automation: Vec<AutomationEntry>,
     }
 
-    (Vec::new(), gemini_model, defaults_err.or(user_err))
+    let Ok(file) = toml::from_str::<LegacyAutomationsFile>(&content) else {
+        return;
+    };
+
+    for entry in &file.automation {
+        let filename = format!("{}.toml", entry.id);
+        let dest = dest_dir.join(&filename);
+        if dest.exists() {
+            continue;
+        }
+        let toml_content = format!(
+            "id = {:?}\nlabel = {:?}\ndescription = {:?}\nicon = {:?}\nprompt = \"\"\"\n{}\"\"\"\n",
+            entry.id,
+            entry.label,
+            entry.description,
+            entry.icon,
+            entry.prompt.trim()
+        );
+        std::fs::write(&dest, toml_content).log_err();
+    }
 }
 
 fn icon_for_automation(name: &str) -> IconName {
@@ -383,45 +355,8 @@ fn load_toml_agents(path: &Path) -> (Vec<BackendEntry>, Option<String>) {
     }
 }
 
-fn merge_backends(
-    defaults: Vec<BackendEntry>,
-    user: Vec<BackendEntry>,
-) -> Vec<BackendEntry> {
-    let user_by_id: HashMap<String, BackendEntry> = user
-        .iter()
-        .map(|b| (b.id.clone(), b.clone()))
-        .collect();
-
-    let mut merged: Vec<BackendEntry> = defaults
-        .into_iter()
-        .map(|default| match user_by_id.get(&default.id) {
-            Some(user_entry) => user_entry.clone(),
-            None => default,
-        })
-        .collect();
-
-    let default_ids: HashSet<String> = merged.iter().map(|b| b.id.clone()).collect();
-    for (id, entry) in &user_by_id {
-        if !default_ids.contains(id.as_str()) {
-            merged.push(entry.clone());
-        }
-    }
-
-    merged
-}
-
 fn load_agents_config() -> (Vec<BackendEntry>, Option<String>) {
-    let base_path = find_latest_update("AGENTS").unwrap_or_else(agents_toml_path);
-    let (defaults, defaults_err) = load_toml_agents(&base_path);
-    let (user, user_err) = load_toml_agents(&agents_user_toml_path());
-
-    if !defaults.is_empty() || !user.is_empty() {
-        let merged = merge_backends(defaults, user);
-        let error = defaults_err.or(user_err);
-        return (merged, error);
-    }
-
-    (Vec::new(), defaults_err.or(user_err))
+    load_toml_agents(&agents_toml_path())
 }
 
 fn old_agent_skills_dir() -> PathBuf {
@@ -435,118 +370,168 @@ fn ensure_config_extracted(cx: &App) {
     let dir = config_dir();
     let old_dir = old_agent_skills_dir();
 
-    // SKILL.md — keep old behavior (never overwrite user edits)
-    let skill_target = dir.join("SKILL.md");
-    if !skill_target.exists() {
+    // Skill directory — extract all files under config/skills/ptsl-tools/
+    let skill_dir = dir.join("skills/ptsl-tools");
+
+    // Migration: move old single-file SKILL.md into the new directory
+    let old_skill_flat = dir.join("SKILL.md");
+    if old_skill_flat.exists() && !old_skill_flat.is_symlink() {
+        std::fs::create_dir_all(&skill_dir).log_err();
+        std::fs::rename(&old_skill_flat, skill_dir.join("SKILL.md")).log_err();
+        log::info!("config: migrated SKILL.md into skills/ptsl-tools/");
+    }
+
+    // Also check old agent-skills/ location
+    if !skill_dir.join("SKILL.md").exists() {
         let old_file = old_dir.join("SKILL.md");
         if old_file.exists() {
-            if std::fs::copy(&old_file, &skill_target).is_ok() {
-                log::info!("config: migrated SKILL.md from old agent-skills/ to config/");
-            }
-        } else if let Ok(Some(data)) = cx.asset_source().load("config/SKILL.md") {
-            std::fs::write(&skill_target, data.as_ref()).log_err();
-            log::info!("config: extracted default SKILL.md to config/");
+            std::fs::create_dir_all(&skill_dir).log_err();
+            std::fs::copy(&old_file, skill_dir.join("SKILL.md")).log_err();
+            log::info!("config: migrated SKILL.md from old agent-skills/");
         }
     }
 
-    // TOOLS.toml + AUTOMATIONS.toml — two-layer: always overwrite defaults
-    for (name, user_name, asset_path) in [
-        ("TOOLS.toml", "TOOLS.user.toml", "config/TOOLS.toml"),
-        (
-            "AUTOMATIONS.toml",
-            "AUTOMATIONS.user.toml",
-            "config/AUTOMATIONS.toml",
-        ),
-        ("AGENTS.toml", "AGENTS.user.toml", "config/AGENTS.toml"),
-    ] {
-        let defaults_file = dir.join(name);
-        let user_file = dir.join(user_name);
+    // Extract skill files from embedded assets.
+    // SKILL.md: only create if missing (preserve user edits).
+    // reference.md, workflows.md: always overwrite (not user-editable).
+    std::fs::create_dir_all(&skill_dir).log_err();
+    let prefix = "config/skills/ptsl-tools/";
+    if let Ok(files) = cx.asset_source().list(prefix) {
+        for asset_path in &files {
+            let filename: &str =
+                asset_path.strip_prefix(prefix).unwrap_or(asset_path);
+            let dest = skill_dir.join(filename);
+            if filename == "SKILL.md" && dest.exists() {
+                continue; // preserve user edits
+            }
+            if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
+                std::fs::write(&dest, data.as_ref()).log_err();
+            }
+        }
+        log::info!("config: extracted skill files to skills/ptsl-tools/");
+    }
 
-        // Migration: V1 → V2. User has old single-file config.
-        if !user_file.exists() && defaults_file.exists() {
-            std::fs::rename(&defaults_file, &user_file).log_err();
-            log::info!("config: migrated {name} → {user_name} (two-layer upgrade)");
+    // Guide — extracted once on first install, never overwritten.
+    let guide_dest = dir.join("GUIDE.md");
+    if !guide_dest.exists() {
+        if let Ok(Some(data)) = cx.asset_source().load("config/GUIDE.md") {
+            std::fs::write(&guide_dest, data.as_ref()).log_err();
+        }
+    }
+
+    // TOML config files — single file per config, extracted once.
+    // User edits the file directly; we never overwrite it.
+    for (name, asset_path) in [
+        ("TOOLS.toml", "config/TOOLS.toml"),
+        ("AGENTS.toml", "config/AGENTS.toml"),
+    ] {
+        let dest = dir.join(name);
+        let user_name = name.replace(".toml", ".user.toml");
+        let user_file = dir.join(&user_name);
+
+        // Migration: old two-layer system had .user.toml with customizations.
+        // Rename it to the main file (preserves user's config).
+        if user_file.exists() {
+            std::fs::rename(&user_file, &dest).log_err();
+            log::info!("config: migrated {user_name} → {name} (single-file upgrade)");
+            continue;
         }
 
-        // Also check old agent-skills/ location for migration
-        if !user_file.exists() {
-            let old_file = old_dir.join(name);
-            if old_file.exists() {
-                if std::fs::copy(&old_file, &user_file).is_ok() {
-                    log::info!("config: migrated {name} from old agent-skills/ → {user_name}");
+        // Extract from embedded assets only if the file doesn't exist
+        if !dest.exists() {
+            if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
+                std::fs::write(&dest, data.as_ref()).log_err();
+            }
+        }
+    }
+
+    // Automations — each automation is a separate .toml in config/automations/.
+    let automations_dir = dir.join("automations");
+    std::fs::create_dir_all(&automations_dir).log_err();
+
+    // Migration: convert old single-file AUTOMATIONS.toml → individual files
+    let old_automations = dir.join("AUTOMATIONS.toml");
+    if old_automations.exists() {
+        migrate_automations_toml_to_dir(&old_automations, &automations_dir);
+        std::fs::remove_file(&old_automations).log_err();
+        log::info!("config: migrated AUTOMATIONS.toml → automations/ directory");
+    }
+    let old_user_automations = dir.join("AUTOMATIONS.user.toml");
+    if old_user_automations.exists() {
+        migrate_automations_toml_to_dir(&old_user_automations, &automations_dir);
+        std::fs::remove_file(&old_user_automations).log_err();
+        log::info!("config: migrated AUTOMATIONS.user.toml → automations/ directory");
+    }
+
+    // Migration: meta-automations renamed with _ prefix to sort at top
+    for old_name in [
+        "create-automation.toml",
+        "edit-automation.toml",
+        "finetune-automation.toml",
+    ] {
+        let new_name = format!("_{old_name}");
+        let old_path = automations_dir.join(old_name);
+        let new_path = automations_dir.join(&new_name);
+        if old_path.exists() && !new_path.exists() {
+            std::fs::rename(&old_path, &new_path).log_err();
+        }
+    }
+
+    // Extract individual automation files from embedded assets (only if missing)
+    let prefix = "config/automations/";
+    if let Ok(files) = cx.asset_source().list(prefix) {
+        for asset_path in &files {
+            let filename: &str = asset_path.strip_prefix(prefix).unwrap_or(asset_path);
+            let dest = automations_dir.join(filename);
+            if !dest.exists() {
+                if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
+                    std::fs::write(&dest, data.as_ref()).log_err();
                 }
             }
         }
-
-        // Always overwrite defaults from embedded asset
-        if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
-            std::fs::write(&defaults_file, data.as_ref()).log_err();
-        }
     }
 
-    // Ensure global skill symlinks point to the new config/ location.
-    // If an existing symlink points to the old agent-skills/ path, recreate it.
-    let skill_target = dir.join("SKILL.md");
-    if skill_target.exists() {
+    // Ensure global skill symlinks point to the skill DIRECTORY.
+    // Each agent platform gets: ~/.{platform}/skills/ptsl-tools → config/skills/ptsl-tools/
+    if skill_dir.exists() {
         let home = util::paths::home_dir();
-        for skill_dir in [
-            home.join(".claude/skills/ptsl-tools"),
-            home.join(".agents/skills/ptsl-tools"),
-            home.join(".gemini/skills/ptsl-tools"),
+        for agent_skills_parent in [
+            home.join(".claude/skills"),
+            home.join(".agents/skills"),
+            home.join(".gemini/skills"),
         ] {
-            let skill_link = skill_dir.join("SKILL.md");
+            let link_path = agent_skills_parent.join("ptsl-tools");
 
-            // Check if existing symlink points to old location
-            let needs_update = if skill_link.is_symlink() {
-                match std::fs::read_link(&skill_link) {
-                    Ok(existing_target) => existing_target != skill_target,
+            let needs_update = if link_path.is_symlink() {
+                match std::fs::read_link(&link_path) {
+                    Ok(existing_target) => existing_target != skill_dir,
                     Err(_) => true,
                 }
+            } else if link_path.is_dir() {
+                // Real directory (not a symlink) — replace with directory symlink.
+                // This handles migration from the old layout where ptsl-tools/
+                // was a real dir containing a SKILL.md file symlink.
+                true
             } else {
-                !skill_link.exists()
+                !link_path.exists()
             };
 
             if needs_update {
-                std::fs::create_dir_all(&skill_dir).log_err();
-                // Remove stale symlink if it exists
-                if skill_link.is_symlink() || skill_link.exists() {
-                    std::fs::remove_file(&skill_link).log_err();
+                std::fs::create_dir_all(&agent_skills_parent).log_err();
+                // Remove stale symlink (could be file symlink to old SKILL.md, or directory)
+                if link_path.is_symlink() || link_path.exists() {
+                    if link_path.is_dir() && !link_path.is_symlink() {
+                        std::fs::remove_dir_all(&link_path).log_err();
+                    } else {
+                        std::fs::remove_file(&link_path).log_err();
+                    }
                 }
                 #[cfg(unix)]
-                std::os::unix::fs::symlink(&skill_target, &skill_link).log_err();
+                std::os::unix::fs::symlink(&skill_dir, &link_path).log_err();
             }
         }
     }
 
-    // Version tracking: detect new deployments and purge stale updates
-    check_version_and_purge(APP_VERSION, &release_version_path(), &updates_dir());
-}
-
-/// Compare the running version against the version on disk.
-/// If they differ, purge the `updates_dir` and write the new version.
-fn check_version_and_purge(app_version: &str, version_file: &Path, updates_dir: &Path) {
-    let disk_version = std::fs::read_to_string(version_file)
-        .ok()
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
-
-    if disk_version != app_version {
-        if !disk_version.is_empty() {
-            log::info!(
-                "config: new deployment {} → {}, cleaning updates/",
-                disk_version,
-                app_version
-            );
-            if updates_dir.is_dir() {
-                if let Err(e) = std::fs::remove_dir_all(updates_dir) {
-                    log::warn!("config: failed to clean updates/: {e}");
-                }
-                std::fs::create_dir_all(updates_dir).log_err();
-            }
-        }
-        std::fs::write(version_file, app_version).log_err();
-        log::info!("config: .release_version = {}", app_version);
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1180,71 +1165,17 @@ fn tools_toml_path() -> PathBuf {
     config_dir().join("TOOLS.toml")
 }
 
-fn tools_user_toml_path() -> PathBuf {
-    config_dir().join("TOOLS.user.toml")
-}
-
-fn automations_user_toml_path() -> PathBuf {
-    config_dir().join("AUTOMATIONS.user.toml")
-}
-
 fn agents_toml_path() -> PathBuf {
     config_dir().join("AGENTS.toml")
 }
 
-fn agents_user_toml_path() -> PathBuf {
-    config_dir().join("AGENTS.user.toml")
-}
-
-fn updates_dir() -> PathBuf {
-    config_dir().join("updates")
-}
-
-fn release_version_path() -> PathBuf {
-    config_dir().join(".release_version")
-}
-
-/// Scan `updates/` for files matching `{prefix}.update.N.toml` and return
-/// the path with the highest N. Returns `None` if no update files exist.
-fn find_latest_update(prefix: &str) -> Option<PathBuf> {
-    find_latest_update_in(prefix, &updates_dir())
-}
-
-fn find_latest_update_in(prefix: &str, dir: &Path) -> Option<PathBuf> {
-    let entries = std::fs::read_dir(dir).ok()?;
-
-    let pattern_prefix = format!("{prefix}.update.");
-
-    let mut best: Option<(u32, PathBuf)> = None;
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-
-        let Some(rest) = name.strip_prefix(&pattern_prefix) else {
-            continue;
-        };
-
-        let Some(num_str) = rest.strip_suffix(".toml") else {
-            continue;
-        };
-
-        let Ok(n) = num_str.parse::<u32>() else {
-            continue;
-        };
-
-        if best.as_ref().map_or(true, |(current, _)| n > *current) {
-            best = Some((n, path));
-        }
-    }
-
-    best.map(|(_, path)| path)
-}
-
 fn ensure_workspace_dirs() {
-    for dir in [config_dir(), agent_tools_dir(), runtime_tools_dir(), updates_dir()] {
+    for dir in [
+        config_dir(),
+        automations_dir(),
+        agent_tools_dir(),
+        runtime_tools_dir(),
+    ] {
         if !dir.exists() {
             std::fs::create_dir_all(&dir).log_err();
         }
@@ -1592,7 +1523,7 @@ impl Dashboard {
 
         let pasta_ativa = read_pasta_ativa();
         let pastas_recentes = read_pastas_recentes();
-        let (automations, _gemini_model, automations_error) = load_automations_registry();
+        let (automations, automations_error) = load_automations_registry();
         let (tools, tools_error) = load_tools_registry();
         let (backends, _agents_error) = load_agents_config();
         let background_tools = read_background_tools();
@@ -1670,7 +1601,7 @@ impl Dashboard {
                         .timer(Duration::from_secs(30))
                         .await;
 
-                    let (merged, _model, error) = cx
+                    let (merged, error) = cx
                         .background_executor()
                         .spawn(async { load_automations_registry() })
                         .await;
@@ -2258,7 +2189,7 @@ impl Dashboard {
                 ButtonLike::new(format!("dashboard-btn-{}", tool_id))
                     .full_width()
                     .size(button_size)
-                    .child(
+                                        .child(
                         h_flex()
                             .w_full()
                             .gap_2()
@@ -2388,7 +2319,7 @@ impl Dashboard {
     }
 
     fn render_standard_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let buttons = self.build_tool_buttons(ToolTier::Standard, ButtonSize::Medium, cx);
+        let buttons = self.build_tool_buttons(ToolTier::Standard, ButtonSize::Large, cx);
         v_flex()
             .w_full()
             .gap_1()
@@ -2554,11 +2485,113 @@ impl Dashboard {
             )
     }
 
+    fn render_automation_card(
+        entry: &AutomationEntry,
+        idx: usize,
+        icon_color: Color,
+        badge_label: &SharedString,
+        badge_color: Color,
+        entity: &WeakEntity<Dashboard>,
+    ) -> impl IntoElement {
+        let icon = icon_for_automation(&entry.icon);
+        let entry_id = entry.id.clone();
+        let entry_label: SharedString = entry.label.clone().into();
+        let entry_description: SharedString = entry.description.clone().into();
+        let entry_prompt = entry.prompt.clone();
+        let badge_label = badge_label.clone();
+
+        let click_entity = entity.clone();
+        let click_id = entry_id.clone();
+        let click_label = entry_label.clone();
+        let click_prompt = entry_prompt;
+
+        let edit_entity = entity.clone();
+        let edit_id = entry_id.clone();
+
+        h_flex()
+            .w_full()
+            .gap_1()
+            .items_center()
+            .child(
+                div().flex_1().child(
+                    ButtonLike::new(format!("automation-btn-{}-{}", entry_id, idx))
+                        .full_width()
+                        .size(ButtonSize::Large)
+                        .child(
+                            h_flex()
+                                .w_full()
+                                .gap_2()
+                                .child(
+                                    Icon::new(icon)
+                                        .color(icon_color)
+                                        .size(IconSize::Small),
+                                )
+                                .child(
+                                    v_flex()
+                                        .flex_1()
+                                        .items_start()
+                                        .child(Label::new(entry_label))
+                                        .child(
+                                            Label::new(entry_description)
+                                                .color(Color::Muted)
+                                                .size(LabelSize::XSmall),
+                                        ),
+                                )
+                                .child(
+                                    Label::new(badge_label)
+                                        .color(badge_color)
+                                        .size(LabelSize::XSmall),
+                                ),
+                        )
+                        .on_click(move |_, window, cx| {
+                            let _ = click_entity.update(cx, |this, cx| {
+                                this.run_automation(
+                                    &click_id,
+                                    &click_label,
+                                    &click_prompt,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        }),
+                ),
+            )
+            .child(
+                IconButton::new(format!("edit-automation-{}", edit_id), IconName::FileToml)
+                    .icon_size(IconSize::Small)
+                    .icon_color(Color::Muted)
+                    .tooltip(Tooltip::text("Edit"))
+                    .on_click(move |_, window, cx| {
+                        let _ = edit_entity.update(cx, |this, cx| {
+                            let path = automations_dir().join(format!("{}.toml", edit_id));
+                            let workspace = this.workspace.clone();
+                            cx.spawn_in(window, async move |_this, cx| {
+                                let _ = workspace.update_in(cx, |workspace, window, cx| {
+                                    workspace
+                                        .open_abs_path(
+                                            path,
+                                            OpenOptions::default(),
+                                            window,
+                                            cx,
+                                        )
+                                        .detach();
+                                });
+                            })
+                            .detach();
+                        });
+                    }),
+            )
+    }
+
     fn render_automations_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let automations: Vec<AutomationEntry> = self.automations.iter().filter(|a| !a.hidden).cloned().collect();
+        let all: Vec<AutomationEntry> =
+            self.automations.iter().filter(|a| !a.hidden).cloned().collect();
+        let meta: Vec<_> = all.iter().filter(|a| a.id.starts_with('_')).cloned().collect();
+        let regular: Vec<_> = all.iter().filter(|a| !a.id.starts_with('_')).cloned().collect();
         let backend = self.agent_backend;
         let badge_label = backend.badge_label(&self.backends);
         let badge_color = backend.badge_color();
+        let has_both = !meta.is_empty() && !regular.is_empty();
 
         let entity = cx.entity().downgrade();
 
@@ -2617,108 +2650,44 @@ impl Dashboard {
                         .size(LabelSize::XSmall),
                 )
             })
-            .when(automations.is_empty(), |el| {
+            .when(all.is_empty(), |el| {
                 el.child(
                     h_flex()
                         .px_2()
                         .child(
-                            Label::new("No automations found (AUTOMATIONS.toml)")
+                            Label::new("No automations found (config/automations/)")
                                 .color(Color::Muted)
                                 .size(LabelSize::Small),
                         ),
                 )
             })
-            .children(automations.into_iter().enumerate().map({
-                move |(idx, entry)| {
-                    let icon = icon_for_automation(&entry.icon);
-                    let entry_id = entry.id.clone();
-                    let entry_label: SharedString = entry.label.clone().into();
-                    let entry_description: SharedString = entry.description.clone().into();
-                    let entry_prompt = entry.prompt;
-                    let badge_label = badge_label.clone();
-
-                    let click_entity = entity.clone();
-                    let click_id = entry_id.clone();
-                    let click_label = entry_label.clone();
-                    let click_prompt = entry_prompt;
-
-                    ButtonLike::new(format!("automation-btn-{}-{}", entry_id, idx))
-                        .full_width()
-                        .size(ButtonSize::Medium)
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .child(
-                                    Icon::new(icon)
-                                        .color(Color::Accent)
-                                        .size(IconSize::Small),
-                                )
-                                .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .items_start()
-                                        .child(Label::new(entry_label))
-                                        .child(
-                                            Label::new(entry_description)
-                                                .color(Color::Muted)
-                                                .size(LabelSize::XSmall),
-                                        ),
-                                )
-                                .child(
-                                    Label::new(badge_label)
-                                        .color(badge_color)
-                                        .size(LabelSize::XSmall),
-                                ),
-                        )
-                        .on_click(move |_, window, cx| {
-                            let _ = click_entity.update(cx, |this, cx| {
-                                this.run_automation(
-                                    &click_id,
-                                    &click_label,
-                                    &click_prompt,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        })
-                }
+            .children(meta.iter().enumerate().map(|(idx, entry)| {
+                Self::render_automation_card(
+                    entry,
+                    idx,
+                    Color::Muted,
+                    &badge_label,
+                    badge_color,
+                    &entity,
+                )
             }))
-            .child(
-                ButtonLike::new("edit-automations-btn")
-                    .full_width()
-                    .size(ButtonSize::Medium)
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .gap_2()
-                            .child(
-                                Icon::new(IconName::FileToml)
-                                    .color(Color::Muted)
-                                    .size(IconSize::Small),
-                            )
-                            .child(
-                                Label::new("Edit Automations (TOML)")
-                                    .color(Color::Muted)
-                                    .size(LabelSize::Small),
-                            ),
-                    )
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        let user_path = automations_user_toml_path();
-                        if !user_path.exists() {
-                            std::fs::write(&user_path, "# User automation overrides — entries here override defaults in AUTOMATIONS.toml\n# Add hidden = true to hide a default automation, or define custom ones.\n\n").log_err();
-                        }
-                        let workspace = this.workspace.clone();
-                        cx.spawn_in(window, async move |_this, cx| {
-                            let _ = workspace.update_in(cx, |workspace, window, cx| {
-                                workspace
-                                    .open_abs_path(user_path, OpenOptions::default(), window, cx)
-                                    .detach();
-                            });
-                        })
-                        .detach();
-                    }))
-            )
+            .when(has_both, |el| {
+                el.child(
+                    div()
+                        .py_1()
+                        .child(Divider::horizontal().color(DividerColor::BorderVariant)),
+                )
+            })
+            .children(regular.iter().enumerate().map(|(idx, entry)| {
+                Self::render_automation_card(
+                    entry,
+                    idx + meta.len(),
+                    Color::Accent,
+                    &badge_label,
+                    badge_color,
+                    &entity,
+                )
+            }))
     }
 
     fn render_ai_agents_section(&self, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -2922,15 +2891,12 @@ impl Render for Dashboard {
                                             ),
                                     )
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        let user_path = tools_user_toml_path();
-                                        if !user_path.exists() {
-                                            std::fs::write(&user_path, "# User tool overrides — entries here override defaults in TOOLS.toml\n# Add hidden = true to hide a default tool, or define custom tools.\n\n").log_err();
-                                        }
+                                        let path = tools_toml_path();
                                         let workspace = this.workspace.clone();
                                         cx.spawn_in(window, async move |_this, cx| {
                                             let _ = workspace.update_in(cx, |workspace, window, cx| {
                                                 workspace
-                                                    .open_abs_path(user_path, OpenOptions::default(), window, cx)
+                                                    .open_abs_path(path, OpenOptions::default(), window, cx)
                                                     .detach();
                                             });
                                         })
@@ -2981,175 +2947,3 @@ impl Item for Dashboard {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn find_latest_update_returns_none_on_empty_dir() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(find_latest_update_in("TOOLS", dir.path()).is_none());
-    }
-
-    #[test]
-    fn find_latest_update_returns_none_when_no_matching_files() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("unrelated.toml"), "").unwrap();
-        fs::write(dir.path().join("TOOLS.toml"), "").unwrap();
-        assert!(find_latest_update_in("TOOLS", dir.path()).is_none());
-    }
-
-    #[test]
-    fn find_latest_update_picks_highest_number() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("TOOLS.update.1.toml"), "").unwrap();
-        fs::write(dir.path().join("TOOLS.update.5.toml"), "").unwrap();
-        fs::write(dir.path().join("TOOLS.update.3.toml"), "").unwrap();
-
-        let result = find_latest_update_in("TOOLS", dir.path()).unwrap();
-        assert_eq!(result.file_name().unwrap(), "TOOLS.update.5.toml");
-    }
-
-    #[test]
-    fn find_latest_update_ignores_non_numeric() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("TOOLS.update.abc.toml"), "").unwrap();
-        fs::write(dir.path().join("TOOLS.update.2.toml"), "").unwrap();
-        fs::write(dir.path().join("TOOLS.update..toml"), "").unwrap();
-
-        let result = find_latest_update_in("TOOLS", dir.path()).unwrap();
-        assert_eq!(result.file_name().unwrap(), "TOOLS.update.2.toml");
-    }
-
-    #[test]
-    fn find_latest_update_ignores_wrong_prefix() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("AUTOMATIONS.update.10.toml"), "").unwrap();
-        fs::write(dir.path().join("TOOLS.update.1.toml"), "").unwrap();
-
-        let tools = find_latest_update_in("TOOLS", dir.path()).unwrap();
-        assert_eq!(tools.file_name().unwrap(), "TOOLS.update.1.toml");
-
-        let autos = find_latest_update_in("AUTOMATIONS", dir.path()).unwrap();
-        assert_eq!(autos.file_name().unwrap(), "AUTOMATIONS.update.10.toml");
-    }
-
-    #[test]
-    fn find_latest_update_ignores_wrong_extension() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("TOOLS.update.1.json"), "").unwrap();
-        fs::write(dir.path().join("TOOLS.update.2.txt"), "").unwrap();
-        assert!(find_latest_update_in("TOOLS", dir.path()).is_none());
-    }
-
-    #[test]
-    fn find_latest_update_single_file() {
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("TOOLS.update.42.toml"), "").unwrap();
-
-        let result = find_latest_update_in("TOOLS", dir.path()).unwrap();
-        assert_eq!(result.file_name().unwrap(), "TOOLS.update.42.toml");
-    }
-
-    #[test]
-    fn version_check_writes_new_version_on_fresh_install() {
-        let dir = tempfile::tempdir().unwrap();
-        let version_file = dir.path().join(".release_version");
-        let updates = dir.path().join("updates");
-        fs::create_dir_all(&updates).unwrap();
-
-        check_version_and_purge("1.0.0", &version_file, &updates);
-
-        assert_eq!(fs::read_to_string(&version_file).unwrap(), "1.0.0");
-        // updates/ should still exist (not purged on fresh install)
-        assert!(updates.is_dir());
-    }
-
-    #[test]
-    fn version_check_noop_when_versions_match() {
-        let dir = tempfile::tempdir().unwrap();
-        let version_file = dir.path().join(".release_version");
-        let updates = dir.path().join("updates");
-        fs::create_dir_all(&updates).unwrap();
-        fs::write(dir.path().join("updates/TOOLS.update.1.toml"), "keep").unwrap();
-        fs::write(&version_file, "1.0.0").unwrap();
-
-        check_version_and_purge("1.0.0", &version_file, &updates);
-
-        // Update file should survive — versions match
-        assert!(dir.path().join("updates/TOOLS.update.1.toml").exists());
-        assert_eq!(fs::read_to_string(&version_file).unwrap(), "1.0.0");
-    }
-
-    #[test]
-    fn version_check_purges_updates_on_version_change() {
-        let dir = tempfile::tempdir().unwrap();
-        let version_file = dir.path().join(".release_version");
-        let updates = dir.path().join("updates");
-        fs::create_dir_all(&updates).unwrap();
-        fs::write(dir.path().join("updates/TOOLS.update.1.toml"), "stale").unwrap();
-        fs::write(dir.path().join("updates/TOOLS.update.2.toml"), "stale").unwrap();
-        fs::write(&version_file, "1.0.0").unwrap();
-
-        check_version_and_purge("1.1.0", &version_file, &updates);
-
-        // Version file updated
-        assert_eq!(fs::read_to_string(&version_file).unwrap(), "1.1.0");
-        // updates/ recreated empty
-        assert!(updates.is_dir());
-        assert_eq!(fs::read_dir(&updates).unwrap().count(), 0);
-    }
-
-    #[test]
-    fn merge_tools_user_overrides_default() {
-        let defaults = vec![tool("a", "Default A"), tool("b", "Default B")];
-        let user = vec![tool("a", "Custom A")];
-
-        let merged = merge_tools(defaults, user);
-        assert_eq!(merged.len(), 2);
-        assert_eq!(merged[0].label, "Custom A");
-        assert_eq!(merged[1].label, "Default B");
-    }
-
-    #[test]
-    fn merge_tools_user_adds_new() {
-        let defaults = vec![tool("a", "Default A")];
-        let user = vec![tool("c", "User Only")];
-
-        let merged = merge_tools(defaults, user);
-        assert_eq!(merged.len(), 2);
-        assert_eq!(merged[0].label, "Default A");
-        assert_eq!(merged[1].label, "User Only");
-    }
-
-    #[test]
-    fn merge_tools_empty_defaults() {
-        let defaults = vec![];
-        let user = vec![tool("a", "User A")];
-
-        let merged = merge_tools(defaults, user);
-        assert_eq!(merged.len(), 1);
-        assert_eq!(merged[0].label, "User A");
-    }
-
-    fn tool(id: &str, label: &str) -> ToolEntry {
-        ToolEntry {
-            id: id.to_string(),
-            label: label.to_string(),
-            description: String::new(),
-            icon: String::new(),
-            binary: String::new(),
-            cwd: String::new(),
-            source: ToolSource::Runtime,
-            tier: ToolTier::Standard,
-            needs_session: false,
-            extra_args: vec![],
-            hidden: false,
-        }
-    }
-}

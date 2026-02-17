@@ -1,0 +1,11 @@
+id = "bounce-trilha"
+label = "Bounce TRILHA"
+description = "Select clips, set timeline, bounce to WAV"
+icon = "play"
+prompt = """
+Using the PTSL agent tools on {session_path}:
+1. Verify {session_path} is the open session (use get_session_path)
+2. Run select-clips on TRILHA to set the full timeline
+3. Bounce to WAV format
+4. Report the output file path
+"""

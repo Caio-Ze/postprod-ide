@@ -40,7 +40,7 @@ if [[ "$fresh" == true ]]; then
 fi
 
 echo "==> Creating workspace directories..."
-mkdir -p "$SUITE_ROOT/config/updates"
+mkdir -p "$SUITE_ROOT/config"
 mkdir -p "$SUITE_ROOT/tools/agent"
 mkdir -p "$SUITE_ROOT/tools/runtime"
 
@@ -50,19 +50,14 @@ if [[ "$skip_build" == false ]]; then
     cargo build --release -p postprod-ide --manifest-path "$REPO_ROOT/Cargo.toml"
 fi
 
-# --- Agent tools (debug binaries — fast, no release build needed) ---
-if [[ -d "$PTSL_SDK/target/debug" ]]; then
-    echo "==> Deploying agent tools (debug)..."
-    count=0
-    for bin in "$PTSL_SDK/target/debug/agent-"*; do
-        # Skip non-files, non-executables, and .d dependency files
-        [[ -f "$bin" && -x "$bin" && "$bin" != *.d ]] || continue
-        cp "$bin" "$SUITE_ROOT/tools/agent/"
-        ((count++))
-    done
+# --- Agent tools (from target/agent/ — the organized deploy folder) ---
+if [[ -d "$PTSL_SDK/target/agent" ]]; then
+    echo "==> Syncing agent tools..."
+    rsync -a --delete "$PTSL_SDK/target/agent/" "$SUITE_ROOT/tools/agent/"
+    count=$(find "$SUITE_ROOT/tools/agent" -maxdepth 1 -type f -perm +111 | wc -l | tr -d ' ')
     echo "    $count agent tools deployed"
 else
-    echo "    PTSL SDK not found at $PTSL_SDK — skipping agent tools"
+    echo "    Agent folder not found at $PTSL_SDK/target/agent — run deploy-agent.sh first"
 fi
 
 # --- Runtime tools ---
@@ -73,7 +68,7 @@ fi
 
 # --- Config defaults (only if missing — preserves user edits) ---
 echo "==> Checking config defaults..."
-for name in TOOLS.toml AUTOMATIONS.toml AGENTS.toml SKILL.md; do
+for name in TOOLS.toml AGENTS.toml GUIDE.md; do
     dest="$SUITE_ROOT/config/$name"
     if [[ ! -f "$dest" ]]; then
         src="$REPO_ROOT/assets/config/$name"
@@ -85,6 +80,40 @@ for name in TOOLS.toml AUTOMATIONS.toml AGENTS.toml SKILL.md; do
         echo "    $name — preserved"
     fi
 done
+
+# --- Automations directory (one .toml per automation, only extract if missing) ---
+AUTOMATIONS_SRC="$REPO_ROOT/assets/config/automations"
+AUTOMATIONS_DST="$SUITE_ROOT/config/automations"
+if [[ -d "$AUTOMATIONS_SRC" ]]; then
+    mkdir -p "$AUTOMATIONS_DST"
+    for f in "$AUTOMATIONS_SRC"/*.toml; do
+        name=$(basename "$f")
+        if [[ ! -f "$AUTOMATIONS_DST/$name" ]]; then
+            cp "$f" "$AUTOMATIONS_DST/"
+            echo "    Extracted $name"
+        fi
+    done
+    echo "    automations/ — $(ls "$AUTOMATIONS_DST"/*.toml 2>/dev/null | wc -l | tr -d ' ') files"
+fi
+
+# --- Skill directory (progressive disclosure: SKILL.md + reference files) ---
+SKILL_SRC="$REPO_ROOT/assets/config/skills/ptsl-tools"
+SKILL_DST="$SUITE_ROOT/config/skills/ptsl-tools"
+if [[ -d "$SKILL_SRC" ]]; then
+    mkdir -p "$SKILL_DST"
+    # SKILL.md: only copy if missing (user editable)
+    if [[ ! -f "$SKILL_DST/SKILL.md" ]]; then
+        cp "$SKILL_SRC/SKILL.md" "$SKILL_DST/"
+        echo "    Extracted SKILL.md"
+    else
+        echo "    SKILL.md — preserved"
+    fi
+    # reference.md and workflows.md: always overwrite (not user-editable)
+    for f in reference.md workflows.md; do
+        cp "$SKILL_SRC/$f" "$SKILL_DST/"
+    done
+    echo "    Updated reference.md, workflows.md"
+fi
 
 # --- .env template ---
 env_example="$PTSL_SDK/templates/.env.example"

@@ -1,0 +1,31 @@
+id = "_edit-automation"
+label = "Edit a Button"
+description = "I'll help you change an existing dashboard button"
+icon = "replace"
+prompt = """
+I want to edit one of my existing dashboard buttons in ProTools Studio.
+
+IMPORTANT: First read the skill directory at ~/ProTools_Suite/config/skills/ptsl-tools/ (SKILL.md, reference.md, workflows.md) — it contains all the rules, tool reference, domain knowledge, session lifecycle, and bouncing workflow that every automation inherits. Prompts should be SHORT (4-8 lines of task steps). Do not repeat anything that SKILL.md already covers.
+
+How automation buttons work:
+- Each button is a separate .toml file in ~/ProTools_Suite/config/automations/
+- Each file has: id, label, description, icon, and prompt
+- Available icons: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
+- The dashboard replaces two template variables at runtime before the agent sees the prompt:
+  - Wrap session_path in curly braces → replaced with the .ptx file currently open in Pro Tools
+  - Wrap pasta_ativa in curly braces → replaced with the folder selected on the dashboard
+  Use these variables in prompts so the agent gets real paths at runtime.
+- Changes are picked up automatically — no restart needed
+
+First, list the .toml files in ~/ProTools_Suite/config/automations/.
+Show me a numbered list of all buttons with names and what they do.
+
+Then ask me:
+1. Which button to change? (by number)
+2. What to change? (name, description, steps, icon, or delete it)
+3. What should the new value be?
+
+When editing prompts, follow the style convention: short numbered steps, start with "Using the PTSL agent tools on [session_path variable]:" or "...in [pasta_ativa variable].", always include session verification. See existing .toml files for examples.
+
+Edit the .toml file directly. To delete a button, remove its .toml file.
+"""

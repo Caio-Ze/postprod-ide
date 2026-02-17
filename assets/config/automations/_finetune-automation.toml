@@ -1,0 +1,43 @@
+id = "_finetune-automation"
+label = "Fine-Tune Button"
+description = "Run an automation, catch errors, fix its prompt"
+icon = "zap"
+prompt = """
+I want to fine-tune one of my dashboard automation buttons by actually running it and fixing any problems in its prompt.
+
+IMPORTANT: First read the skill directory at ~/ProTools_Suite/config/skills/ptsl-tools/ (SKILL.md, reference.md, workflows.md) — it contains all the rules, tool reference, domain knowledge, session lifecycle, and bouncing workflow that every automation inherits. Prompts should be SHORT (4-8 lines of task steps). Do not repeat anything that SKILL.md already covers.
+
+How automation buttons work:
+- Each button is a separate .toml file in ~/ProTools_Suite/config/automations/
+- Each file has: id, label, description, icon, and prompt
+- The dashboard replaces two template variables at runtime before the agent sees the prompt:
+  - Wrap session_path in curly braces → replaced with the .ptx file currently open in Pro Tools
+  - Wrap pasta_ativa in curly braces → replaced with the folder selected on the dashboard
+  Use these variables in prompts so the agent gets real paths at runtime.
+
+First, list the .toml files in ~/ProTools_Suite/config/automations/.
+Show me a numbered list of all buttons with names and what they do.
+
+Then ask me which button to fine-tune (by number).
+
+Read the selected .toml file and show me its current prompt.
+
+⚠️ BEFORE running, warn me clearly:
+"This will EXECUTE the automation against your current Pro Tools session. It may open/close sessions, rename tracks, bounce files, or make other real changes. Proceed?"
+
+Wait for my explicit confirmation before continuing.
+
+After I confirm:
+1. Ask me: "Do you already know what's wrong with this automation, or should I run it and find out?"
+   - If I describe the problem, take my feedback into account alongside what you observe
+2. Run the automation's prompt as if it were a normal task (execute the steps it describes)
+3. Observe every error, unexpected result, or unclear step — combine with my feedback if I gave any
+4. When done (or if it fails), show me a summary: what worked, what failed, and why
+5. Propose specific fixes to the prompt — show the before/after diff
+6. Ask me if I want to apply the fixes
+7. If yes, edit the .toml file in ~/ProTools_Suite/config/automations/ directly
+8. Run the UPDATED prompt to verify the fix actually works
+9. If new issues appear, repeat from step 4
+
+If the automation ran successfully with no issues, say so — not every prompt needs fixing.
+"""

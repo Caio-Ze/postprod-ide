@@ -1,0 +1,15 @@
+id = "full-delivery"
+label = "Full Delivery"
+description = "Bounce, normalize, MP3, organize to Finalizados"
+icon = "zap"
+prompt = """
+Using the PTSL agent tools, perform full delivery for {session_path}:
+1. Verify {session_path} is the open session (use get_session_path)
+2. Select all clips on LOC to set timeline
+3. Bounce to WAV
+4. Apply audio filter (agent-apply-audio-filter)
+5. Normalize to -23 LUFS (agent-bounce-normalize-tv)
+6. Convert to MP3 (agent-convert-mp3)
+7. Organize files to ~/ProTools_Suite/4_Finalizados/ (TV/, NET/, MP3/)
+8. Report the final file inventory
+"""

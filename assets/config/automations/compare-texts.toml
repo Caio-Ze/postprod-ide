@@ -1,0 +1,12 @@
+id = "compare-texts"
+label = "Compare Texts"
+description = "Transcribe audio, extract reference, compare"
+icon = "mic"
+prompt = """
+Using the PTSL agent tools:
+1. Ask me for the audio file path and the reference document path
+2. Transcribe the audio using agent-transcribe-audio
+3. Extract text from the reference document using agent-extract-text
+4. Compare both texts using agent-compare-texts
+5. Report the differences found
+"""

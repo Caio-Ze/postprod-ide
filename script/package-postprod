@@ -26,7 +26,7 @@ echo "==> PostProd Tools $VERSION ($ARCH)"
 
 echo "==> Creating workspace directories..."
 mkdir -p "$SUITE_ROOT/config"
-mkdir -p "$SUITE_ROOT/config/updates"
+mkdir -p "$SUITE_ROOT/config"
 mkdir -p "$SUITE_ROOT/tools/agent"
 mkdir -p "$SUITE_ROOT/tools/runtime"
 
@@ -60,7 +60,7 @@ fi
 
 # Extract default config files only if they don't exist (preserve user edits)
 echo "==> Checking config defaults..."
-for name in TOOLS.toml AUTOMATIONS.toml AGENTS.toml SKILL.md; do
+for name in TOOLS.toml AGENTS.toml GUIDE.md; do
     dest="$SUITE_ROOT/config/$name"
     if [[ ! -f "$dest" ]]; then
         src="$REPO_ROOT/assets/config/$name"
@@ -72,6 +72,38 @@ for name in TOOLS.toml AUTOMATIONS.toml AGENTS.toml SKILL.md; do
         echo "    $name exists — preserved"
     fi
 done
+
+# Automations directory (one .toml per automation, only extract if missing)
+AUTOMATIONS_SRC="$REPO_ROOT/assets/config/automations"
+AUTOMATIONS_DST="$SUITE_ROOT/config/automations"
+if [[ -d "$AUTOMATIONS_SRC" ]]; then
+    mkdir -p "$AUTOMATIONS_DST"
+    for f in "$AUTOMATIONS_SRC"/*.toml; do
+        name=$(basename "$f")
+        if [[ ! -f "$AUTOMATIONS_DST/$name" ]]; then
+            cp "$f" "$AUTOMATIONS_DST/"
+            echo "    Extracted $name"
+        fi
+    done
+    echo "    automations/ — $(ls "$AUTOMATIONS_DST"/*.toml 2>/dev/null | wc -l | tr -d ' ') files"
+fi
+
+# Skill directory (progressive disclosure: SKILL.md + reference files)
+SKILL_SRC="$REPO_ROOT/assets/config/skills/ptsl-tools"
+SKILL_DST="$SUITE_ROOT/config/skills/ptsl-tools"
+if [[ -d "$SKILL_SRC" ]]; then
+    mkdir -p "$SKILL_DST"
+    if [[ ! -f "$SKILL_DST/SKILL.md" ]]; then
+        cp "$SKILL_SRC/SKILL.md" "$SKILL_DST/"
+        echo "    Extracted default SKILL.md"
+    else
+        echo "    SKILL.md exists — preserved"
+    fi
+    for f in reference.md workflows.md; do
+        cp "$SKILL_SRC/$f" "$SKILL_DST/"
+    done
+    echo "    Updated reference.md, workflows.md"
+fi
 
 # Deploy centralized .env.example and create .env if missing
 env_example="$PTSL_SDK/templates/.env.example"

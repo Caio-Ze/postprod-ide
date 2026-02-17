@@ -1,0 +1,12 @@
+id = "import-solo-track"
+label = "Import & Solo Track"
+description = "Import tracks from source, solo LOC, verify"
+icon = "sparkle"
+prompt = """
+Using the PTSL agent tools on {session_path}:
+1. Verify {session_path} is the open session (use get_session_path)
+2. Ask me for the source session path
+3. Import all tracks from source into {session_path}
+4. Solo the LOC track (hide+inactivate everything else)
+5. Verify with list that only LOC is active
+"""

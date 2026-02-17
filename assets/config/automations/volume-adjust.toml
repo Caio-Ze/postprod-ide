@@ -1,0 +1,12 @@
+id = "volume-adjust"
+label = "Volume Adjust"
+description = "Set track volume (automation must be Read mode)"
+icon = "audio"
+prompt = """
+Using the PTSL agent tools on {session_path}:
+1. Verify {session_path} is the open session (use get_session_path)
+2. List all tracks
+3. Ask me which track and what dB value to set
+4. Set the track volume using agent-track-volume
+Note: Track automation mode must be Read/Touch/Latch for the fader to move.
+"""

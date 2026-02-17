@@ -41,8 +41,9 @@ fn main() {
             }
         }
 
-        // Symlink agent tool debug binaries so the dashboard finds them in dev mode.
-        let agent_src = std::path::Path::new("../../../PROTOOLS_SDK_PTSL/target/debug");
+        // Symlink agent tool binaries so the dashboard finds them in dev mode.
+        println!("cargo:rerun-if-changed=../../../PROTOOLS_SDK_PTSL/target/agent");
+        let agent_src = std::path::Path::new("../../../PROTOOLS_SDK_PTSL/target/agent");
         let agent_dst = target_profile_dir.join("agent");
 
         if agent_src.exists() && !agent_dst.exists() {

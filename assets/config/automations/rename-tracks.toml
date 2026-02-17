@@ -1,0 +1,12 @@
+id = "rename-tracks"
+label = "Rename All Tracks"
+description = "List tracks and rename interactively"
+icon = "replace"
+prompt = """
+Using the PTSL agent tools on {session_path}:
+1. Verify {session_path} is the open session (use get_session_path)
+2. List all tracks
+3. Show me the track list and ask which tracks I want to rename
+4. For each track I specify, rename it to the new name I provide
+5. Verify the final track list
+"""
