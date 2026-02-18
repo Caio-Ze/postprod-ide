@@ -57,14 +57,18 @@ Every tool communicates with Pro Tools over the PTSL gRPC protocol. This means:
 
 ### Session Monitor — the always-on autopilot
 
-Session Monitor is the centerpiece of PostProd Tools. It runs in the background and watches what happens in Pro Tools — when you open a session, when you save, when you close. And it acts on it.
+Session Monitor is the centerpiece of PostProd Tools. Built in Go with the Bubble Tea framework, it runs in the background and watches what happens in Pro Tools — when you open a session, when you save, when you close. And it acts on it.
 
 ![Session Monitor](DOCS/session-monitor-screenshot.png)
 
 **What it does today:**
+- **3-row VU meter waveform** — real-time animated display with clip detection (red), hot signal (yellow), and body (cyan). 20 columns, 16 animation frames at 12fps
+- **Text-through-waveform overlay** — status subtitles render through the frozen waveform when connected but idle. Dry humor included
+- **Three visual states** — animated waveform (session active), frozen/muted (connected, no session), static (disconnected)
 - Detects when a session opens and automatically configures Pro Tools — window layout, track visibility, routing, the way you prefer to work
 - Runs scripts on session events: auto-save a new version before you start editing, execute a task list when you save, trigger delivery processing when you close
 - Monitors PTSL connection status in real time — you always know if Pro Tools is reachable
+- TOML-driven script config with auto-discovery — add scripts, they're detected automatically
 - Chains with other tools: open a session, import tracks from a source, solo what you need, and start monitoring — all without a single manual click
 
 **What's coming:**
@@ -140,19 +144,21 @@ PostProd Tools is not trying to replace SoundFlow's macro library. It solves a d
 
 The tools don't simulate the Pro Tools interface. They talk to the engine directly. And the AI agents don't just execute single commands — they run multi-step workflows end-to-end, reading your project structure and making decisions based on what they find.
 
-## Built entirely in Rust
+## Built in Rust and Go
 
-Everything — the application, the dashboard, and every single tool — is written in Rust. This is not a technical curiosity. It has real consequences:
+Two languages, each where it's strongest. Rust is the brute force — the IDE, the gRPC protocol layer, 27 agent tools, every batch processing pipeline, audio normalization. Go is the polish — the Session Monitor TUI, where responsiveness and animation matter more than raw throughput.
 
 - **Instant execution** — Every tool is a compiled native binary. No interpreter startup, no VM warmup. When you're processing 40 sessions in a batch, the difference between a 200ms tool and a 2-second script adds up to minutes saved per run.
 
-- **GPU-accelerated interface** — The entire UI is rendered on the GPU via [GPUI](https://www.gpui.rs/). Scrolling through hundreds of tracks or scanning a delivery folder with thousands of files stays smooth. There is no Electron, no web view, no garbage collector pausing the interface.
+- **GPU-accelerated interface** — The IDE is rendered on the GPU via [GPUI](https://www.gpui.rs/). Scrolling through hundreds of tracks or scanning a delivery folder with thousands of files stays smooth. There is no Electron, no web view, no garbage collector pausing the interface.
 
-- **Low memory footprint** — No runtime overhead, no garbage collector. The application uses a fraction of the memory that browser-based tools consume. On a machine already running Pro Tools, this matters.
+- **Low memory footprint** — No runtime overhead, no garbage collector in the critical path. The application uses a fraction of the memory that browser-based tools consume. On a machine already running Pro Tools, this matters.
 
 - **Reliability at scale** — Rust catches entire categories of bugs at compile time. When batch processing runs across dozens of sessions overnight, the tools either work correctly or don't compile at all. They don't silently corrupt data at 3 AM.
 
-The same language runs from the gRPC protocol layer talking to Pro Tools all the way up to the GPU-rendered dashboard buttons. There is no glue code, no bridge between languages. It is Rust all the way down.
+- **Responsive monitoring** — The Session Monitor uses Go's Bubble Tea framework for its TUI, with goroutines handling concurrent script execution alongside 12fps waveform animation. The right tool for interactive, event-driven work.
+
+Both languages produce universal macOS binaries (Apple Silicon + Intel). Rust via `cargo build --target ... && lipo`. Go via `GOOS/GOARCH + lipo`.
 
 ## Current state
 
