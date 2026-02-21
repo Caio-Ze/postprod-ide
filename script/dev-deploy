@@ -13,8 +13,10 @@
 #   ./script/dev-deploy --skip-build # deploy only, skip cargo build
 #
 # Environment:
-#   PROTOOLS_SDK_PATH — path to PROTOOLS_SDK_PTSL repo
-#                       (default: ~/Documents/Rust_projects/PROTOOLS_SDK_PTSL)
+#   PROTOOLS_SDK_PATH  — path to PROTOOLS_SDK_PTSL repo
+#                        (default: ~/Documents/Rust_projects/PROTOOLS_SDK_PTSL)
+#   GO_PROJECT_PATH    — path to Go project repo (session-monitor)
+#                        (default: ~/Documents/Go_project)
 set -euo pipefail
 
 SUITE_ROOT="$HOME/ProTools_Suite"
@@ -64,6 +66,17 @@ fi
 if [[ -d "$PTSL_SDK/target/runtime" ]]; then
     echo "==> Syncing runtime tools..."
     rsync -a --delete "$PTSL_SDK/target/runtime/" "$SUITE_ROOT/tools/runtime/"
+fi
+
+# --- Go session-monitor (replaces Rust version) ---
+GO_PROJECT="${GO_PROJECT_PATH:-$HOME/Documents/Go_project}"
+GO_SM="$GO_PROJECT/target/runtime/bin/Session_Monitor"
+if [[ -f "$GO_SM/session-monitor" ]]; then
+    echo "==> Syncing Go session-monitor..."
+    rsync -a "$GO_SM/" "$SUITE_ROOT/tools/runtime/bin/Session_Monitor/"
+    echo "    Go session-monitor deployed (replaces Rust)"
+else
+    echo "    Go session-monitor not found — run: cd $GO_PROJECT && ./deploy.sh"
 fi
 
 # --- Config defaults (only if missing — preserves user edits) ---
