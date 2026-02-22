@@ -26,6 +26,10 @@
 /private/
 /postprod-tools-growth/private/
 
+# Skills — symlinked to ~/ProTools_Suite/config/skills/ptsl-tools/ (source of truth)
+# Before shipping: copy real files back, commit, then recreate symlink
+assets/config/skills/ptsl-tools
+
 # Safety nets — prevent accidental commit of sensitive dirs
 DOCS/Caio-Ze/
 DOCS/postprod-tools-growth/

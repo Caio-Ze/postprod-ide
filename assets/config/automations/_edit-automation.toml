@@ -9,23 +9,35 @@ IMPORTANT: First read the skill directory at ~/ProTools_Suite/config/skills/ptsl
 
 How automation buttons work:
 - Each button is a separate .toml file in ~/ProTools_Suite/config/automations/
-- Each file has: id, label, description, icon, and prompt
+- Each file has: id, label, description, icon, prompt, and optional [[param]] blocks
 - Available icons: play, zap, mic, folder, audio, sparkle, replace, arrow_up_right
-- The dashboard replaces two template variables at runtime before the agent sees the prompt:
+- The dashboard replaces template variables at runtime before the agent sees the prompt:
   - Wrap session_path in curly braces → replaced with the .ptx file currently open in Pro Tools
   - Wrap pasta_ativa in curly braces → replaced with the folder selected on the dashboard
-  Use these variables in prompts so the agent gets real paths at runtime.
+  - Wrap any param key in curly braces → replaced with the value the user set on the card
 - Changes are picked up automatically — no restart needed
 
+Key conventions:
+- Write EXACT tool commands in prompts — not descriptions. Agents pick the wrong tool when prompts are vague.
+  BAD:  "Run select-clips on TRILHA to set the full timeline"
+  GOOD: "agent-manage-tracks --session <PTX> --track TRILHA --output-json select-clips"
+- prompt MUST come BEFORE any [[param]] blocks in the TOML file.
+- [[param]] types: text (freeform), path (folder picker), select (dropdown with options = [...])
+- Use {key} in the prompt to reference param values.
+- Every prompt should end with a self-improvement step:
+  "After completing the task: (1) If the user stated any preferences during this conversation, add them to User Preferences in ~/ProTools_Suite/config/skills/ptsl-tools/SKILL.md. (2) If you encountered errors or workarounds, add a dated entry to Agent Learnings in the same file."
+  SKILL.md has two agent-writable sections at the bottom — these are the ONLY parts agents may modify.
+  If an existing prompt is missing this step, add it when editing.
+
 First, list the .toml files in ~/ProTools_Suite/config/automations/.
-Show me a numbered list of all buttons with names and what they do.
+Show me a numbered list of all buttons with names, what they do, and whether they have [[param]] fields.
 
 Then ask me:
 1. Which button to change? (by number)
-2. What to change? (name, description, steps, icon, or delete it)
+2. What to change? (name, description, steps, icon, params, or delete it)
 3. What should the new value be?
 
-When editing prompts, follow the style convention: short numbered steps, start with "Using the PTSL agent tools on [session_path variable]:" or "...in [pasta_ativa variable].", always include session verification. See existing .toml files for examples.
+When editing prompts, use exact tool commands (check reference.md for correct syntax). If a hardcoded value should be user-configurable, suggest adding a [[param]] block.
 
 Edit the .toml file directly. To delete a button, remove its .toml file.
 """

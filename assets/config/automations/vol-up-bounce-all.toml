@@ -7,10 +7,10 @@ Using the PTSL agent tools, process sessions in {pasta_ativa}.
 IMPORTANT: Only process sessions inside {pasta_ativa}. Do not access or modify anything outside this folder.
 1. List session subfolders and find the highest-version .ptx in each.
 2. For each session, run this command directly in Bash (no scripts):
-   agent-track-volume --session <PTX> --track {track} --output-json set --value <DB>
+   agent-track-volume --session <PTX> --track {track} --output-json --value <DB>
    For negative dB use equals syntax: --value=-3.0 (not --value -3.0).
-3. Run select-clips on TRILHA to set the full timeline.
-4. Bounce to WAV.
+3. agent-manage-tracks --session <PTX> --track TRILHA --output-json select-clips
+4. agent-bounce-export --output-json
 5. Sleep 5 seconds before next session. Report progress after each one.
 
 volume: {volume}

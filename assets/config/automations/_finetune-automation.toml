@@ -9,11 +9,23 @@ IMPORTANT: First read the skill directory at ~/ProTools_Suite/config/skills/ptsl
 
 How automation buttons work:
 - Each button is a separate .toml file in ~/ProTools_Suite/config/automations/
-- Each file has: id, label, description, icon, and prompt
-- The dashboard replaces two template variables at runtime before the agent sees the prompt:
+- Each file has: id, label, description, icon, prompt, and optional [[param]] blocks
+- The dashboard replaces template variables at runtime before the agent sees the prompt:
   - Wrap session_path in curly braces → replaced with the .ptx file currently open in Pro Tools
   - Wrap pasta_ativa in curly braces → replaced with the folder selected on the dashboard
-  Use these variables in prompts so the agent gets real paths at runtime.
+  - Wrap any param key in curly braces → replaced with the value the user set on the card
+
+Key conventions for fixing prompts:
+- Write EXACT tool commands — not descriptions. This is the #1 cause of agent errors.
+  BAD:  "Run select-clips on TRILHA to set the full timeline"
+  GOOD: "agent-manage-tracks --session <PTX> --track TRILHA --output-json select-clips"
+  BAD:  "Bounce to WAV"
+  GOOD: "agent-bounce-export --output-json"
+- Check reference.md for correct syntax before writing tool commands.
+- agent-track-volume is a flat command (no subcommands): --session <PTX> --track <NAME> --output-json --value <DB>
+- agent-bounce-export does NOT take --session (it bounces whatever is open).
+- If a hardcoded value should be user-configurable, add a [[param]] block.
+  prompt MUST come BEFORE [[param]] blocks in the TOML file.
 
 First, list the .toml files in ~/ProTools_Suite/config/automations/.
 Show me a numbered list of all buttons with names and what they do.
@@ -34,10 +46,17 @@ After I confirm:
 3. Observe every error, unexpected result, or unclear step — combine with my feedback if I gave any
 4. When done (or if it fails), show me a summary: what worked, what failed, and why
 5. Propose specific fixes to the prompt — show the before/after diff
+   Common fixes: vague tool references → exact commands, missing --output-json, wrong flag syntax, hardcoded values → [[param]], missing self-improvement step
 6. Ask me if I want to apply the fixes
 7. If yes, edit the .toml file in ~/ProTools_Suite/config/automations/ directly
 8. Run the UPDATED prompt to verify the fix actually works
 9. If new issues appear, repeat from step 4
+10. After all fixes are applied, update ~/ProTools_Suite/config/skills/ptsl-tools/SKILL.md (ONLY the two agent-writable sections at the bottom):
+    - **User Preferences**: if the user stated any preferences during this session, add them
+    - **Agent Learnings**: add dated entries for any errors, workarounds, or discoveries
+    - Do NOT edit Known Limitations, tool references, or anything else — add a learning entry and the developer will fix it
+    - If the prompt was missing a self-improvement step, the fix in step 7 should have added one
 
 If the automation ran successfully with no issues, say so — not every prompt needs fixing.
+Still check if the prompt has a self-improvement step at the end — if missing, suggest adding it.
 """

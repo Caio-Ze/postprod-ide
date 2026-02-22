@@ -6,8 +6,9 @@ prompt = """
 Using the PTSL agent tools, process sessions in {pasta_ativa}.
 IMPORTANT: Only process sessions inside {pasta_ativa}. Do not access or modify anything outside this folder.
 1. List session subfolders and find the highest-version .ptx in each.
-2. For each session: run select-clips on {track} to set the full timeline. Do NOT write scripts — run each tool command directly in Bash.
-3. Bounce to WAV.
+2. For each session, run these commands directly in Bash (no scripts):
+   agent-manage-tracks --session <PTX> --track {track} --output-json select-clips
+   agent-bounce-export --output-json
 4. Sleep 5 seconds before next session. Report progress after each one.
 """
 

@@ -5,8 +5,8 @@ icon = "zap"
 prompt = """
 Using the PTSL agent tools, perform full delivery for {pasta_ativa}:
 1. Verify {session_path} is the open session (use get_session_path)
-2. Select all clips on LOC to set timeline
-3. Bounce to WAV
+2. agent-manage-tracks --session {session_path} --track LOC --output-json select-clips
+3. agent-bounce-export --output-json
 4. Apply audio filter (agent-apply-audio-filter)
 5. Normalize to -23 LUFS (agent-bounce-normalize-tv)
 6. Convert to MP3 (agent-convert-mp3)

@@ -5,7 +5,7 @@ icon = "play"
 prompt = """
 Using the PTSL agent tools on {session_path}:
 1. Verify {session_path} is the open session (use get_session_path)
-2. Run select-clips on TRILHA to set the full timeline
-3. Bounce to WAV format
+2. agent-manage-tracks --session {session_path} --track TRILHA --output-json select-clips
+3. agent-bounce-export --output-json
 4. Report the output file path
 """
