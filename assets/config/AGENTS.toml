@@ -5,8 +5,8 @@
 ## when you click an automation button.
 ##
 ## This file ships with safe defaults (interactive mode).
-## To customize, create AGENTS.user.toml in this same folder.
-## Your overrides are NEVER overwritten by updates.
+## Edit it directly to customize flags, models, or execution mode.
+## It is extracted once on first launch and never overwritten.
 ##
 ## ──────────────────────────────────────────────────────────────────────
 ## HOW IT WORKS
@@ -92,7 +92,7 @@
 id = "claude"
 label = "run with Claude"
 command = "claude"
-flags = "--dangerously-skip-permissions"
+flags = "--dangerously-skip-permissions --model sonnet"
 prompt_flag = ""
 
 [[backend]]

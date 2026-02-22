@@ -4635,6 +4635,7 @@ dependencies = [
 name = "dashboard"
 version = "0.1.0"
 dependencies = [
+ "editor",
  "global-hotkey",
  "gpui",
  "log",

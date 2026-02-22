@@ -1,17 +1,30 @@
 id = "vol-up-all"
 label = "Set Vol All"
-description = "Set LOC volume in the latest version of every session in active folder"
+description = "Set LOC volume in every session in the active folder"
 icon = "audio"
 prompt = """
 Using the PTSL agent tools, process sessions in {pasta_ativa}.
-For each session subfolder, pick only the highest version .ptx file.
-BEFORE processing, ask me what absolute volume (in dB) to set for the LOC track. We cannot check the current volume, so I must tell you the exact value. Ask once, apply to all sessions.
-For each session (latest version only):
-1. Verify it's the open session (use get_session_path), open if not
-2. Set the LOC track volume to the value I specified using agent-track-volume
-3. Select the TRILHA track
-4. Select clips on TRILHA to get the audio timeline size
-5. Bounce to WAV — save in that session's own Bounced Files folder
-6. Wait 5 seconds before next session
-Report progress after each session.
+IMPORTANT: Only process sessions inside {pasta_ativa}. Do not access or modify anything outside this folder.
+1. List session subfolders and find the highest-version .ptx in each.
+2. For each session, run this command directly in Bash (no scripts):
+   agent-track-volume --session <PTX> --track {track} --output-json set --value <DB>
+   For negative dB use equals syntax: --value=-3.0 (not --value -3.0).
+3. Sleep 5 seconds between sessions. Report progress after each one.
+
+volume: {volume}
+If a dB value is set above, use it directly. If empty, ask me before starting.
 """
+
+[[param]]
+key = "volume"
+label = "Volume (dB)"
+placeholder = "+1.0"
+default = "+1.0"
+param_type = "text"
+
+[[param]]
+key = "track"
+label = "Track"
+placeholder = "LOC"
+default = "LOC"
+param_type = "text"

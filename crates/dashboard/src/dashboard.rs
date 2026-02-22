@@ -8,14 +8,15 @@ use gpui::{
     PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription, WeakEntity,
     Window,
 };
+use editor::{Editor, EditorEvent};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
 use ui::{
-    prelude::*, Button, ButtonLike, ButtonStyle, Divider, DividerColor, Headline, HeadlineSize,
-    Icon, IconButton, IconName, IconSize, Label, LabelSize, Modal, ModalFooter, ModalHeader,
-    Section, ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip,
-    WithScrollbar as _,
+    prelude::*, Button, ButtonLike, ButtonStyle, ContextMenu, Divider, DividerColor,
+    DropdownMenu, DropdownStyle, Headline, HeadlineSize, Icon, IconButton, IconName, IconSize,
+    Label, LabelSize, Modal, ModalFooter, ModalHeader, Section, ToggleButtonGroup,
+    ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip, WithScrollbar as _,
 };
 use workspace::{
     item::{Item, ItemEvent},
@@ -137,6 +138,32 @@ enum ToolSource {
     Agent,
 }
 
+#[derive(Deserialize, Serialize, Clone)]
+struct ParamEntry {
+    key: String,
+    label: String,
+    #[serde(default)]
+    placeholder: String,
+    #[serde(default)]
+    default: String,
+    #[serde(default = "default_param_type")]
+    param_type: ParamType,
+    #[serde(default)]
+    options: Vec<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ParamType {
+    Text,
+    Path,
+    Select,
+}
+
+fn default_param_type() -> ParamType {
+    ParamType::Text
+}
+
 #[derive(Deserialize, Clone)]
 struct ToolEntry {
     id: String,
@@ -154,6 +181,8 @@ struct ToolEntry {
     extra_args: Vec<String>,
     #[serde(default)]
     hidden: bool,
+    #[serde(default, rename = "param")]
+    params: Vec<ParamEntry>,
 }
 
 #[derive(Deserialize)]
@@ -181,6 +210,7 @@ fn icon_for_tool(name: &str) -> IconName {
         "minimize" => IconName::Minimize,
         "folder" => IconName::Folder,
         "folder_open" => IconName::FolderOpen,
+        "maximize" => IconName::Maximize,
         _ => IconName::Sparkle,
     }
 }
@@ -220,6 +250,8 @@ struct AutomationEntry {
     prompt: String,
     #[serde(default)]
     hidden: bool,
+    #[serde(default, rename = "param")]
+    params: Vec<ParamEntry>,
 }
 
 fn automations_dir() -> PathBuf {
@@ -868,6 +900,10 @@ fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
                     .find_map(|item| item.downcast::<Dashboard>())
                     .map(|d| {
                         let d = d.read(cx);
+                        let tool_param_values = d.param_values
+                            .get(&tool_id)
+                            .cloned()
+                            .unwrap_or_default();
                         (
                             d.tools.iter().find(|t| t.id == tool_id).cloned(),
                             d.runtime_path.clone(),
@@ -875,10 +911,11 @@ fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
                             d.session_path.clone(),
                             d.pasta_ativa.clone(),
                             d.background_tools.contains(&tool_id),
+                            tool_param_values,
                         )
                     });
 
-                if let Some((Some(tool), runtime_path, agent_tools_path, session_path, pasta_ativa, is_background)) =
+                if let Some((Some(tool), runtime_path, agent_tools_path, session_path, pasta_ativa, is_background, tool_param_values)) =
                     dashboard_data
                 {
                     if is_background {
@@ -888,6 +925,7 @@ fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
                             &agent_tools_path,
                             &session_path,
                             &pasta_ativa,
+                            &tool_param_values,
                             cx,
                         );
                     } else {
@@ -898,6 +936,7 @@ fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
                             &agent_tools_path,
                             &session_path,
                             &pasta_ativa,
+                            &tool_param_values,
                             workspace,
                             window,
                             cx,
@@ -1348,6 +1387,27 @@ fn write_background_tools(set: &HashSet<String>) {
 }
 
 // ---------------------------------------------------------------------------
+// Param values persistence
+// ---------------------------------------------------------------------------
+
+fn param_values_file() -> PathBuf {
+    config_dir().join(".param_values.toml")
+}
+
+fn read_param_values() -> HashMap<String, HashMap<String, String>> {
+    let Ok(content) = std::fs::read_to_string(param_values_file()) else {
+        return HashMap::new();
+    };
+    toml::from_str(&content).unwrap_or_default()
+}
+
+fn write_param_values(values: &HashMap<String, HashMap<String, String>>) {
+    if let Ok(content) = toml::to_string(values) {
+        std::fs::write(param_values_file(), content).log_err();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Binary / runtime resolution
 // ---------------------------------------------------------------------------
 
@@ -1510,6 +1570,11 @@ pub struct Dashboard {
     automations_error: Option<String>,
     // Scroll
     scroll_handle: ScrollHandle,
+    // Param values (inline parameter fields on cards)
+    param_values: HashMap<String, HashMap<String, String>>,
+    param_editors: HashMap<(String, String), Entity<Editor>>,
+    _param_editor_subscriptions: Vec<Subscription>,
+    _param_write_task: Option<gpui::Task<()>>,
 }
 
 impl Dashboard {
@@ -1527,6 +1592,27 @@ impl Dashboard {
         let (tools, tools_error) = load_tools_registry();
         let (backends, _agents_error) = load_agents_config();
         let background_tools = read_background_tools();
+        let mut param_values = read_param_values();
+
+        // Seed defaults for any params not yet persisted
+        for entry in &automations {
+            for param in &entry.params {
+                param_values
+                    .entry(entry.id.clone())
+                    .or_default()
+                    .entry(param.key.clone())
+                    .or_insert_with(|| param.default.clone());
+            }
+        }
+        for entry in &tools {
+            for param in &entry.params {
+                param_values
+                    .entry(entry.id.clone())
+                    .or_default()
+                    .entry(param.key.clone())
+                    .or_insert_with(|| param.default.clone());
+            }
+        }
 
         cx.new(|cx| {
             // Spawn session polling task (every 5 seconds)
@@ -1609,6 +1695,22 @@ impl Dashboard {
                     let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
                         dashboard.automations = merged;
                         dashboard.automations_error = error;
+                        // Seed defaults for new params and clean stale editors
+                        for entry in &dashboard.automations {
+                            for param in &entry.params {
+                                dashboard.param_values
+                                    .entry(entry.id.clone())
+                                    .or_default()
+                                    .entry(param.key.clone())
+                                    .or_insert_with(|| param.default.clone());
+                            }
+                        }
+                        let valid_keys: HashSet<(String, String)> = dashboard.automations.iter()
+                            .flat_map(|a| a.params.iter().map(|p| (a.id.clone(), p.key.clone())))
+                            .chain(dashboard.tools.iter()
+                                .flat_map(|t| t.params.iter().map(|p| (t.id.clone(), p.key.clone()))))
+                            .collect();
+                        dashboard.param_editors.retain(|k, _| valid_keys.contains(k));
                         cx.notify();
                     });
                 }
@@ -1629,6 +1731,16 @@ impl Dashboard {
                     let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
                         dashboard.tools = merged;
                         dashboard.tools_error = error;
+                        // Seed defaults for new tool params
+                        for entry in &dashboard.tools {
+                            for param in &entry.params {
+                                dashboard.param_values
+                                    .entry(entry.id.clone())
+                                    .or_default()
+                                    .entry(param.key.clone())
+                                    .or_insert_with(|| param.default.clone());
+                            }
+                        }
                         cx.notify();
                     });
                 }
@@ -1676,6 +1788,10 @@ impl Dashboard {
                 tools_error,
                 automations_error,
                 scroll_handle: ScrollHandle::new(),
+                param_values,
+                param_editors: HashMap::new(),
+                _param_editor_subscriptions: Vec::new(),
+                _param_write_task: None,
             }
         })
     }
@@ -1686,6 +1802,7 @@ impl Dashboard {
         agent_tools_path: &Path,
         session_path: &Option<String>,
         pasta_ativa: &Option<PathBuf>,
+        tool_param_values: &HashMap<String, String>,
     ) -> (String, Vec<String>, PathBuf, HashMap<String, String>) {
         let is_agent_tool = tool.source == ToolSource::Agent;
 
@@ -1725,6 +1842,15 @@ impl Dashboard {
 
         args.extend(tool.extra_args.iter().cloned());
 
+        for param in &tool.params {
+            if let Some(value) = tool_param_values.get(&param.key) {
+                if !value.is_empty() {
+                    args.push(format!("--{}", param.key));
+                    args.push(value.clone());
+                }
+            }
+        }
+
         let mut env = HashMap::new();
         let ffmpeg_candidate = runtime_path.join("tools/ffmpeg");
         if ffmpeg_candidate.exists() {
@@ -1743,12 +1869,13 @@ impl Dashboard {
         agent_tools_path: &Path,
         session_path: &Option<String>,
         pasta_ativa: &Option<PathBuf>,
+        tool_param_values: &HashMap<String, String>,
         workspace: &mut Workspace,
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
         let (command, args, cwd, env) =
-            Self::resolve_tool_command(tool, runtime_path, agent_tools_path, session_path, pasta_ativa);
+            Self::resolve_tool_command(tool, runtime_path, agent_tools_path, session_path, pasta_ativa, tool_param_values);
 
         let mut spawn = SpawnInTerminal {
             id: TaskId(format!("dashboard-{}", tool.id)),
@@ -1779,10 +1906,11 @@ impl Dashboard {
         agent_tools_path: &Path,
         session_path: &Option<String>,
         pasta_ativa: &Option<PathBuf>,
+        tool_param_values: &HashMap<String, String>,
         cx: &mut Context<Workspace>,
     ) {
         let (command, args, cwd, env) =
-            Self::resolve_tool_command(tool, runtime_path, agent_tools_path, session_path, pasta_ativa);
+            Self::resolve_tool_command(tool, runtime_path, agent_tools_path, session_path, pasta_ativa, tool_param_values);
         let tool_label = tool.label.clone();
 
         cx.spawn(async move |_this: WeakEntity<Workspace>, cx: &mut AsyncApp| {
@@ -1848,11 +1976,18 @@ impl Dashboard {
             prompt.replace("{session_path}", "<no session open>")
         };
 
-        let resolved_prompt = if let Some(pa) = &self.pasta_ativa {
+        let mut resolved_prompt = if let Some(pa) = &self.pasta_ativa {
             resolved_prompt.replace("{pasta_ativa}", &pa.to_string_lossy())
         } else {
             resolved_prompt.replace("{pasta_ativa}", "<no active folder selected>")
         };
+
+        // Interpolate [[param]] values
+        if let Some(values) = self.param_values.get(entry_id) {
+            for (key, value) in values {
+                resolved_prompt = resolved_prompt.replace(&format!("{{{key}}}"), value);
+            }
+        }
 
         // Collapse multi-line prompts into a single line to avoid
         // `zsh: parse error near '\n'` when spawning `claude -p "..."`.
@@ -1943,6 +2078,67 @@ impl Dashboard {
                 move |window, cx| GlobalShortcutModal::new(tool_id, tool_label, window, cx)
             });
         });
+    }
+
+    // -- Param editor helpers --
+
+    fn ensure_param_editor(
+        &mut self,
+        entry_id: &str,
+        param: &ParamEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<Editor> {
+        let key = (entry_id.to_string(), param.key.clone());
+        if let Some(editor) = self.param_editors.get(&key) {
+            return editor.clone();
+        }
+
+        let initial_value = self
+            .param_values
+            .get(entry_id)
+            .and_then(|m| m.get(&param.key))
+            .cloned()
+            .unwrap_or_default();
+
+        let editor = cx.new(|cx| {
+            let mut ed = Editor::single_line(window, cx);
+            if !param.placeholder.is_empty() {
+                ed.set_placeholder_text(&param.placeholder, window, cx);
+            }
+            if !initial_value.is_empty() {
+                ed.set_text(initial_value, window, cx);
+            }
+            ed
+        });
+
+        let entry_id_for_sub = entry_id.to_string();
+        let param_key_for_sub = param.key.clone();
+        let subscription = cx.subscribe(&editor, move |this: &mut Dashboard, editor, event, cx| {
+            if let EditorEvent::BufferEdited = event {
+                let text = editor.read(cx).text(cx);
+                this.param_values
+                    .entry(entry_id_for_sub.clone())
+                    .or_default()
+                    .insert(param_key_for_sub.clone(), text);
+                this.schedule_param_write(cx);
+            }
+        });
+
+        self._param_editor_subscriptions.push(subscription);
+        self.param_editors.insert(key, editor.clone());
+        editor
+    }
+
+    fn schedule_param_write(&mut self, cx: &mut Context<Self>) {
+        self._param_write_task = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            let _ = this.update(cx, |this, _cx| {
+                write_param_values(&this.param_values);
+            });
+        }));
     }
 
     // -- Rendering helpers --
@@ -2185,11 +2381,15 @@ impl Dashboard {
                 let workspace = self.workspace.clone();
                 let session_path = self.session_path.clone();
                 let pasta_ativa = self.pasta_ativa.clone();
+                let tool_param_values = self.param_values
+                    .get(&tool_id)
+                    .cloned()
+                    .unwrap_or_default();
 
                 ButtonLike::new(format!("dashboard-btn-{}", tool_id))
                     .full_width()
                     .size(button_size)
-                                        .child(
+                    .child(
                         h_flex()
                             .w_full()
                             .gap_2()
@@ -2272,6 +2472,7 @@ impl Dashboard {
                         let agent_tools_path = agent_tools_path.clone();
                         let pasta_ativa = pasta_ativa.clone();
                         let session_path = session_path.clone();
+                        let tool_param_values = tool_param_values.clone();
                         if is_background {
                             let _ = workspace.update(cx, |_workspace, cx| {
                                 Self::spawn_tool_background(
@@ -2280,6 +2481,7 @@ impl Dashboard {
                                     &agent_tools_path,
                                     &session_path,
                                     &pasta_ativa,
+                                    &tool_param_values,
                                     cx,
                                 );
                             });
@@ -2291,6 +2493,7 @@ impl Dashboard {
                                     &agent_tools_path,
                                     &session_path,
                                     &pasta_ativa,
+                                    &tool_param_values,
                                     workspace,
                                     window,
                                     cx,
@@ -2360,6 +2563,10 @@ impl Dashboard {
                 let workspace = self.workspace.clone();
                 let session_path = self.session_path.clone();
                 let pasta_ativa = self.pasta_ativa.clone();
+                let tool_param_values = self.param_values
+                    .get(&tool_id)
+                    .cloned()
+                    .unwrap_or_default();
 
                 ButtonLike::new(format!("dashboard-btn-{}", tool_id))
                     .width(gpui::DefiniteLength::Fraction(0.48))
@@ -2443,6 +2650,7 @@ impl Dashboard {
                         let agent_tools_path = agent_tools_path.clone();
                         let pasta_ativa = pasta_ativa.clone();
                         let session_path = session_path.clone();
+                        let tool_param_values = tool_param_values.clone();
                         if is_background {
                             let _ = workspace.update(cx, |_workspace, cx| {
                                 Self::spawn_tool_background(
@@ -2451,6 +2659,7 @@ impl Dashboard {
                                     &agent_tools_path,
                                     &session_path,
                                     &pasta_ativa,
+                                    &tool_param_values,
                                     cx,
                                 );
                             });
@@ -2462,6 +2671,7 @@ impl Dashboard {
                                     &agent_tools_path,
                                     &session_path,
                                     &pasta_ativa,
+                                    &tool_param_values,
                                     workspace,
                                     window,
                                     cx,
@@ -2486,12 +2696,14 @@ impl Dashboard {
     }
 
     fn render_automation_card(
+        &mut self,
         entry: &AutomationEntry,
         idx: usize,
         icon_color: Color,
         badge_label: &SharedString,
         badge_color: Color,
-        entity: &WeakEntity<Dashboard>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let icon = icon_for_automation(&entry.icon);
         let entry_id = entry.id.clone();
@@ -2499,6 +2711,9 @@ impl Dashboard {
         let entry_description: SharedString = entry.description.clone().into();
         let entry_prompt = entry.prompt.clone();
         let badge_label = badge_label.clone();
+        let has_params = !entry.params.is_empty();
+
+        let entity = cx.entity().downgrade();
 
         let click_entity = entity.clone();
         let click_id = entry_id.clone();
@@ -2508,82 +2723,297 @@ impl Dashboard {
         let edit_entity = entity.clone();
         let edit_id = entry_id.clone();
 
-        h_flex()
-            .w_full()
-            .gap_1()
-            .items_center()
-            .child(
-                div().flex_1().child(
-                    ButtonLike::new(format!("automation-btn-{}-{}", entry_id, idx))
-                        .full_width()
-                        .size(ButtonSize::Large)
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .child(
-                                    Icon::new(icon)
-                                        .color(icon_color)
-                                        .size(IconSize::Small),
+        // Build param field elements
+        let param_fields: Vec<gpui::AnyElement> = entry
+            .params
+            .iter()
+            .map(|param| {
+                let label_el = Label::new(format!("{}:", param.label))
+                    .color(Color::Muted)
+                    .size(LabelSize::XSmall);
+
+                match param.param_type {
+                    ParamType::Text => {
+                        let editor =
+                            self.ensure_param_editor(&entry.id, param, window, cx);
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(label_el)
+                            .child(
+                                div()
+                                    .w(px(120.))
+                                    .border_1()
+                                    .border_color(cx.theme().colors().border)
+                                    .rounded_sm()
+                                    .px_1()
+                                    .py(px(-2.))
+                                    .child(editor),
+                            )
+                            .into_any_element()
+                    }
+                    ParamType::Path => {
+                        let current_value = self
+                            .param_values
+                            .get(&entry.id)
+                            .and_then(|m| m.get(&param.key))
+                            .cloned()
+                            .unwrap_or_default();
+                        let display_text: SharedString = if current_value.is_empty() {
+                            param.placeholder.clone().into()
+                        } else {
+                            std::path::Path::new(&current_value)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_else(|| current_value.clone())
+                                .into()
+                        };
+                        let full_path_tooltip = if current_value.is_empty() {
+                            param.placeholder.clone()
+                        } else {
+                            current_value
+                        };
+                        let path_entity = entity.clone();
+                        let path_entry_id = entry.id.clone();
+                        let path_param_key = param.key.clone();
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(label_el)
+                            .child(
+                                Label::new(display_text)
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Muted),
+                            )
+                            .child(
+                                IconButton::new(
+                                    SharedString::from(format!(
+                                        "param-path-{}-{}",
+                                        entry.id, param.key
+                                    )),
+                                    IconName::Folder,
                                 )
+                                .icon_size(IconSize::XSmall)
+                                .icon_color(Color::Muted)
+                                .tooltip(Tooltip::text(full_path_tooltip))
+                                .on_click(move |_, _window, cx| {
+                                    let entity = path_entity.clone();
+                                    let entry_id = path_entry_id.clone();
+                                    let param_key = path_param_key.clone();
+                                    let _ = entity.update(cx, |_this, cx| {
+                                        let receiver =
+                                            cx.prompt_for_paths(PathPromptOptions {
+                                                files: false,
+                                                directories: true,
+                                                multiple: false,
+                                                prompt: None,
+                                            });
+                                        let entity = cx.entity().downgrade();
+                                        cx.spawn(async move |_this, cx| {
+                                            if let Ok(Ok(Some(paths))) = receiver.await
+                                            {
+                                                if let Some(path) =
+                                                    paths.into_iter().next()
+                                                {
+                                                    let path_str =
+                                                        path.to_string_lossy()
+                                                            .to_string();
+                                                    let _ = entity.update(
+                                                        cx,
+                                                        |this: &mut Dashboard, cx| {
+                                                            this.param_values
+                                                                .entry(
+                                                                    entry_id.clone(),
+                                                                )
+                                                                .or_default()
+                                                                .insert(
+                                                                    param_key.clone(),
+                                                                    path_str,
+                                                                );
+                                                            write_param_values(
+                                                                &this.param_values,
+                                                            );
+                                                            cx.notify();
+                                                        },
+                                                    );
+                                                }
+                                            }
+                                        })
+                                        .detach();
+                                    });
+                                }),
+                            )
+                            .into_any_element()
+                    }
+                    ParamType::Select => {
+                        let current_value = self
+                            .param_values
+                            .get(&entry.id)
+                            .and_then(|m| m.get(&param.key))
+                            .cloned()
+                            .unwrap_or_else(|| param.default.clone());
+                        let display_label: SharedString = if current_value.is_empty() {
+                            "Select...".into()
+                        } else {
+                            current_value.clone().into()
+                        };
+                        let select_entity = entity.clone();
+                        let select_entry_id = entry.id.clone();
+                        let select_param_key = param.key.clone();
+                        let menu = ContextMenu::build(window, cx, {
+                            let entry_id = select_entry_id.clone();
+                            let param_key = select_param_key.clone();
+                            let entity = select_entity.clone();
+                            let options = param.options.clone();
+                            move |mut menu: ContextMenu,
+                                  _window: &mut Window,
+                                  _cx: &mut Context<ContextMenu>| {
+                                for option in &options {
+                                    let value = option.clone();
+                                    let entity = entity.clone();
+                                    let entry_id = entry_id.clone();
+                                    let param_key = param_key.clone();
+                                    menu = menu.entry(
+                                        option.clone(),
+                                        None,
+                                        move |_window, cx: &mut App| {
+                                            let _ =
+                                                entity.update(cx, |this: &mut Dashboard, cx| {
+                                                    this.param_values
+                                                        .entry(entry_id.clone())
+                                                        .or_default()
+                                                        .insert(
+                                                            param_key.clone(),
+                                                            value.clone(),
+                                                        );
+                                                    write_param_values(&this.param_values);
+                                                    cx.notify();
+                                                });
+                                        },
+                                    );
+                                }
+                                menu
+                            }
+                        });
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(label_el)
+                            .child(
+                                DropdownMenu::new(
+                                    SharedString::from(format!(
+                                        "param-select-{}-{}",
+                                        entry.id, param.key
+                                    )),
+                                    display_label,
+                                    menu,
+                                )
+                                .trigger_size(ButtonSize::None)
+                                .style(DropdownStyle::Outlined),
+                            )
+                            .into_any_element()
+                    }
+                }
+            })
+            .collect();
+
+        let card = v_flex()
+            .w_full()
+            .child(
+                h_flex()
+                    .w_full()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div().flex_1().child(
+                            ButtonLike::new(format!("automation-btn-{}-{}", entry_id, idx))
+                                .full_width()
+                                .size(ButtonSize::Large)
                                 .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .items_start()
-                                        .child(Label::new(entry_label))
+                                    h_flex()
+                                        .w_full()
+                                        .gap_2()
                                         .child(
-                                            Label::new(entry_description)
-                                                .color(Color::Muted)
+                                            Icon::new(icon)
+                                                .color(icon_color)
+                                                .size(IconSize::Small),
+                                        )
+                                        .child(
+                                            v_flex()
+                                                .flex_1()
+                                                .items_start()
+                                                .child(Label::new(entry_label))
+                                                .child(
+                                                    Label::new(entry_description)
+                                                        .color(Color::Muted)
+                                                        .size(LabelSize::XSmall),
+                                                ),
+                                        )
+                                        .child(
+                                            Label::new(badge_label)
+                                                .color(badge_color)
                                                 .size(LabelSize::XSmall),
                                         ),
                                 )
-                                .child(
-                                    Label::new(badge_label)
-                                        .color(badge_color)
-                                        .size(LabelSize::XSmall),
-                                ),
-                        )
-                        .on_click(move |_, window, cx| {
-                            let _ = click_entity.update(cx, |this, cx| {
-                                this.run_automation(
-                                    &click_id,
-                                    &click_label,
-                                    &click_prompt,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        }),
-                ),
-            )
-            .child(
-                IconButton::new(format!("edit-automation-{}", edit_id), IconName::FileToml)
-                    .icon_size(IconSize::Small)
-                    .icon_color(Color::Muted)
-                    .tooltip(Tooltip::text("Edit"))
-                    .on_click(move |_, window, cx| {
-                        let _ = edit_entity.update(cx, |this, cx| {
-                            let path = automations_dir().join(format!("{}.toml", edit_id));
-                            let workspace = this.workspace.clone();
-                            cx.spawn_in(window, async move |_this, cx| {
-                                let _ = workspace.update_in(cx, |workspace, window, cx| {
-                                    workspace
-                                        .open_abs_path(
-                                            path,
-                                            OpenOptions::default(),
+                                .on_click(move |_, window, cx| {
+                                    let _ = click_entity.update(cx, |this, cx| {
+                                        this.run_automation(
+                                            &click_id,
+                                            &click_label,
+                                            &click_prompt,
                                             window,
                                             cx,
-                                        )
-                                        .detach();
+                                        );
+                                    });
+                                }),
+                        ),
+                    )
+                    .child(
+                        IconButton::new(format!("edit-automation-{}", edit_id), IconName::FileToml)
+                            .icon_size(IconSize::Small)
+                            .icon_color(Color::Muted)
+                            .tooltip(Tooltip::text("Edit"))
+                            .on_click(move |_, window, cx| {
+                                let _ = edit_entity.update(cx, |this, cx| {
+                                    let path = automations_dir().join(format!("{}.toml", edit_id));
+                                    let workspace = this.workspace.clone();
+                                    cx.spawn_in(window, async move |_this, cx| {
+                                        let _ =
+                                            workspace.update_in(cx, |workspace, window, cx| {
+                                                workspace
+                                                    .open_abs_path(
+                                                        path,
+                                                        OpenOptions::default(),
+                                                        window,
+                                                        cx,
+                                                    )
+                                                    .detach();
+                                            });
+                                    })
+                                    .detach();
                                 });
-                            })
-                            .detach();
-                        });
-                    }),
+                            }),
+                    ),
             )
+            .when(has_params, |el| {
+                el.child(
+                    h_flex()
+                        .w_full()
+                        .pl_8()
+                        .gap_2()
+                        .flex_wrap()
+                        .children(param_fields),
+                )
+            });
+
+        card
     }
 
-    fn render_automations_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_automations_section(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let all: Vec<AutomationEntry> =
             self.automations.iter().filter(|a| !a.hidden).cloned().collect();
         let meta: Vec<_> = all.iter().filter(|a| a.id.starts_with('_')).cloned().collect();
@@ -2592,8 +3022,45 @@ impl Dashboard {
         let badge_label = backend.badge_label(&self.backends);
         let badge_color = backend.badge_color();
         let has_both = !meta.is_empty() && !regular.is_empty();
+        let is_empty = all.is_empty();
+        let automations_error = self.automations_error.clone();
 
         let entity = cx.entity().downgrade();
+
+        // Pre-build cards (requires &mut self for param editors)
+        let meta_cards: Vec<_> = meta
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                self.render_automation_card(
+                    entry,
+                    idx,
+                    Color::Muted,
+                    &badge_label,
+                    badge_color,
+                    window,
+                    cx,
+                )
+                .into_any_element()
+            })
+            .collect();
+
+        let regular_cards: Vec<_> = regular
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                self.render_automation_card(
+                    entry,
+                    idx + meta.len(),
+                    Color::Accent,
+                    &badge_label,
+                    badge_color,
+                    window,
+                    cx,
+                )
+                .into_any_element()
+            })
+            .collect();
 
         v_flex()
             .w_full()
@@ -2643,14 +3110,14 @@ impl Dashboard {
                         .auto_width()
                     }),
             )
-            .when_some(self.automations_error.as_ref(), |el, err| {
+            .when_some(automations_error, |el, err| {
                 el.child(
                     Label::new(format!("Parse error: {}", err))
                         .color(Color::Error)
                         .size(LabelSize::XSmall),
                 )
             })
-            .when(all.is_empty(), |el| {
+            .when(is_empty, |el| {
                 el.child(
                     h_flex()
                         .px_2()
@@ -2661,16 +3128,7 @@ impl Dashboard {
                         ),
                 )
             })
-            .children(meta.iter().enumerate().map(|(idx, entry)| {
-                Self::render_automation_card(
-                    entry,
-                    idx,
-                    Color::Muted,
-                    &badge_label,
-                    badge_color,
-                    &entity,
-                )
-            }))
+            .children(meta_cards)
             .when(has_both, |el| {
                 el.child(
                     div()
@@ -2678,16 +3136,7 @@ impl Dashboard {
                         .child(Divider::horizontal().color(DividerColor::BorderVariant)),
                 )
             })
-            .children(regular.iter().enumerate().map(|(idx, entry)| {
-                Self::render_automation_card(
-                    entry,
-                    idx + meta.len(),
-                    Color::Accent,
-                    &badge_label,
-                    badge_color,
-                    &entity,
-                )
-            }))
+            .children(regular_cards)
     }
 
     fn render_ai_agents_section(&self, _cx: &mut Context<Self>) -> impl IntoElement {
@@ -2785,6 +3234,10 @@ impl Render for Dashboard {
                     let agent_tools_path = this.agent_tools_path.clone();
                     let session_path = this.session_path.clone();
                     let pasta_ativa = this.pasta_ativa.clone();
+                    let tool_param_values = this.param_values
+                        .get(&action.tool_id)
+                        .cloned()
+                        .unwrap_or_default();
                     if is_background {
                         let _ = this.workspace.update(cx, |_workspace, cx| {
                             Self::spawn_tool_background(
@@ -2793,6 +3246,7 @@ impl Render for Dashboard {
                                 &agent_tools_path,
                                 &session_path,
                                 &pasta_ativa,
+                                &tool_param_values,
                                 cx,
                             );
                         });
@@ -2804,6 +3258,7 @@ impl Render for Dashboard {
                                 &agent_tools_path,
                                 &session_path,
                                 &pasta_ativa,
+                                &tool_param_values,
                                 workspace,
                                 window,
                                 cx,
@@ -2906,7 +3361,7 @@ impl Render for Dashboard {
                             // AI Agents
                             .child(self.render_ai_agents_section(cx))
                             // Automations
-                            .child(self.render_automations_section(cx))
+                            .child(self.render_automations_section(window, cx))
                             // Delivery status
                             .child(self.render_delivery_status(cx)),
                     )

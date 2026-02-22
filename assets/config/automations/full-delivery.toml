@@ -3,7 +3,7 @@ label = "Full Delivery"
 description = "Bounce, normalize, MP3, organize to Finalizados"
 icon = "zap"
 prompt = """
-Using the PTSL agent tools, perform full delivery for {session_path}:
+Using the PTSL agent tools, perform full delivery for {pasta_ativa}:
 1. Verify {session_path} is the open session (use get_session_path)
 2. Select all clips on LOC to set timeline
 3. Bounce to WAV

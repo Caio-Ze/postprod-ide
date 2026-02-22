@@ -1,15 +1,19 @@
 id = "batch-process"
 label = "Batch Process Sessions"
-description = "Import, solo, bounce all sessions in active folder"
+description = "Bounce all sessions in the active folder"
 icon = "zap"
 prompt = """
-Using the PTSL agent tools, process all .ptx sessions in {pasta_ativa}.
-For each session subfolder, pick only the highest version .ptx file.
-For each session:
-1. Verify it's the open session (use get_session_path), open if not
-2. List tracks and verify state
-3. Select all clips on LOC to set timeline
-4. Bounce to WAV
-5. Wait 5 seconds before next session
-Report progress after each session.
+Using the PTSL agent tools, process sessions in {pasta_ativa}.
+IMPORTANT: Only process sessions inside {pasta_ativa}. Do not access or modify anything outside this folder.
+1. List session subfolders and find the highest-version .ptx in each.
+2. For each session: run select-clips on {track} to set the full timeline. Do NOT write scripts — run each tool command directly in Bash.
+3. Bounce to WAV.
+4. Sleep 5 seconds before next session. Report progress after each one.
 """
+
+[[param]]
+key = "track"
+label = "Track"
+placeholder = "TRILHA"
+default = "TRILHA"
+param_type = "text"

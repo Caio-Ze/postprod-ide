@@ -1,0 +1,15 @@
+id = "_test-path-param"
+label = "Test Path Param"
+description = "Test automation to verify param_type path rendering"
+icon = "folder"
+prompt = """
+This is a test automation. The selected folder is: {test_folder}
+List the contents of {test_folder} and report what you find.
+"""
+
+[[param]]
+key = "test_folder"
+label = "Folder"
+placeholder = "/Users/..."
+default = ""
+param_type = "path"

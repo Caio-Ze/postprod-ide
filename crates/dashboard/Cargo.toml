@@ -12,6 +12,7 @@ workspace = true
 path = "src/dashboard.rs"
 
 [dependencies]
+editor.workspace = true
 global-hotkey.workspace = true
 gpui.workspace = true
 log.workspace = true

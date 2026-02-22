@@ -1,0 +1,12 @@
+id = "rename-sessions"
+label = "Rename Sessions"
+description = "Rename session folders and .ptx files using a user-described pattern"
+icon = "replace"
+prompt = """
+Process session folders in {pasta_ativa}.
+1. Check if any session from this folder is open in Pro Tools (use get_session_path). If so, note it to skip later.
+2. Show the active folder full path and list all session subfolder names. Ask the user to describe the rename they want (e.g. "remove the first 5 numbers", "replace X with Y").
+3. Apply the rule to generate new names. Show a before → after preview with full paths for every folder and .ptx file that will change. Make clear which folder is being modified.
+4. Ask for confirmation. Once confirmed, rename folders and matching .ptx files (preserve _V suffixes, skip files that don't match the folder name pattern).
+5. Print a final summary of everything renamed.
+"""

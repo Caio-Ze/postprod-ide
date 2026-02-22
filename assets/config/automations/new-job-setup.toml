@@ -1,0 +1,13 @@
+id = "new-job-setup"
+label = "New Job Setup"
+description = "Create job folder from template, move staged audio, create tracks, import and spot to timeline 0"
+icon = "sparkle"
+prompt = """
+Using the PTSL agent tools, set up a new job from template. All paths are fixed — do not ask the user anything.
+1. Read the job name: find the single subfolder inside ~/ProTools_Suite/3_Template/_JOB TEMPLATE/SESSOES/ — that name is the job name.
+2. Copy ~/ProTools_Suite/3_Template/_JOB TEMPLATE/ (with trailing slash) to ~/ProTools_Suite/1_Sessões/[job name]/ using cp -r. Remove all Session File Backups/ subfolders and WaveCache.wfm files from the copy. Keep all audio files in SESSOES/[job name]/Audio Files/ intact — the session references them and Pro Tools needs them to open cleanly.
+3. List all files in ~/ProTools_Suite/3_Template/PUT_THE_AUDIOS_TO_IMPORT/ — skip hidden files (starting with dot) and files with " copy" in the name. Group remaining files by base name (strip leading job prefix digits_word_digits and strip _Vdigits and everything after from the stem). Keep only the highest _V version per group. Move winners to ~/ProTools_Suite/1_Sessões/[job name]/SESSOES/[job name]/Audio Files/. If none remain, warn and stop.
+4. For each moved file: check its channel count with ffprobe. Derive a simplified track name (strip leading job prefix and strip _Vdigits and everything after, remove extension). If mono (1ch): use agent-manage-tracks create-mono. If stereo (2ch): use agent-manage-tracks create.
+5. Open the session using agent-manage-tracks markers (this leaves it open). For each file: run agent-import-audio to get the initial clip_id, then run agent-get-clip-list to find the actual clip(s) by filename. If mono: spot with a single clip_id. If stereo: find .L and .R clip IDs and pass both to agent-spot-clip. Spot all at --position 0.
+6. Verify with agent-manage-tracks list. Report the new session path and a summary of tracks created, files imported, and positions spotted.
+"""

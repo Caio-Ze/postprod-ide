@@ -15,9 +15,7 @@
 ##   needs_session — true if the tool needs --session <path> argument
 
 # ═══════════════════════════════════════════════════════════════════════════
-# FEATURED — The two master launchers that call all other runtime tools
-# Session Monitor and Batch Processing contain and orchestrate the executables
-# inside their respective folders.
+# FEATURED — Large hero buttons (master launchers and key workflows)
 # ═══════════════════════════════════════════════════════════════════════════
 
 [[tool]]
@@ -38,6 +36,28 @@ description = "Interactive batch launcher — calls all tools in bin/Pro_Tools_B
 icon = "play_filled"
 binary = "start-scripts-pro-tools-batch-processing"
 cwd = "bin/Pro_Tools_Batch_Processing_Runtime"
+source = "runtime"
+tier = "featured"
+needs_session = false
+
+[[tool]]
+id = "importSfx"
+label = "Import SFX (Gemini)"
+description = "Import SFX folders with Gemini AI integration"
+icon = "sparkle"
+binary = "sfx_workflow_v3_json"
+cwd = "bin/SFX_Workflow_Runtime"
+source = "runtime"
+tier = "featured"
+needs_session = false
+
+[[tool]]
+id = "tvToSpotWorkflow"
+label = "TV -> SPOT Workflow"
+description = "Full TV to SPOT session conversion pipeline"
+icon = "forward_arrow"
+binary = "from-tv-to-spot-workflow"
+cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
 source = "runtime"
 tier = "featured"
 needs_session = false
@@ -69,34 +89,12 @@ tier = "standard"
 needs_session = false
 
 [[tool]]
-id = "importSfx"
-label = "Import SFX (Gemini)"
-description = "Import SFX folders with Gemini AI integration"
-icon = "sparkle"
-binary = "sfx_workflow_v3_json"
-cwd = "bin/SFX_Workflow_Runtime"
-source = "runtime"
-tier = "standard"
-needs_session = false
-
-[[tool]]
 id = "voiceToText"
 label = "Voice to Text Compare"
 description = "Voice transcription vs script comparison"
 icon = "mic"
 binary = "RUST_VOICE_TO_TEXT_CLI"
 cwd = "bin/Session_Monitor/bin"
-source = "runtime"
-tier = "standard"
-needs_session = false
-
-[[tool]]
-id = "tvToSpotWorkflow"
-label = "TV -> SPOT Workflow"
-description = "Full TV to SPOT session conversion pipeline"
-icon = "forward_arrow"
-binary = "from-tv-to-spot-workflow"
-cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
 source = "runtime"
 tier = "standard"
 needs_session = false
@@ -113,45 +111,12 @@ tier = "standard"
 needs_session = false
 
 [[tool]]
-id = "normalizeAudio"
-label = "Normalize Audio (EBU R128)"
-description = "EBU R128 loudness normalization"
-icon = "audio_on"
-binary = "audio-normalizer-configurable"
-cwd = "bin/Bounce/bin"
-source = "runtime"
-tier = "standard"
-needs_session = false
-
-[[tool]]
-id = "maximizeAudio"
-label = "Maximize Audio Peaks"
-description = "Peak normalization to 0dBFS"
-icon = "arrow_up_right"
-binary = "audio-normalizer-maximize"
-cwd = "tools"
-source = "runtime"
-tier = "standard"
-needs_session = false
-
-[[tool]]
 id = "convertMp3Wav"
 label = "Convert MP3 / WAV"
 description = "Batch MP3/WAV conversion at 320kbps"
 icon = "replace"
 binary = "wav_mp3_fix_rust"
 cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
-source = "runtime"
-tier = "standard"
-needs_session = false
-
-[[tool]]
-id = "tvConverter"
-label = "TV Converter (_TV/_NET)"
-description = "LUFS normalization with _TV/_NET naming"
-icon = "audio_on"
-binary = "tv_converter"
-cwd = "bin/Bounce/bin"
 source = "runtime"
 tier = "standard"
 needs_session = false
@@ -179,11 +144,55 @@ tier = "standard"
 needs_session = false
 
 [[tool]]
-id = "tvToSpotRename"
-label = "TV -> SPOT Rename"
-description = "Rename WAV files (strip prefix/version)"
-icon = "file_rust"
-binary = "tv_to_spot_rename"
+id = "editFullscreen"
+label = "Edit Fullscreen"
+description = "Toggle Pro Tools Edit window fullscreen"
+icon = "maximize"
+binary = "pt_edit_fullscreen"
+cwd = "bin/Session_Monitor/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "copyPtxCrf"
+label = "Copy PTX → CRF"
+description = "Copy Pro Tools session files to CRF folder"
+icon = "folder"
+binary = "COPY_PTX_CRF_.sh"
+cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "extractAudioFromVideo"
+label = "Extract Audio from Video"
+description = "Extract audio track from video files"
+icon = "audio_on"
+binary = "EXTRAIR_AUDIO_DO_VIDEO.sh"
+cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "lufsToZeroNet"
+label = "-23 → 0 dB + NET"
+description = "Normalize -23 LUFS to 0 dB peak with _NET naming"
+icon = "audio_on"
+binary = "-23-to-0-plus_NET_rust"
+cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
+source = "runtime"
+tier = "standard"
+needs_session = false
+
+[[tool]]
+id = "tvToSpotsCrf"
+label = "TV → SPOTS CRF"
+description = "Convert TV sessions to SPOTS with CRF structure"
+icon = "forward_arrow"
+binary = "TV_TO_SPOTS_CRF"
 cwd = "bin/Pro_Tools_Batch_Processing_Runtime/bin"
 source = "runtime"
 tier = "standard"
