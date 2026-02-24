@@ -3,8 +3,8 @@ use global_hotkey::{
     GlobalHotKeyEvent, GlobalHotKeyManager as NativeHotKeyManager,
 };
 use gpui::{
-    actions, Action, App, AsyncApp, ClipboardItem, Context, DismissEvent, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, Keystroke, KeystrokeEvent, ParentElement,
+    actions, Action, App, AsyncApp, ClipboardItem, Context, Corner, DismissEvent, Entity,
+    EventEmitter, FocusHandle, Focusable, IntoElement, Keystroke, KeystrokeEvent, ParentElement,
     PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription, WeakEntity,
     Window,
 };
@@ -15,7 +15,7 @@ use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
 use ui::{
     prelude::*, Button, ButtonLike, ButtonStyle, Callout, ContextMenu, Disclosure, Divider,
     DividerColor, DropdownMenu, DropdownStyle, Headline, HeadlineSize, Icon, IconButton,
-    IconName, IconSize, Label, LabelSize, Modal, ModalFooter, ModalHeader, Section,
+    IconName, IconSize, Label, LabelSize, Modal, ModalFooter, ModalHeader, PopoverMenu, Section,
     ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip, WithScrollbar as _,
 };
 use workspace::{
@@ -1397,6 +1397,58 @@ fn add_to_recentes(path: &Path) {
 }
 
 // ---------------------------------------------------------------------------
+// Pasta destino helpers
+// ---------------------------------------------------------------------------
+
+fn pasta_destino_file() -> PathBuf {
+    suite_root().join(".pasta_destino")
+}
+
+fn pastas_destino_recentes_file() -> PathBuf {
+    suite_root().join(".pastas_destino_recentes")
+}
+
+fn read_pasta_destino() -> Option<PathBuf> {
+    std::fs::read_to_string(pasta_destino_file())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+}
+
+fn read_pastas_destino_recentes() -> Vec<PathBuf> {
+    let Ok(content) = std::fs::read_to_string(pastas_destino_recentes_file()) else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
+        .take(10)
+        .collect()
+}
+
+fn write_pasta_destino(path: &Path) {
+    let _ = std::fs::write(pasta_destino_file(), path.to_string_lossy().as_bytes());
+    add_to_destino_recentes(path);
+}
+
+fn add_to_destino_recentes(path: &Path) {
+    let mut recentes = read_pastas_destino_recentes();
+    recentes.retain(|p| p != path);
+    recentes.insert(0, path.to_path_buf());
+    recentes.truncate(10);
+    let content = recentes
+        .iter()
+        .map(|p| p.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(pastas_destino_recentes_file(), content).log_err();
+}
+
+// ---------------------------------------------------------------------------
 // Background tools persistence
 // ---------------------------------------------------------------------------
 
@@ -1615,6 +1667,9 @@ pub struct Dashboard {
     // Pasta ativa
     pasta_ativa: Option<PathBuf>,
     pastas_recentes: Vec<PathBuf>,
+    // Pasta destino
+    pasta_destino: Option<PathBuf>,
+    pastas_destino_recentes: Vec<PathBuf>,
     // Delivery status
     delivery_status: DeliveryStatus,
     _delivery_scan_task: gpui::Task<()>,
@@ -1653,6 +1708,8 @@ impl Dashboard {
 
         let pasta_ativa = read_pasta_ativa();
         let pastas_recentes = read_pastas_recentes();
+        let pasta_destino = read_pasta_destino();
+        let pastas_destino_recentes = read_pastas_destino_recentes();
         let (automations, automations_error) = load_automations_registry();
         let (tools, tools_error) = load_tools_registry();
         let (backends, agent_launchers, _agents_error) = load_agents_config();
@@ -1843,6 +1900,8 @@ impl Dashboard {
                 _session_poll_task: session_poll_task,
                 pasta_ativa,
                 pastas_recentes,
+                pasta_destino,
+                pastas_destino_recentes,
                 delivery_status: DeliveryStatus::default(),
                 _delivery_scan_task: delivery_scan_task,
                 automations,
@@ -2045,10 +2104,16 @@ impl Dashboard {
             prompt.replace("{session_path}", "<no session open>")
         };
 
-        let mut resolved_prompt = if let Some(pa) = &self.pasta_ativa {
+        let resolved_prompt = if let Some(pa) = &self.pasta_ativa {
             resolved_prompt.replace("{pasta_ativa}", &pa.to_string_lossy())
         } else {
             resolved_prompt.replace("{pasta_ativa}", "<no active folder selected>")
+        };
+
+        let mut resolved_prompt = if let Some(pd) = &self.pasta_destino {
+            resolved_prompt.replace("{pasta_destino}", &pd.to_string_lossy())
+        } else {
+            resolved_prompt.replace("{pasta_destino}", "<no destination folder selected>")
         };
 
         // Interpolate [[param]] values
@@ -2124,6 +2189,29 @@ impl Dashboard {
                     let _ = this.update(cx, |this, cx| {
                         this.pasta_ativa = Some(path);
                         this.pastas_recentes = read_pastas_recentes();
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn pick_pasta_destino(&mut self, cx: &mut Context<Self>) {
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: false,
+            directories: true,
+            multiple: false,
+            prompt: None,
+        });
+
+        cx.spawn(async move |this, cx| {
+            if let Ok(Ok(Some(paths))) = receiver.await {
+                if let Some(path) = paths.into_iter().next() {
+                    write_pasta_destino(&path);
+                    let _ = this.update(cx, |this, cx| {
+                        this.pasta_destino = Some(path);
+                        this.pastas_destino_recentes = read_pastas_destino_recentes();
                         cx.notify();
                     });
                 }
@@ -2242,93 +2330,207 @@ impl Dashboard {
         }
     }
 
-    fn render_pasta_ativa(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let display = match &self.pasta_ativa {
+    fn render_folder_row(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let entity = cx.entity();
+
+        let active_current = self.pasta_ativa.clone();
+        let active_recentes = self.pastas_recentes.clone();
+        let dest_current = self.pasta_destino.clone();
+        let dest_recentes = self.pastas_destino_recentes.clone();
+
+        let active_dropdown = Self::build_folder_dropdown(
+            "active-folder",
+            "Active Folder",
+            &active_current,
+            &active_recentes,
+            Color::Accent,
+            {
+                let entity = entity.clone();
+                move |path, _window, cx: &mut App| {
+                    write_pasta_ativa(&path);
+                    let _ = entity.update(cx, |this, cx| {
+                        this.pasta_ativa = Some(path);
+                        this.pastas_recentes = read_pastas_recentes();
+                        cx.notify();
+                    });
+                }
+            },
+            {
+                let entity = entity.clone();
+                move |_window, cx: &mut App| {
+                    let _ = entity.update(cx, |this, cx| {
+                        this.pick_pasta_ativa(cx);
+                    });
+                }
+            },
+            window,
+            cx,
+        );
+
+        let dest_dropdown = Self::build_folder_dropdown(
+            "destination",
+            "Destination",
+            &dest_current,
+            &dest_recentes,
+            Color::Success,
+            {
+                let entity = entity.clone();
+                move |path, _window, cx: &mut App| {
+                    write_pasta_destino(&path);
+                    let _ = entity.update(cx, |this, cx| {
+                        this.pasta_destino = Some(path);
+                        this.pastas_destino_recentes = read_pastas_destino_recentes();
+                        cx.notify();
+                    });
+                }
+            },
+            {
+                move |_window, cx: &mut App| {
+                    let _ = entity.update(cx, |this, cx| {
+                        this.pick_pasta_destino(cx);
+                    });
+                }
+            },
+            window,
+            cx,
+        );
+
+        h_flex()
+            .w_full()
+            .gap_2()
+            .items_center()
+            .child(div().flex_1().child(active_dropdown))
+            .child(
+                Label::new("\u{2192}")
+                    .color(Color::Muted)
+                    .size(LabelSize::Small),
+            )
+            .child(div().flex_1().child(dest_dropdown))
+            .into_any_element()
+    }
+
+    fn build_folder_dropdown(
+        id: &str,
+        tag: &str,
+        current: &Option<PathBuf>,
+        recentes: &[PathBuf],
+        icon_color: Color,
+        on_select: impl Fn(PathBuf, &mut Window, &mut App) + 'static + Clone,
+        on_browse: impl Fn(&mut Window, &mut App) + 'static,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let display_name: SharedString = match current {
             Some(p) => p
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
-                .to_string(),
-            None => "(none)".to_string(),
+                .to_string()
+                .into(),
+            None => "(none)".into(),
         };
-
-        let label_color = if self.pasta_ativa.is_some() {
+        let name_color = if current.is_some() {
             Color::Default
         } else {
             Color::Muted
         };
 
-        ButtonLike::new("pasta-ativa-btn")
-            .full_width()
-            .size(ButtonSize::Medium)
+        let menu = ContextMenu::build(window, cx, {
+            let current = current.clone();
+            let recentes = recentes.to_vec();
+            move |mut menu, _window, _cx| {
+                menu = menu.header("Recent");
+                if recentes.is_empty() {
+                    menu = menu.entry(
+                        "No recent folders",
+                        None,
+                        |_window: &mut Window, _cx: &mut App| {},
+                    );
+                } else {
+                    for folder in &recentes {
+                        let is_current = current.as_deref() == Some(folder.as_path());
+                        let components: Vec<_> = folder.components().collect();
+                        let short_path: SharedString = if components.len() <= 5 {
+                            folder.to_string_lossy().to_string()
+                        } else {
+                            let tail: PathBuf =
+                                components[components.len() - 5..].iter().collect();
+                            format!("\u{2026}/{}", tail.to_string_lossy())
+                        }
+                        .into();
+                        let path = folder.clone();
+                        let handler = on_select.clone();
+                        menu = menu.toggleable_entry(
+                            short_path,
+                            is_current,
+                            IconPosition::Start,
+                            None,
+                            move |window: &mut Window, cx: &mut App| {
+                                handler(path.clone(), window, cx);
+                            },
+                        );
+                    }
+                }
+                menu = menu.separator();
+                let browse_handler = on_browse;
+                menu = menu.entry(
+                    "Browse\u{2026}",
+                    None,
+                    move |window: &mut Window, cx: &mut App| {
+                        browse_handler(window, cx);
+                    },
+                );
+                menu
+            }
+        });
+
+        let border_hsla = icon_color.color(cx);
+        let card_bg = cx.theme().colors().elevated_surface_background;
+
+        let label_el = h_flex()
+            .gap_2()
+            .items_center()
+            .child(Icon::new(IconName::Folder).color(icon_color).size(IconSize::Small))
             .child(
-                h_flex()
-                    .w_full()
-                    .gap_2()
+                v_flex()
+                    .items_start()
                     .child(
-                        Icon::new(IconName::Folder)
-                            .color(Color::Accent)
-                            .size(IconSize::Small),
+                        Label::new(SharedString::from(tag.to_string()))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
                     )
-                    .child(
-                        v_flex()
-                            .items_start()
-                            .child(
-                                Label::new("Active Folder")
-                                    .size(LabelSize::XSmall)
-                                    .color(Color::Muted),
-                            )
-                            .child(Label::new(display).color(label_color)),
-                    ),
+                    .child(Label::new(display_name).color(name_color).size(LabelSize::Small)),
+            );
+
+        let trigger = ButtonLike::new(SharedString::from(format!("{}-trigger", id)))
+            .child(label_el)
+            .child(
+                Icon::new(IconName::ChevronUpDown)
+                    .size(IconSize::XSmall)
+                    .color(Color::Muted),
             )
-            .on_click(cx.listener(|this, _, _window, cx| {
-                this.pick_pasta_ativa(cx);
-            }))
-    }
+            .style(ButtonStyle::Transparent)
+            .full_width()
+            .height(px(56.).into());
 
-    fn render_pastas_recentes(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let recentes: Vec<_> = self
-            .pastas_recentes
-            .iter()
-            .filter(|p| Some(p.as_path()) != self.pasta_ativa.as_deref())
-            .take(5)
-            .cloned()
-            .collect();
-
-        if recentes.is_empty() {
-            return v_flex().into_any_element();
-        }
-
-        v_flex()
-            .pl_6()
-            .gap_0p5()
-            .children(recentes.into_iter().map(|path| {
-                let display: SharedString = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-                    .into();
-                let full_path = path.to_string_lossy().to_string();
-                let click_path = path;
-
-                Button::new(
-                    SharedString::from(format!("recente-{}", display)),
-                    display,
-                )
-                .style(ButtonStyle::Subtle)
-                .label_size(LabelSize::Small)
-                .icon(IconName::Folder)
-                .icon_size(IconSize::XSmall)
-                .icon_color(Color::Muted)
-                .tooltip(Tooltip::text(full_path))
-                .on_click(cx.listener(move |this, _, _window, cx| {
-                    write_pasta_ativa(&click_path);
-                    this.pasta_ativa = Some(click_path.clone());
-                    this.pastas_recentes = read_pastas_recentes();
-                    cx.notify();
-                }))
-            }))
+        div()
+            .w_full()
+            .rounded_lg()
+            .border_1()
+            .border_l_3()
+            .border_color(border_hsla)
+            .bg(card_bg)
+            .child(
+                PopoverMenu::new(SharedString::from(format!("{}-popover", id)))
+                    .full_width(true)
+                    .menu(move |_window, _cx| Some(menu.clone()))
+                    .trigger(trigger)
+                    .attach(Corner::BottomLeft),
+            )
             .into_any_element()
     }
 
@@ -2598,14 +2800,14 @@ impl Dashboard {
                             .child(
                                 h_flex()
                                     .flex_1()
-                                    .p_3()
+                                    .p_2()
                                     .gap_3()
                                     .items_center()
                                     .child(
                                         div()
                                             .flex_shrink_0()
-                                            .size(px(40.))
-                                            .rounded(px(10.))
+                                            .size(px(36.))
+                                            .rounded(px(8.))
                                             .bg(icon_tint_bg)
                                             .flex()
                                             .items_center()
@@ -3091,7 +3293,7 @@ impl Dashboard {
         let click_label = entry_label.clone();
         let click_prompt = entry_prompt;
 
-        let edit_entity = entity.clone();
+        let edit_entity = entity;
         let edit_id = entry_id.clone();
 
         let param_fields = self.render_entry_params(&entry.id, &entry.params, window, cx);
@@ -3514,9 +3716,8 @@ impl Render for Dashboard {
                             )
                             // Session status bar
                             .child(self.render_session_status(cx))
-                            // Pasta ativa
-                            .child(self.render_pasta_ativa(cx))
-                            .child(self.render_pastas_recentes(cx))
+                            // Folder selectors
+                            .child(self.render_folder_row(window, cx))
                             // Three-tier tool layout
                             .child(self.render_featured_section(cx))
                             .child(self.render_standard_section(window, cx))
