@@ -101,3 +101,50 @@ label = "run with Gemini"
 command = "gemini"
 flags = "--yolo -m gemini-3-pro-preview"
 prompt_flag = "-i"
+
+## ──────────────────────────────────────────────────────────────────────
+## Agent Launchers
+## ──────────────────────────────────────────────────────────────────────
+## Controls the "AI Agents" buttons in the dashboard sidebar.
+## Each [[agent]] block adds a button that opens the agent CLI
+## in a terminal, set to the active session's working directory.
+##
+## If this section is missing or empty, the dashboard shows
+## built-in defaults (Claude + Gemini).
+##
+## ──────────────────────────────────────────────────────────────────────
+## FIELDS
+## ──────────────────────────────────────────────────────────────────────
+##   id      — unique identifier (used internally)
+##   label   — button text shown in the dashboard
+##   command — binary name (resolved via ~/.local/bin, /opt/homebrew/bin, PATH)
+##   flags   — CLI flags passed when launching (default: "")
+##
+## ──────────────────────────────────────────────────────────────────────
+## EXAMPLES
+## ──────────────────────────────────────────────────────────────────────
+##
+## Add a third agent:
+##   [[agent]]
+##   id = "aider"
+##   label = "Open Aider"
+##   command = "aider"
+##
+## Launch Claude with a specific model and skip permissions:
+##   [[agent]]
+##   id = "claude"
+##   label = "Open Claude (Opus)"
+##   command = "claude"
+##   flags = "--dangerously-skip-permissions --model opus"
+##
+## ──────────────────────────────────────────────────────────────────────
+
+[[agent]]
+id = "claude"
+label = "Open Claude"
+command = "claude"
+
+[[agent]]
+id = "gemini"
+label = "Open Gemini"
+command = "gemini"

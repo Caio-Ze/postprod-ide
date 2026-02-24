@@ -13,10 +13,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
 use ui::{
-    prelude::*, Button, ButtonLike, ButtonStyle, ContextMenu, Divider, DividerColor,
-    DropdownMenu, DropdownStyle, Headline, HeadlineSize, Icon, IconButton, IconName, IconSize,
-    Label, LabelSize, Modal, ModalFooter, ModalHeader, Section, ToggleButtonGroup,
-    ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip, WithScrollbar as _,
+    prelude::*, Button, ButtonLike, ButtonStyle, Callout, ContextMenu, Disclosure, Divider,
+    DividerColor, DropdownMenu, DropdownStyle, Headline, HeadlineSize, Icon, IconButton,
+    IconName, IconSize, Label, LabelSize, Modal, ModalFooter, ModalHeader, Section,
+    ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip, WithScrollbar as _,
 };
 use workspace::{
     item::{Item, ItemEvent},
@@ -364,17 +364,53 @@ struct BackendEntry {
     prompt_flag: String,
 }
 
-#[derive(Deserialize)]
-struct AgentsFile {
-    backend: Vec<BackendEntry>,
+#[derive(Deserialize, Clone)]
+struct AgentEntry {
+    id: String,
+    label: String,
+    command: String,
+    #[serde(default)]
+    flags: String,
 }
 
-fn load_toml_agents(path: &Path) -> (Vec<BackendEntry>, Option<String>) {
+fn builtin_agent_launchers() -> Vec<AgentEntry> {
+    vec![
+        AgentEntry {
+            id: "claude".to_string(),
+            label: "Open Claude".to_string(),
+            command: "claude".to_string(),
+            flags: String::new(),
+        },
+        AgentEntry {
+            id: "gemini".to_string(),
+            label: "Open Gemini".to_string(),
+            command: "gemini".to_string(),
+            flags: String::new(),
+        },
+    ]
+}
+
+#[derive(Deserialize)]
+struct AgentsFile {
+    #[serde(default)]
+    backend: Vec<BackendEntry>,
+    #[serde(default)]
+    agent: Vec<AgentEntry>,
+}
+
+fn load_toml_agents(path: &Path) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>) {
     let Ok(content) = std::fs::read_to_string(path) else {
-        return (Vec::new(), None);
+        return (Vec::new(), builtin_agent_launchers(), None);
     };
     match toml::from_str::<AgentsFile>(&content) {
-        Ok(file) => (file.backend, None),
+        Ok(file) => {
+            let agents = if file.agent.is_empty() {
+                builtin_agent_launchers()
+            } else {
+                file.agent
+            };
+            (file.backend, agents, None)
+        }
         Err(e) => {
             let filename = path
                 .file_name()
@@ -382,12 +418,12 @@ fn load_toml_agents(path: &Path) -> (Vec<BackendEntry>, Option<String>) {
                 .to_string_lossy();
             let err = format!("{filename}: {e}");
             log::error!("config: {err}");
-            (Vec::new(), Some(err))
+            (Vec::new(), builtin_agent_launchers(), Some(err))
         }
     }
 }
 
-fn load_agents_config() -> (Vec<BackendEntry>, Option<String>) {
+fn load_agents_config() -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>) {
     load_toml_agents(&agents_toml_path())
 }
 
@@ -1277,13 +1313,13 @@ fn scan_delivery_folder() -> DeliveryStatus {
 
     if has_any {
         if status.tv_count == 0 {
-            status.warnings.push("Falta: arquivos TV".to_string());
+            status.warnings.push("Missing: TV files".to_string());
         }
         if status.net_count == 0 {
-            status.warnings.push("Falta: arquivos NET".to_string());
+            status.warnings.push("Missing: NET files".to_string());
         }
         if status.spot_count == 0 {
-            status.warnings.push("Falta: arquivos SPOT".to_string());
+            status.warnings.push("Missing: SPOT files".to_string());
         }
         if status.tv_count > 0 && status.net_count > 0 && status.tv_count != status.net_count {
             status.warnings.push(format!(
@@ -1384,6 +1420,32 @@ fn write_background_tools(set: &HashSet<String>) {
     entries.sort();
     let content = entries.join("\n");
     std::fs::write(background_tools_file(), content).log_err();
+}
+
+// ---------------------------------------------------------------------------
+// Collapsed sections persistence
+// ---------------------------------------------------------------------------
+
+fn collapsed_sections_file() -> PathBuf {
+    config_dir().join(".collapsed_sections")
+}
+
+fn read_collapsed_sections() -> HashSet<String> {
+    let Ok(content) = std::fs::read_to_string(collapsed_sections_file()) else {
+        return HashSet::new();
+    };
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim().to_string())
+        .collect()
+}
+
+fn write_collapsed_sections(set: &HashSet<String>) {
+    let mut entries: Vec<_> = set.iter().cloned().collect();
+    entries.sort();
+    let content = entries.join("\n");
+    std::fs::write(collapsed_sections_file(), content).log_err();
 }
 
 // ---------------------------------------------------------------------------
@@ -1560,11 +1622,14 @@ pub struct Dashboard {
     automations: Vec<AutomationEntry>,
     agent_backend: AgentBackend,
     backends: Vec<BackendEntry>,
+    agent_launchers: Vec<AgentEntry>,
     _automations_reload_task: gpui::Task<()>,
     _tools_reload_task: gpui::Task<()>,
     _agents_reload_task: gpui::Task<()>,
     // Background execution mode per tool
     background_tools: HashSet<String>,
+    // Collapsed section state (persisted)
+    collapsed_sections: HashSet<String>,
     // Config parse errors
     tools_error: Option<String>,
     automations_error: Option<String>,
@@ -1590,8 +1655,9 @@ impl Dashboard {
         let pastas_recentes = read_pastas_recentes();
         let (automations, automations_error) = load_automations_registry();
         let (tools, tools_error) = load_tools_registry();
-        let (backends, _agents_error) = load_agents_config();
+        let (backends, agent_launchers, _agents_error) = load_agents_config();
         let background_tools = read_background_tools();
+        let collapsed_sections = read_collapsed_sections();
         let mut param_values = read_param_values();
 
         // Seed defaults for any params not yet persisted
@@ -1753,13 +1819,14 @@ impl Dashboard {
                         .timer(Duration::from_secs(30))
                         .await;
 
-                    let (backends, _err) = cx
+                    let (backends, agent_launchers, _err) = cx
                         .background_executor()
                         .spawn(async { load_agents_config() })
                         .await;
 
                     let _ = this.update(cx, |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
                         dashboard.backends = backends;
+                        dashboard.agent_launchers = agent_launchers;
                         cx.notify();
                     });
                 }
@@ -1781,10 +1848,12 @@ impl Dashboard {
                 automations,
                 agent_backend: AgentBackend::Claude,
                 backends,
+                agent_launchers,
                 _automations_reload_task: automations_reload_task,
                 _tools_reload_task: tools_reload_task,
                 _agents_reload_task: agents_reload_task,
                 background_tools,
+                collapsed_sections,
                 tools_error,
                 automations_error,
                 scroll_handle: ScrollHandle::new(),
@@ -2143,30 +2212,34 @@ impl Dashboard {
 
     // -- Rendering helpers --
 
-    fn render_session_status(&self, cx: &App) -> impl IntoElement {
-        let (dot_color, label_text) = match &self.session_name {
-            Some(name) => (Color::Created, format!("Pro Tools: {}", name)),
-            None => (Color::Muted, "Pro Tools: Desconectado".to_string()),
-        };
+    fn toggle_section(&mut self, section_id: &str, cx: &mut Context<Self>) {
+        if self.collapsed_sections.contains(section_id) {
+            self.collapsed_sections.remove(section_id);
+        } else {
+            self.collapsed_sections.insert(section_id.to_string());
+        }
+        write_collapsed_sections(&self.collapsed_sections);
+        cx.notify();
+    }
 
-        let dot_hsla = dot_color.color(cx);
-
-        h_flex()
-            .w_full()
-            .px_2()
-            .py_1()
-            .gap_2()
-            .child(
-                div()
-                    .size(px(8.))
-                    .rounded_full()
-                    .bg(dot_hsla),
-            )
-            .child(
-                Label::new(label_text)
-                    .size(LabelSize::Small)
-                    .color(dot_color),
-            )
+    fn render_session_status(&self, _cx: &App) -> impl IntoElement {
+        match &self.session_name {
+            Some(name) => {
+                let callout = Callout::new()
+                    .severity(Severity::Success)
+                    .icon(IconName::Check)
+                    .title(format!("Pro Tools: {}", name));
+                if let Some(path) = &self.session_path {
+                    callout.description(path.clone())
+                } else {
+                    callout
+                }
+            }
+            None => Callout::new()
+                .severity(Severity::Warning)
+                .icon(IconName::Warning)
+                .title("Pro Tools: Disconnected"),
+        }
     }
 
     fn render_pasta_ativa(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -2176,7 +2249,7 @@ impl Dashboard {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string(),
-            None => "(nenhuma)".to_string(),
+            None => "(none)".to_string(),
         };
 
         let label_color = if self.pasta_ativa.is_some() {
@@ -2201,7 +2274,7 @@ impl Dashboard {
                         v_flex()
                             .items_start()
                             .child(
-                                Label::new("Pasta Ativa")
+                                Label::new("Active Folder")
                                     .size(LabelSize::XSmall)
                                     .color(Color::Muted),
                             )
@@ -2259,7 +2332,8 @@ impl Dashboard {
             .into_any_element()
     }
 
-    fn render_delivery_status(&self, _cx: &App) -> impl IntoElement {
+    fn render_delivery_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_open = !self.collapsed_sections.contains("delivery");
         let status = &self.delivery_status;
         let has_any = status.tv_count > 0
             || status.net_count > 0
@@ -2269,30 +2343,19 @@ impl Dashboard {
         v_flex()
             .w_full()
             .gap_1()
-            .child(
-                h_flex()
-                    .px_1()
-                    .mb_2()
-                    .gap_2()
-                    .child(
-                        Label::new("ENTREGA")
-                            .color(Color::Muted)
-                            .size(LabelSize::XSmall),
-                    )
-                    .child(Divider::horizontal().color(DividerColor::BorderVariant)),
-            )
-            .when(!has_any, |el| {
+            .child(self.section_header("DELIVERY", "delivery", cx))
+            .when(is_open && !has_any, |el| {
                 el.child(
                     h_flex()
                         .px_2()
                         .child(
-                            Label::new("Nenhum arquivo em 4_Finalizados/")
+                            Label::new("No files in 4_Finalizados/")
                                 .color(Color::Muted)
                                 .size(LabelSize::Small),
                         ),
                 )
             })
-            .when(has_any, |el| {
+            .when(is_open && has_any, |el| {
                 el.child(
                     h_flex()
                         .px_2()
@@ -2324,11 +2387,32 @@ impl Dashboard {
             .child(Label::new(indicator).size(LabelSize::XSmall).color(color))
     }
 
-    fn section_header(title: &str) -> impl IntoElement {
+    fn section_header(
+        &self,
+        title: &str,
+        section_id: &str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let is_open = !self.collapsed_sections.contains(section_id);
+        let entity = cx.entity().downgrade();
+        let id_for_toggle = section_id.to_string();
+
         h_flex()
             .px_1()
             .mb_2()
             .gap_2()
+            .items_center()
+            .child(
+                Disclosure::new(
+                    SharedString::from(format!("disc-{}", section_id)),
+                    is_open,
+                )
+                .on_click(move |_, _, cx| {
+                    let _ = entity.update(cx, |this, cx| {
+                        this.toggle_section(&id_for_toggle, cx);
+                    });
+                }),
+            )
             .child(
                 Label::new(title.to_string())
                     .color(Color::Muted)
@@ -2337,395 +2421,459 @@ impl Dashboard {
             .child(Divider::horizontal().color(DividerColor::BorderVariant))
     }
 
-    /// Build tool buttons for a given tier. Pre-computes keybindings to avoid
-    /// capturing `cx` inside the `.map()` closure (Rust 2024 lifetime rules).
-    fn build_tool_buttons(
+    /// Build a click handler closure for running a tool (background or terminal).
+    /// Pre-clones all needed state so the closure is `'static`.
+    fn tool_click_handler(
         &self,
-        tier: ToolTier,
-        button_size: ButtonSize,
+        tool: &ToolEntry,
+        _cx: &mut Context<Self>,
+    ) -> impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static {
+        let is_background = self.background_tools.contains(&tool.id);
+        let runtime_path = self.runtime_path.clone();
+        let agent_tools_path = self.agent_tools_path.clone();
+        let workspace = self.workspace.clone();
+        let session_path = self.session_path.clone();
+        let pasta_ativa = self.pasta_ativa.clone();
+        let tool = tool.clone();
+        let tool_param_values = self
+            .param_values
+            .get(&tool.id)
+            .cloned()
+            .unwrap_or_default();
+
+        move |_, window, cx| {
+            let runtime_path = runtime_path.clone();
+            let agent_tools_path = agent_tools_path.clone();
+            let pasta_ativa = pasta_ativa.clone();
+            let session_path = session_path.clone();
+            let tool_param_values = tool_param_values.clone();
+            if is_background {
+                let _ = workspace.update(cx, |_workspace, cx| {
+                    Self::spawn_tool_background(
+                        &tool,
+                        &runtime_path,
+                        &agent_tools_path,
+                        &session_path,
+                        &pasta_ativa,
+                        &tool_param_values,
+                        cx,
+                    );
+                });
+            } else {
+                let _ = workspace.update(cx, |workspace, cx| {
+                    Self::spawn_tool_entry(
+                        &tool,
+                        &runtime_path,
+                        &agent_tools_path,
+                        &session_path,
+                        &pasta_ativa,
+                        &tool_param_values,
+                        workspace,
+                        window,
+                        cx,
+                    );
+                });
+            }
+        }
+    }
+
+    /// Build hover-reveal action buttons (terminal toggle + global shortcut)
+    /// for a tool card. Buttons are invisible by default and appear on hover
+    /// via the `.visible_on_hover(group_name)` pattern.
+    fn tool_action_buttons(
+        &self,
+        tool_id: &str,
+        tool_label: &str,
+        group_name: SharedString,
         cx: &mut Context<Self>,
-    ) -> Vec<ButtonLike> {
+    ) -> impl IntoElement {
         let entity = cx.entity().downgrade();
+        let is_background = self.background_tools.contains(tool_id);
+
+        let toggle_tool_id = tool_id.to_string();
+        let toggle_entity = entity.clone();
+
+        let globe_tool_id = tool_id.to_string();
+        let globe_tool_label = tool_label.to_string();
+        let globe_entity = entity;
+
+        h_flex()
+            .gap_1()
+            .child(
+                IconButton::new(
+                    SharedString::from(format!("bg-toggle-{}", toggle_tool_id)),
+                    IconName::ToolTerminal,
+                )
+                .icon_size(IconSize::XSmall)
+                .icon_color(if is_background {
+                    Color::Muted
+                } else {
+                    Color::Accent
+                })
+                .tooltip(Tooltip::text(if is_background {
+                    "Background mode (click to switch to terminal)"
+                } else {
+                    "Terminal mode (click to switch to background)"
+                }))
+                .on_click(move |_, _, cx| {
+                    let tool_id = toggle_tool_id.clone();
+                    let _ = toggle_entity.update(cx, |this, cx| {
+                        if this.background_tools.contains(&tool_id) {
+                            this.background_tools.remove(&tool_id);
+                        } else {
+                            this.background_tools.insert(tool_id);
+                        }
+                        write_background_tools(&this.background_tools);
+                        cx.notify();
+                    });
+                })
+                .visible_on_hover(group_name.clone()),
+            )
+            .child(
+                IconButton::new(
+                    SharedString::from(format!("globe-{}", globe_tool_id)),
+                    IconName::Keyboard,
+                )
+                .icon_size(IconSize::XSmall)
+                .icon_color(Color::Muted)
+                .tooltip(Tooltip::text("Create global shortcut"))
+                .on_click(move |_, window, cx| {
+                    let tool_id = globe_tool_id.clone();
+                    let tool_label = globe_tool_label.clone();
+                    let _ = globe_entity.update(cx, |this, cx| {
+                        this.open_global_shortcut_modal(tool_id, tool_label, window, cx);
+                    });
+                })
+                .visible_on_hover(group_name),
+            )
+    }
+
+    /// Build Featured tool cards: full-width, accent border + left strip,
+    /// 40px tinted icon, hover-reveal actions.
+    fn build_featured_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let tools: Vec<ToolEntry> = self
             .tools
             .iter()
-            .filter(|t| t.tier == tier && !t.hidden)
+            .filter(|t| t.tier == ToolTier::Featured && !t.hidden)
             .cloned()
             .collect();
 
-        let icon_color = if tier == ToolTier::Featured {
-            Color::Accent
-        } else {
-            Color::Muted
-        };
+        let hover_bg = cx.theme().colors().ghost_element_hover;
+        let accent_color = cx.theme().colors().text_accent;
+        let card_bg = cx.theme().colors().elevated_surface_background;
+        let icon_tint_bg = cx.theme().status().info_background.opacity(0.15);
 
         tools
             .into_iter()
             .map(|tool| {
+                let group_name = SharedString::from(format!("tool-{}", tool.id));
+                let click_handler = self.tool_click_handler(&tool, cx);
+                let action_buttons =
+                    self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
                 let tool_icon = icon_for_tool(&tool.icon);
-                let tool_id = tool.id.clone();
                 let tool_label: SharedString = tool.label.clone().into();
                 let tool_description: SharedString = tool.description.clone().into();
 
-                let is_background = self.background_tools.contains(&tool_id);
-
-                let toggle_tool_id = tool_id.clone();
-                let toggle_entity = entity.clone();
-
-                let globe_tool_id = tool_id.clone();
-                let globe_tool_label = tool_label.to_string();
-                let globe_entity = entity.clone();
-
-                let runtime_path = self.runtime_path.clone();
-                let agent_tools_path = self.agent_tools_path.clone();
-                let workspace = self.workspace.clone();
-                let session_path = self.session_path.clone();
-                let pasta_ativa = self.pasta_ativa.clone();
-                let tool_param_values = self.param_values
-                    .get(&tool_id)
-                    .cloned()
-                    .unwrap_or_default();
-
-                ButtonLike::new(format!("dashboard-btn-{}", tool_id))
-                    .full_width()
-                    .size(button_size)
+                div()
+                    .id(SharedString::from(format!("featured-{}", tool.id)))
+                    .group(group_name)
+                    .w_full()
+                    .rounded_lg()
+                    .border_1()
+                    .border_color(accent_color)
+                    .bg(card_bg)
+                    .overflow_hidden()
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(hover_bg))
                     .child(
                         h_flex()
                             .w_full()
+                            .child(
+                                div()
+                                    .w(px(3.))
+                                    .h_full()
+                                    .flex_shrink_0()
+                                    .bg(accent_color),
+                            )
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .p_3()
+                                    .gap_3()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .size(px(40.))
+                                            .rounded(px(10.))
+                                            .bg(icon_tint_bg)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                Icon::new(tool_icon)
+                                                    .size(IconSize::Medium)
+                                                    .color(Color::Accent),
+                                            ),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .child(Label::new(tool_label))
+                                            .child(
+                                                Label::new(tool_description)
+                                                    .color(Color::Muted)
+                                                    .size(LabelSize::XSmall),
+                                            ),
+                                    )
+                                    .child(action_buttons),
+                            ),
+                    )
+                    .on_click(click_handler)
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// Build Standard tool cards: neutral border, 28px icon, params inline below.
+    fn build_standard_cards(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let tools: Vec<ToolEntry> = self
+            .tools
+            .iter()
+            .filter(|t| t.tier == ToolTier::Standard && !t.hidden)
+            .cloned()
+            .collect();
+
+        let hover_border = cx.theme().colors().text_accent;
+        let card_bg = cx.theme().colors().elevated_surface_background;
+        let border_color = cx.theme().colors().border_variant;
+        let icon_bg = cx.theme().colors().element_background;
+
+        tools
+            .into_iter()
+            .map(|tool| {
+                let group_name = SharedString::from(format!("tool-{}", tool.id));
+                let click_handler = self.tool_click_handler(&tool, cx);
+                let tool_icon = icon_for_tool(&tool.icon);
+                let tool_label: SharedString = tool.label.clone().into();
+                let tool_description: SharedString = tool.description.clone().into();
+                let has_params = !tool.params.is_empty();
+
+                // Render params first (returns owned Vec, releases &mut borrows)
+                let param_fields = if has_params {
+                    self.render_entry_params(&tool.id, &tool.params, window, cx)
+                } else {
+                    Vec::new()
+                };
+                // Action buttons last (impl IntoElement captures cx lifetime)
+                let action_buttons =
+                    self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
+
+                div()
+                    .id(SharedString::from(format!("standard-{}", tool.id)))
+                    .group(group_name)
+                    .flex_basis(relative(0.48))
+                    .flex_grow()
+                    .rounded_md()
+                    .border_1()
+                    .border_color(border_color)
+                    .bg(card_bg)
+                    .overflow_hidden()
+                    .cursor_pointer()
+                    .hover(move |style| style.border_color(hover_border))
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .p_2()
                             .gap_2()
                             .items_center()
                             .child(
-                                Icon::new(tool_icon)
-                                    .color(icon_color)
-                                    .size(IconSize::Small),
+                                div()
+                                    .flex_shrink_0()
+                                    .size(px(28.))
+                                    .rounded(px(6.))
+                                    .bg(icon_bg)
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        Icon::new(tool_icon)
+                                            .size(IconSize::Small)
+                                            .color(Color::Muted),
+                                    ),
                             )
                             .child(
                                 v_flex()
                                     .flex_1()
-                                    .items_start()
-                                    .child(Label::new(tool_label))
+                                    .child(
+                                        Label::new(tool_label).size(LabelSize::Small),
+                                    )
                                     .child(
                                         Label::new(tool_description)
                                             .color(Color::Muted)
                                             .size(LabelSize::XSmall),
                                     ),
                             )
-                            .child(
-                                IconButton::new(
-                                    SharedString::from(format!(
-                                        "bg-toggle-{}",
-                                        toggle_tool_id
-                                    )),
-                                    IconName::ToolTerminal,
-                                )
-                                .icon_size(IconSize::XSmall)
-                                .icon_color(if is_background {
-                                    Color::Muted
-                                } else {
-                                    Color::Accent
-                                })
-                                .tooltip(Tooltip::text(if is_background {
-                                    "Background mode (click to switch to terminal)"
-                                } else {
-                                    "Terminal mode (click to switch to background)"
-                                }))
-                                .on_click(move |_, _, cx| {
-                                    let tool_id = toggle_tool_id.clone();
-                                    let _ = toggle_entity.update(cx, |this, cx| {
-                                        if this.background_tools.contains(&tool_id) {
-                                            this.background_tools.remove(&tool_id);
-                                        } else {
-                                            this.background_tools.insert(tool_id);
-                                        }
-                                        write_background_tools(&this.background_tools);
-                                        cx.notify();
-                                    });
-                                }),
-                            )
-                            .child(
-                                IconButton::new(
-                                    SharedString::from(format!(
-                                        "globe-{}",
-                                        globe_tool_id
-                                    )),
-                                    IconName::Keyboard,
-                                )
-                                .icon_size(IconSize::XSmall)
-                                .icon_color(Color::Muted)
-                                .tooltip(Tooltip::text("Create global shortcut"))
-                                .on_click(move |_, window, cx| {
-                                    let tool_id = globe_tool_id.clone();
-                                    let tool_label = globe_tool_label.clone();
-                                    let _ = globe_entity.update(cx, |this, cx| {
-                                        this.open_global_shortcut_modal(
-                                            tool_id,
-                                            tool_label,
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                }),
-                            ),
+                            .child(action_buttons),
                     )
-                    .on_click(move |_, window, cx| {
-                        let runtime_path = runtime_path.clone();
-                        let agent_tools_path = agent_tools_path.clone();
-                        let pasta_ativa = pasta_ativa.clone();
-                        let session_path = session_path.clone();
-                        let tool_param_values = tool_param_values.clone();
-                        if is_background {
-                            let _ = workspace.update(cx, |_workspace, cx| {
-                                Self::spawn_tool_background(
-                                    &tool,
-                                    &runtime_path,
-                                    &agent_tools_path,
-                                    &session_path,
-                                    &pasta_ativa,
-                                    &tool_param_values,
-                                    cx,
-                                );
-                            });
-                        } else {
-                            let _ = workspace.update(cx, |workspace, cx| {
-                                Self::spawn_tool_entry(
-                                    &tool,
-                                    &runtime_path,
-                                    &agent_tools_path,
-                                    &session_path,
-                                    &pasta_ativa,
-                                    &tool_param_values,
-                                    workspace,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        }
+                    .when(has_params, |el| {
+                        el.child(
+                            h_flex()
+                                .px_2()
+                                .pb_2()
+                                .pl(px(44.))
+                                .gap_2()
+                                .flex_wrap()
+                                .children(param_fields),
+                        )
                     })
+                    .on_click(click_handler)
+                    .into_any_element()
             })
             .collect()
     }
 
-    fn render_featured_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let buttons = self.build_tool_buttons(ToolTier::Featured, ButtonSize::Large, cx);
-        v_flex()
-            .w_full()
-            .gap_1()
-            .child(Self::section_header(ToolTier::Featured.label()))
-            .when_some(self.tools_error.as_ref(), |el, err| {
-                el.child(
-                    Label::new(format!("Parse error: {}", err))
-                        .color(Color::Error)
-                        .size(LabelSize::XSmall),
-                )
-            })
-            .children(buttons)
-    }
-
-    fn render_standard_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let buttons = self.build_tool_buttons(ToolTier::Standard, ButtonSize::Large, cx);
-        v_flex()
-            .w_full()
-            .gap_1()
-            .child(Self::section_header(ToolTier::Standard.label()))
-            .children(buttons)
-    }
-
-    /// Render the compact tools section (small 2-column grid, label only, tooltip for description).
-    fn render_compact_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let entity = cx.entity().downgrade();
-
-        let compact: Vec<ToolEntry> = self
+    /// Build Compact tool cards: minimal icon + label, 3-column grid items.
+    fn build_compact_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let tools: Vec<ToolEntry> = self
             .tools
             .iter()
             .filter(|t| t.tier == ToolTier::Compact && !t.hidden)
             .cloned()
             .collect();
 
-        let compact_buttons: Vec<_> = compact
+        let hover_border = cx.theme().colors().text_accent;
+        let border_color = cx.theme().colors().border_variant;
+
+        tools
             .into_iter()
             .map(|tool| {
+                let group_name = SharedString::from(format!("tool-{}", tool.id));
+                let click_handler = self.tool_click_handler(&tool, cx);
+                let action_buttons =
+                    self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
                 let tool_icon = icon_for_tool(&tool.icon);
-                let tool_id = tool.id.clone();
                 let tool_label: SharedString = tool.label.clone().into();
                 let tool_description = tool.description.clone();
 
-                let is_background = self.background_tools.contains(&tool_id);
-
-                let toggle_tool_id = tool_id.clone();
-                let toggle_entity = entity.clone();
-
-                let globe_tool_id = tool_id.clone();
-                let globe_tool_label = tool_label.to_string();
-                let globe_entity = entity.clone();
-
-                let runtime_path = self.runtime_path.clone();
-                let agent_tools_path = self.agent_tools_path.clone();
-                let workspace = self.workspace.clone();
-                let session_path = self.session_path.clone();
-                let pasta_ativa = self.pasta_ativa.clone();
-                let tool_param_values = self.param_values
-                    .get(&tool_id)
-                    .cloned()
-                    .unwrap_or_default();
-
-                ButtonLike::new(format!("dashboard-btn-{}", tool_id))
-                    .width(gpui::DefiniteLength::Fraction(0.48))
-                    .size(ButtonSize::Compact)
-                    .tooltip(Tooltip::text(tool_description))
+                div()
+                    .id(SharedString::from(format!("compact-{}", tool.id)))
+                    .group(group_name)
+                    .flex_basis(relative(0.31))
+                    .flex_grow()
+                    .rounded_sm()
+                    .border_1()
+                    .border_color(border_color)
+                    .overflow_hidden()
+                    .cursor_pointer()
+                    .hover(move |style| style.border_color(hover_border))
                     .child(
                         h_flex()
-                            .w_full()
-                            .gap_1()
+                            .px_2()
+                            .py_1()
+                            .gap_2()
                             .items_center()
                             .child(
                                 Icon::new(tool_icon)
-                                    .color(Color::Muted)
-                                    .size(IconSize::XSmall),
+                                    .size(IconSize::XSmall)
+                                    .color(Color::Muted),
                             )
-                            .child(
-                                Label::new(tool_label)
-                                    .size(LabelSize::Small)
-                                    .into_any_element(),
-                            )
+                            .child(Label::new(tool_label).size(LabelSize::XSmall))
                             .child(div().flex_grow())
-                            .child(
-                                IconButton::new(
-                                    SharedString::from(format!(
-                                        "bg-toggle-{}",
-                                        toggle_tool_id
-                                    )),
-                                    IconName::ToolTerminal,
-                                )
-                                .icon_size(IconSize::XSmall)
-                                .icon_color(if is_background {
-                                    Color::Muted
-                                } else {
-                                    Color::Accent
-                                })
-                                .tooltip(Tooltip::text(if is_background {
-                                    "Background mode"
-                                } else {
-                                    "Terminal mode"
-                                }))
-                                .on_click(move |_, _, cx| {
-                                    let tool_id = toggle_tool_id.clone();
-                                    let _ = toggle_entity.update(cx, |this, cx| {
-                                        if this.background_tools.contains(&tool_id) {
-                                            this.background_tools.remove(&tool_id);
-                                        } else {
-                                            this.background_tools.insert(tool_id);
-                                        }
-                                        write_background_tools(&this.background_tools);
-                                        cx.notify();
-                                    });
-                                }),
-                            )
-                            .child(
-                                IconButton::new(
-                                    SharedString::from(format!(
-                                        "globe-{}",
-                                        globe_tool_id
-                                    )),
-                                    IconName::Keyboard,
-                                )
-                                .icon_size(IconSize::XSmall)
-                                .icon_color(Color::Muted)
-                                .on_click(move |_, window, cx| {
-                                    let tool_id = globe_tool_id.clone();
-                                    let tool_label = globe_tool_label.clone();
-                                    let _ =
-                                        globe_entity.update(cx, |this, cx| {
-                                            this.open_global_shortcut_modal(
-                                                tool_id,
-                                                tool_label,
-                                                window,
-                                                cx,
-                                            );
-                                        });
-                                }),
-                            ),
+                            .child(action_buttons),
                     )
-                    .on_click(move |_, window, cx| {
-                        let runtime_path = runtime_path.clone();
-                        let agent_tools_path = agent_tools_path.clone();
-                        let pasta_ativa = pasta_ativa.clone();
-                        let session_path = session_path.clone();
-                        let tool_param_values = tool_param_values.clone();
-                        if is_background {
-                            let _ = workspace.update(cx, |_workspace, cx| {
-                                Self::spawn_tool_background(
-                                    &tool,
-                                    &runtime_path,
-                                    &agent_tools_path,
-                                    &session_path,
-                                    &pasta_ativa,
-                                    &tool_param_values,
-                                    cx,
-                                );
-                            });
-                        } else {
-                            let _ = workspace.update(cx, |workspace, cx| {
-                                Self::spawn_tool_entry(
-                                    &tool,
-                                    &runtime_path,
-                                    &agent_tools_path,
-                                    &session_path,
-                                    &pasta_ativa,
-                                    &tool_param_values,
-                                    workspace,
-                                    window,
-                                    cx,
-                                );
-                            });
-                        }
-                    })
+                    .tooltip(Tooltip::text(tool_description))
+                    .on_click(click_handler)
+                    .into_any_element()
             })
-            .collect();
+            .collect()
+    }
+
+    fn render_featured_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_open = !self.collapsed_sections.contains("featured");
+        let cards = if is_open {
+            self.build_featured_cards(cx)
+        } else {
+            Vec::new()
+        };
+        v_flex()
+            .w_full()
+            .gap_2()
+            .child(self.section_header(ToolTier::Featured.label(), "featured", cx))
+            .when(is_open, |el| {
+                el.when_some(self.tools_error.as_ref(), |el, err| {
+                    el.child(
+                        Label::new(format!("Parse error: {}", err))
+                            .color(Color::Error)
+                            .size(LabelSize::XSmall),
+                    )
+                })
+            })
+            .children(cards)
+    }
+
+    fn render_standard_section(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let is_open = !self.collapsed_sections.contains("standard");
+        v_flex()
+            .w_full()
+            .gap_2()
+            .child(self.section_header(ToolTier::Standard.label(), "standard", cx))
+            .when(is_open, |el| {
+                let cards = self.build_standard_cards(window, cx);
+                el.child(
+                    h_flex()
+                        .w_full()
+                        .flex_wrap()
+                        .gap(px(8.))
+                        .children(cards),
+                )
+            })
+    }
+
+    fn render_compact_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_open = !self.collapsed_sections.contains("compact");
+
+        if !is_open {
+            return v_flex()
+                .w_full()
+                .gap_2()
+                .child(self.section_header(ToolTier::Compact.label(), "compact", cx));
+        }
+
+        let cards = self.build_compact_cards(cx);
 
         v_flex()
             .w_full()
-            .gap_1()
-            .child(Self::section_header(ToolTier::Compact.label()))
+            .gap_2()
+            .child(self.section_header(ToolTier::Compact.label(), "compact", cx))
             .child(
                 h_flex()
                     .w_full()
                     .flex_wrap()
-                    .gap_1()
-                    .children(compact_buttons),
+                    .gap(px(8.))
+                    .children(cards),
             )
     }
 
-    fn render_automation_card(
+    /// Render param fields (Text/Path/Select) for a tool or automation entry.
+    /// Returns a vec of elements, one per param.
+    fn render_entry_params(
         &mut self,
-        entry: &AutomationEntry,
-        idx: usize,
-        icon_color: Color,
-        badge_label: &SharedString,
-        badge_color: Color,
+        entry_id: &str,
+        params: &[ParamEntry],
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let icon = icon_for_automation(&entry.icon);
-        let entry_id = entry.id.clone();
-        let entry_label: SharedString = entry.label.clone().into();
-        let entry_description: SharedString = entry.description.clone().into();
-        let entry_prompt = entry.prompt.clone();
-        let badge_label = badge_label.clone();
-        let has_params = !entry.params.is_empty();
-
+    ) -> Vec<gpui::AnyElement> {
         let entity = cx.entity().downgrade();
-
-        let click_entity = entity.clone();
-        let click_id = entry_id.clone();
-        let click_label = entry_label.clone();
-        let click_prompt = entry_prompt;
-
-        let edit_entity = entity.clone();
-        let edit_id = entry_id.clone();
-
-        // Build param field elements
-        let param_fields: Vec<gpui::AnyElement> = entry
-            .params
+        params
             .iter()
             .map(|param| {
                 let label_el = Label::new(format!("{}:", param.label))
@@ -2735,7 +2883,7 @@ impl Dashboard {
                 match param.param_type {
                     ParamType::Text => {
                         let editor =
-                            self.ensure_param_editor(&entry.id, param, window, cx);
+                            self.ensure_param_editor(entry_id, param, window, cx);
                         h_flex()
                             .gap_1()
                             .items_center()
@@ -2755,7 +2903,7 @@ impl Dashboard {
                     ParamType::Path => {
                         let current_value = self
                             .param_values
-                            .get(&entry.id)
+                            .get(entry_id)
                             .and_then(|m| m.get(&param.key))
                             .cloned()
                             .unwrap_or_default();
@@ -2774,7 +2922,7 @@ impl Dashboard {
                             current_value
                         };
                         let path_entity = entity.clone();
-                        let path_entry_id = entry.id.clone();
+                        let path_entry_id = entry_id.to_string();
                         let path_param_key = param.key.clone();
                         h_flex()
                             .gap_1()
@@ -2789,7 +2937,7 @@ impl Dashboard {
                                 IconButton::new(
                                     SharedString::from(format!(
                                         "param-path-{}-{}",
-                                        entry.id, param.key
+                                        entry_id, param.key
                                     )),
                                     IconName::Folder,
                                 )
@@ -2848,22 +2996,22 @@ impl Dashboard {
                     ParamType::Select => {
                         let current_value = self
                             .param_values
-                            .get(&entry.id)
+                            .get(entry_id)
                             .and_then(|m| m.get(&param.key))
                             .cloned()
                             .unwrap_or_else(|| param.default.clone());
                         let display_label: SharedString = if current_value.is_empty() {
                             "Select...".into()
                         } else {
-                            current_value.clone().into()
+                            current_value.into()
                         };
                         let select_entity = entity.clone();
-                        let select_entry_id = entry.id.clone();
+                        let select_entry_id = entry_id.to_string();
                         let select_param_key = param.key.clone();
                         let menu = ContextMenu::build(window, cx, {
-                            let entry_id = select_entry_id.clone();
-                            let param_key = select_param_key.clone();
-                            let entity = select_entity.clone();
+                            let entry_id = select_entry_id;
+                            let param_key = select_param_key;
+                            let entity = select_entity;
                             let options = param.options.clone();
                             move |mut menu: ContextMenu,
                                   _window: &mut Window,
@@ -2903,7 +3051,7 @@ impl Dashboard {
                                 DropdownMenu::new(
                                     SharedString::from(format!(
                                         "param-select-{}-{}",
-                                        entry.id, param.key
+                                        entry_id, param.key
                                     )),
                                     display_label,
                                     menu,
@@ -2915,7 +3063,38 @@ impl Dashboard {
                     }
                 }
             })
-            .collect();
+            .collect()
+    }
+
+    fn render_automation_card(
+        &mut self,
+        entry: &AutomationEntry,
+        idx: usize,
+        icon_color: Color,
+        badge_label: &SharedString,
+        badge_color: Color,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let icon = icon_for_automation(&entry.icon);
+        let entry_id = entry.id.clone();
+        let entry_label: SharedString = entry.label.clone().into();
+        let entry_description: SharedString = entry.description.clone().into();
+        let entry_prompt = entry.prompt.clone();
+        let badge_label = badge_label.clone();
+        let has_params = !entry.params.is_empty();
+
+        let entity = cx.entity().downgrade();
+
+        let click_entity = entity.clone();
+        let click_id = entry_id.clone();
+        let click_label = entry_label.clone();
+        let click_prompt = entry_prompt;
+
+        let edit_entity = entity.clone();
+        let edit_id = entry_id.clone();
+
+        let param_fields = self.render_entry_params(&entry.id, &entry.params, window, cx);
 
         let card = v_flex()
             .w_full()
@@ -3014,20 +3193,85 @@ impl Dashboard {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let is_open = !self.collapsed_sections.contains("automations");
+        let backend = self.agent_backend;
+        let automations_error = self.automations_error.clone();
+        let entity = cx.entity().downgrade();
+
+        // Build the disclosure chevron
+        let disc_entity = cx.entity().downgrade();
+        let disclosure = Disclosure::new(
+            SharedString::from("disc-automations"),
+            is_open,
+        )
+        .on_click(move |_, _, cx| {
+            let _ = disc_entity.update(cx, |this, cx| {
+                this.toggle_section("automations", cx);
+            });
+        });
+
+        // Build the custom header with disclosure + label + divider + backend toggle
+        let header = h_flex()
+            .px_1()
+            .mb_2()
+            .gap_2()
+            .items_center()
+            .child(disclosure)
+            .child(
+                Label::new("AUTOMATIONS")
+                    .color(Color::Muted)
+                    .size(LabelSize::XSmall),
+            )
+            .child(Divider::horizontal().color(DividerColor::BorderVariant))
+            .child({
+                let entity_claude = entity.clone();
+                let entity_gemini = entity.clone();
+                let entity_copy = entity;
+
+                ToggleButtonGroup::single_row(
+                    "agent-backend-toggle",
+                    [
+                        ToggleButtonSimple::new("Claude", move |_, _, cx| {
+                            let _ = entity_claude.update(cx, |this, cx| {
+                                this.agent_backend = AgentBackend::Claude;
+                                cx.notify();
+                            });
+                        }),
+                        ToggleButtonSimple::new("Gemini", move |_, _, cx| {
+                            let _ = entity_gemini.update(cx, |this, cx| {
+                                this.agent_backend = AgentBackend::Gemini;
+                                cx.notify();
+                            });
+                        }),
+                        ToggleButtonSimple::new("Copy", move |_, _, cx| {
+                            let _ = entity_copy.update(cx, |this, cx| {
+                                this.agent_backend = AgentBackend::CopyOnly;
+                                cx.notify();
+                            });
+                        }),
+                    ],
+                )
+                .selected_index(backend.index())
+                .style(ToggleButtonGroupStyle::Outlined)
+                .auto_width()
+            });
+
+        if !is_open {
+            return v_flex()
+                .w_full()
+                .gap_1()
+                .child(header);
+        }
+
         let all: Vec<AutomationEntry> =
             self.automations.iter().filter(|a| !a.hidden).cloned().collect();
         let meta: Vec<_> = all.iter().filter(|a| a.id.starts_with('_')).cloned().collect();
         let regular: Vec<_> = all.iter().filter(|a| !a.id.starts_with('_')).cloned().collect();
-        let backend = self.agent_backend;
         let badge_label = backend.badge_label(&self.backends);
         let badge_color = backend.badge_color();
         let has_both = !meta.is_empty() && !regular.is_empty();
         let is_empty = all.is_empty();
-        let automations_error = self.automations_error.clone();
 
-        let entity = cx.entity().downgrade();
-
-        // Pre-build cards (requires &mut self for param editors)
         let meta_cards: Vec<_> = meta
             .iter()
             .enumerate()
@@ -3065,51 +3309,7 @@ impl Dashboard {
         v_flex()
             .w_full()
             .gap_1()
-            .child(
-                h_flex()
-                    .px_1()
-                    .mb_2()
-                    .gap_2()
-                    .items_center()
-                    .child(
-                        Label::new("AUTOMATIONS")
-                            .color(Color::Muted)
-                            .size(LabelSize::XSmall),
-                    )
-                    .child(Divider::horizontal().color(DividerColor::BorderVariant))
-                    .child({
-                        let entity_claude = entity.clone();
-                        let entity_gemini = entity.clone();
-                        let entity_copy = entity.clone();
-
-                        ToggleButtonGroup::single_row(
-                            "agent-backend-toggle",
-                            [
-                                ToggleButtonSimple::new("Claude", move |_, _, cx| {
-                                    let _ = entity_claude.update(cx, |this, cx| {
-                                        this.agent_backend = AgentBackend::Claude;
-                                        cx.notify();
-                                    });
-                                }),
-                                ToggleButtonSimple::new("Gemini", move |_, _, cx| {
-                                    let _ = entity_gemini.update(cx, |this, cx| {
-                                        this.agent_backend = AgentBackend::Gemini;
-                                        cx.notify();
-                                    });
-                                }),
-                                ToggleButtonSimple::new("Copy", move |_, _, cx| {
-                                    let _ = entity_copy.update(cx, |this, cx| {
-                                        this.agent_backend = AgentBackend::CopyOnly;
-                                        cx.notify();
-                                    });
-                                }),
-                            ],
-                        )
-                        .selected_index(backend.index())
-                        .style(ToggleButtonGroupStyle::Outlined)
-                        .auto_width()
-                    }),
-            )
+            .child(header)
             .when_some(automations_error, |el, err| {
                 el.child(
                     Label::new(format!("Parse error: {}", err))
@@ -3139,41 +3339,47 @@ impl Dashboard {
             .children(regular_cards)
     }
 
-    fn render_ai_agents_section(&self, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_ai_agents_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let is_open = !self.collapsed_sections.contains("ai-agents");
+
+        if !is_open {
+            return v_flex()
+                .w_full()
+                .gap_1()
+                .child(self.section_header("AI AGENTS", "ai-agents", cx));
+        }
+
         let workspace = self.workspace.clone();
         let cwd = self.agent_cwd();
 
         // Resolve actual binary paths so we can run them directly without a
         // shell wrapper (avoids `.zshrc` errors from `-i` flag).
-        let claude_bin = resolve_bin("claude");
-        let gemini_bin = resolve_bin("gemini");
-
-        let agents: Vec<(&str, &str, String, Vec<String>)> = vec![
-            ("ai-claude", "Open Claude", claude_bin, vec![]),
-            ("ai-gemini", "Open Gemini", gemini_bin, vec![]),
-        ];
+        let agents: Vec<_> = self
+            .agent_launchers
+            .iter()
+            .map(|entry| {
+                let id = entry.id.clone();
+                let label = entry.label.clone();
+                let program = resolve_bin(&entry.command);
+                let args: Vec<String> = entry
+                    .flags
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect();
+                (id, label, program, args)
+            })
+            .collect();
 
         v_flex()
             .w_full()
             .gap_1()
-            .child(
-                h_flex()
-                    .px_1()
-                    .mb_2()
-                    .gap_2()
-                    .child(
-                        Label::new("AI AGENTS")
-                            .color(Color::Muted)
-                            .size(LabelSize::XSmall),
-                    )
-                    .child(Divider::horizontal().color(DividerColor::BorderVariant)),
-            )
+            .child(self.section_header("AI AGENTS", "ai-agents", cx))
             .children(agents.into_iter().map({
                 move |(id, label, program, args)| {
                     let workspace = workspace.clone();
                     let cwd = cwd.clone();
 
-                    ButtonLike::new(id)
+                    ButtonLike::new(SharedString::from(id.clone()))
                         .full_width()
                         .size(ButtonSize::Medium)
                         .child(
@@ -3185,24 +3391,26 @@ impl Dashboard {
                                         .color(Color::Accent)
                                         .size(IconSize::Small),
                                 )
-                                .child(Label::new(label)),
+                                .child(Label::new(label.clone())),
                         )
                         .on_click(move |_, window, cx| {
                             let workspace = workspace.clone();
                             let args = args.clone();
                             let program = program.clone();
                             let cwd = cwd.clone();
+                            let label = label.clone();
+                            let id = id.clone();
                             let _ = workspace.update(cx, |workspace, cx| {
                                 let spawn = SpawnInTerminal {
                                     id: TaskId(format!("ai-agent-{}", id)),
-                                    label: label.to_string(),
-                                    full_label: label.to_string(),
-                                    command_label: label.to_string(),
+                                    label: label.clone(),
+                                    full_label: label.clone(),
+                                    command_label: label.clone(),
                                     cwd: Some(cwd),
                                     shell: Shell::WithArguments {
                                         program,
                                         args,
-                                        title_override: Some(label.to_string()),
+                                        title_override: Some(label),
                                     },
                                     use_new_terminal: true,
                                     allow_concurrent_runs: false,
@@ -3275,7 +3483,7 @@ impl Render for Dashboard {
                 h_flex()
                     .relative()
                     .size_full()
-                    .px_12()
+                    .px_6()
                     .max_w(px(1100.))
                     .child(
                         v_flex()
@@ -3292,28 +3500,16 @@ impl Render for Dashboard {
                             .child(
                                 h_flex()
                                     .w_full()
-                                    .justify_center()
                                     .mb_4()
-                                    .gap_4()
+                                    .gap_3()
                                     .child(
                                         Icon::new(IconName::AudioOn)
-                                            .size(IconSize::XLarge)
+                                            .size(IconSize::Medium)
                                             .color(Color::Accent),
                                     )
                                     .child(
-                                        v_flex()
-                                            .child(
-                                                Headline::new("PostProd Tools Dashboard")
-                                                    .size(HeadlineSize::Small),
-                                            )
-                                            .child(
-                                                Label::new(
-                                                    "Audio post-production tools",
-                                                )
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted)
-                                                .italic(),
-                                            ),
+                                        Headline::new("PostProd Tools")
+                                            .size(HeadlineSize::Small),
                                     ),
                             )
                             // Session status bar
@@ -3323,7 +3519,7 @@ impl Render for Dashboard {
                             .child(self.render_pastas_recentes(cx))
                             // Three-tier tool layout
                             .child(self.render_featured_section(cx))
-                            .child(self.render_standard_section(cx))
+                            .child(self.render_standard_section(window, cx))
                             .child(self.render_compact_section(cx))
                             // Edit Tools button
                             .child(

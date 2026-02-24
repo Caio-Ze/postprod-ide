@@ -112,7 +112,11 @@ fi
 # --- Skill directory (progressive disclosure: SKILL.md + reference files) ---
 SKILL_SRC="$REPO_ROOT/assets/config/skills/ptsl-tools"
 SKILL_DST="$SUITE_ROOT/config/skills/ptsl-tools"
-if [[ -d "$SKILL_SRC" ]]; then
+# When SKILL_SRC is a symlink to SKILL_DST (dev setup), they resolve to the
+# same directory — copying would be a no-op or destructive.  Skip in that case.
+SKILL_SRC_REAL="$(cd "$SKILL_SRC" 2>/dev/null && pwd -P)" || true
+SKILL_DST_REAL="$(cd "$SKILL_DST" 2>/dev/null && pwd -P)" || true
+if [[ -d "$SKILL_SRC" && "$SKILL_SRC_REAL" != "$SKILL_DST_REAL" ]]; then
     mkdir -p "$SKILL_DST"
     # SKILL.md: only copy if missing (user editable)
     if [[ ! -f "$SKILL_DST/SKILL.md" ]]; then
@@ -126,6 +130,8 @@ if [[ -d "$SKILL_SRC" ]]; then
         cp "$SKILL_SRC/$f" "$SKILL_DST/"
     done
     echo "    Updated reference.md, workflows.md"
+elif [[ -L "$SKILL_SRC" ]]; then
+    echo "    skills/ptsl-tools — symlinked (skipping copy)"
 fi
 
 # --- .env template ---
