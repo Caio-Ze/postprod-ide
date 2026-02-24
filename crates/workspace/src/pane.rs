@@ -802,6 +802,23 @@ impl Pane {
         self.can_split_predicate = can_split_predicate;
     }
 
+    /// Set a predicate that controls whether this pane accepts a given drop.
+    ///
+    /// When set, the predicate is evaluated during both rendering (to decide
+    /// whether the drop overlay becomes visible) and dispatch (to decide
+    /// whether the drop listener fires). If the predicate returns `false`,
+    /// the drag is restored so that another element further down the bubble
+    /// phase can handle it.
+    ///
+    /// Mirrors [`set_can_split`]. No `cx.notify()` needed — the predicate is
+    /// checked at event dispatch time, not during rendering.
+    pub fn set_can_drop(
+        &mut self,
+        predicate: Option<Arc<dyn Fn(&dyn Any, &mut Window, &mut App) -> bool>>,
+    ) {
+        self.can_drop_predicate = predicate;
+    }
+
     pub fn set_can_toggle_zoom(&mut self, can_toggle_zoom: bool, cx: &mut Context<Self>) {
         self.can_toggle_zoom = can_toggle_zoom;
         cx.notify();

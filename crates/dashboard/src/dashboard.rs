@@ -4,9 +4,9 @@ use global_hotkey::{
 };
 use gpui::{
     actions, Action, App, AsyncApp, ClipboardItem, Context, Corner, DismissEvent, Entity,
-    EventEmitter, FocusHandle, Focusable, IntoElement, Keystroke, KeystrokeEvent, ParentElement,
-    PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription, WeakEntity,
-    Window,
+    EventEmitter, ExternalPaths, FocusHandle, Focusable, IntoElement, Keystroke, KeystrokeEvent,
+    ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription,
+    WeakEntity, Window,
 };
 use editor::{Editor, EditorEvent};
 use schemars::JsonSchema;
@@ -20,13 +20,16 @@ use ui::{
 };
 use workspace::{
     item::{Item, ItemEvent},
-    with_active_or_new_workspace, ModalView, OpenOptions, ProToolsSessionName, Workspace,
+    with_active_or_new_workspace, DraggedSelection, ModalView, OpenOptions, Pane,
+    ProToolsSessionName, Workspace,
 };
 
 use util::ResultExt as _;
 
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -57,6 +60,49 @@ pub struct RunDashboardTool {
 // Init
 // ---------------------------------------------------------------------------
 
+/// Reject directory-only drops on the pane overlay when Dashboard is active,
+/// so dashboard folder-cards can handle them instead.
+fn set_pane_drop_predicate(pane: &Entity<Pane>, workspace: &Workspace, cx: &mut App) {
+    let weak_pane = pane.downgrade();
+    let weak_project = workspace.project().downgrade();
+
+    pane.update(cx, |pane, _cx| {
+        pane.set_can_drop(Some(Arc::new(move |dragged: &dyn Any, _window, cx| {
+            let dashboard_active = weak_pane
+                .read_with(cx, |pane, _cx| {
+                    pane.active_item()
+                        .and_then(|item| item.downcast::<Dashboard>())
+                        .is_some()
+                })
+                .unwrap_or(false);
+
+            if !dashboard_active {
+                return true;
+            }
+
+            if let Some(paths) = dragged.downcast_ref::<ExternalPaths>() {
+                return paths.paths().iter().any(|p| !p.is_dir());
+            }
+
+            if let Some(selection) = dragged.downcast_ref::<DraggedSelection>() {
+                let is_dir_only = weak_project
+                    .read_with(cx, |project, cx| {
+                        let worktree_store = project.worktree_store().read(cx);
+                        selection.items().all(|entry| {
+                            worktree_store
+                                .entry_for_id(entry.entry_id, cx)
+                                .is_some_and(|e| e.is_dir())
+                        })
+                    })
+                    .unwrap_or(false);
+                return !is_dir_only;
+            }
+
+            true
+        })));
+    });
+}
+
 pub fn init(cx: &mut App) {
     cx.on_action(|_: &ShowDashboard, cx| {
         with_active_or_new_workspace(cx, |workspace, window, cx| {
@@ -83,6 +129,7 @@ pub fn init(cx: &mut App) {
                         workspace.active_pane().update(cx, |pane, _cx| {
                             pane.set_pinned_count(pane.pinned_count() + 1);
                         });
+                        set_pane_drop_predicate(workspace.active_pane(), workspace, cx);
                     }
                 })
                 .detach();
@@ -107,6 +154,7 @@ pub fn ensure_dashboard(workspace: &mut Workspace, window: &mut Window, cx: &mut
     workspace.active_pane().update(cx, |pane, _cx| {
         pane.set_pinned_count(pane.pinned_count() + 1);
     });
+    set_pane_drop_predicate(workspace.active_pane(), workspace, cx);
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +184,12 @@ impl ToolTier {
 enum ToolSource {
     Runtime,
     Agent,
+}
+
+#[derive(Clone, Copy)]
+enum FolderTarget {
+    Active,
+    Destination,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -2174,6 +2228,37 @@ impl Dashboard {
         });
     }
 
+    fn set_folder(&mut self, target: FolderTarget, path: PathBuf, cx: &mut Context<Self>) {
+        match target {
+            FolderTarget::Active => {
+                write_pasta_ativa(&path);
+                self.pasta_ativa = Some(path);
+                self.pastas_recentes = read_pastas_recentes();
+            }
+            FolderTarget::Destination => {
+                write_pasta_destino(&path);
+                self.pasta_destino = Some(path);
+                self.pastas_destino_recentes = read_pastas_destino_recentes();
+            }
+        }
+        cx.notify();
+    }
+
+    fn resolve_dragged_directory(&self, selection: &DraggedSelection, cx: &App) -> Option<PathBuf> {
+        let workspace = self.workspace.upgrade()?;
+        let project = workspace.read(cx).project().read(cx);
+        for entry in selection.items() {
+            if let Some(project_path) = project.path_for_entry(entry.entry_id, cx) {
+                if let Some(abs) = project.absolute_path(&project_path, cx) {
+                    if abs.is_dir() {
+                        return Some(abs);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     fn pick_pasta_ativa(&mut self, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: false,
@@ -2345,6 +2430,7 @@ impl Dashboard {
         let active_dropdown = Self::build_folder_dropdown(
             "active-folder",
             "Active Folder",
+            FolderTarget::Active,
             &active_current,
             &active_recentes,
             Color::Accent,
@@ -2374,6 +2460,7 @@ impl Dashboard {
         let dest_dropdown = Self::build_folder_dropdown(
             "destination",
             "Destination",
+            FolderTarget::Destination,
             &dest_current,
             &dest_recentes,
             Color::Success,
@@ -2416,6 +2503,7 @@ impl Dashboard {
     fn build_folder_dropdown(
         id: &str,
         tag: &str,
+        target: FolderTarget,
         current: &Option<PathBuf>,
         recentes: &[PathBuf],
         icon_color: Color,
@@ -2517,13 +2605,34 @@ impl Dashboard {
             .full_width()
             .height(px(56.).into());
 
+        let drop_external = cx.listener(move |this, paths: &ExternalPaths, _window, cx| {
+            if let Some(dir) = paths.paths().iter().find(|p| p.is_dir()) {
+                this.set_folder(target, dir.clone(), cx);
+            }
+        });
+        let drop_selection =
+            cx.listener(move |this, selection: &DraggedSelection, _window, cx| {
+                if let Some(dir) = this.resolve_dragged_directory(selection, cx) {
+                    this.set_folder(target, dir, cx);
+                }
+            });
+
         div()
+            .id(SharedString::from(format!("{}-drop", id)))
             .w_full()
             .rounded_lg()
             .border_1()
             .border_l_3()
             .border_color(border_hsla)
             .bg(card_bg)
+            .drag_over::<ExternalPaths>(|style, _, _, cx| {
+                style.bg(cx.theme().colors().drop_target_background)
+            })
+            .drag_over::<DraggedSelection>(|style, _, _, cx| {
+                style.bg(cx.theme().colors().drop_target_background)
+            })
+            .on_drop(drop_external)
+            .on_drop(drop_selection)
             .child(
                 PopoverMenu::new(SharedString::from(format!("{}-popover", id)))
                     .full_width(true)
@@ -2770,11 +2879,20 @@ impl Dashboard {
             .map(|tool| {
                 let group_name = SharedString::from(format!("tool-{}", tool.id));
                 let click_handler = self.tool_click_handler(&tool, cx);
-                let action_buttons =
-                    self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
                 let tool_icon = icon_for_tool(&tool.icon);
                 let tool_label: SharedString = tool.label.clone().into();
                 let tool_description: SharedString = tool.description.clone().into();
+
+                let featured_drop =
+                    cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+                        if let Some(dir) = paths.paths().iter().find(|p| p.is_dir()) {
+                            this.set_folder(FolderTarget::Destination, dir.clone(), cx);
+                        }
+                    });
+
+                // Action buttons last (impl IntoElement captures cx lifetime)
+                let action_buttons =
+                    self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
 
                 div()
                     .id(SharedString::from(format!("featured-{}", tool.id)))
@@ -2787,6 +2905,10 @@ impl Dashboard {
                     .overflow_hidden()
                     .cursor_pointer()
                     .hover(move |style| style.bg(hover_bg))
+                    .drag_over::<ExternalPaths>(|style, _, _, cx| {
+                        style.bg(cx.theme().colors().drop_target_background)
+                    })
+                    .on_drop(featured_drop)
                     .child(
                         h_flex()
                             .w_full()
@@ -2871,6 +2993,31 @@ impl Dashboard {
                 } else {
                     Vec::new()
                 };
+
+                let path_drop_handler = tool
+                    .params
+                    .iter()
+                    .find(|p| p.param_type == ParamType::Path)
+                    .map(|p| {
+                        let entry_id = tool.id.clone();
+                        let param_key = p.key.clone();
+                        cx.listener(
+                            move |this: &mut Dashboard, paths: &ExternalPaths, _window, cx| {
+                                if let Some(path) = paths.paths().first() {
+                                    this.param_values
+                                        .entry(entry_id.clone())
+                                        .or_default()
+                                        .insert(
+                                            param_key.clone(),
+                                            path.to_string_lossy().to_string(),
+                                        );
+                                    write_param_values(&this.param_values);
+                                    cx.notify();
+                                }
+                            },
+                        )
+                    });
+
                 // Action buttons last (impl IntoElement captures cx lifetime)
                 let action_buttons =
                     self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
@@ -2887,6 +3034,12 @@ impl Dashboard {
                     .overflow_hidden()
                     .cursor_pointer()
                     .hover(move |style| style.border_color(hover_border))
+                    .when(path_drop_handler.is_some(), |el| {
+                        el.drag_over::<ExternalPaths>(|style, _, _, cx| {
+                            style.bg(cx.theme().colors().drop_target_background)
+                        })
+                    })
+                    .when_some(path_drop_handler, |el, handler| el.on_drop(handler))
                     .child(
                         h_flex()
                             .w_full()

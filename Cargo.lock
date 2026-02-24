@@ -4640,6 +4640,7 @@ dependencies = [
  "gpui",
  "log",
  "paths",
+ "project",
  "schemars",
  "serde",
  "smol",

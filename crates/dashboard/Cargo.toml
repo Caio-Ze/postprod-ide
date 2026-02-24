@@ -17,6 +17,7 @@ global-hotkey.workspace = true
 gpui.workspace = true
 log.workspace = true
 paths.workspace = true
+project.workspace = true
 schemars.workspace = true
 serde.workspace = true
 smol.workspace = true
