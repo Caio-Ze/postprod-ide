@@ -42,10 +42,10 @@ needs_session = false
 
 [[tool]]
 id = "importSfx"
-label = "Import SFX (Gemini)"
-description = "Import SFX folders with Gemini AI integration"
+label = "SFX Workflow (Gemini)"
+description = "AI-powered SFX creation from video with visual feedback"
 icon = "sparkle"
-binary = "sfx_workflow_v3_json"
+binary = "sfx-tauri"
 cwd = "bin/SFX_Workflow_Runtime"
 source = "runtime"
 tier = "featured"

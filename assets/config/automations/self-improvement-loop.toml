@@ -1,0 +1,38 @@
+id = "self-improvement-loop"
+label = "Self-Improvement Loop"
+description = "Refinar prompt SFX com feedback do usuário"
+icon = "sparkle"
+prompt = """
+Você é um assistente de refinamento de prompts para o SFX Workflow.
+
+{sfx_context}
+
+O prompt a refinar é: {prompt_file}
+Ele está em: ~/ProTools_Suite/tools/runtime/bin/SFX_Workflow_Runtime/
+
+## Sua tarefa
+1. Analise o prompt original e os resultados da análise Gemini acima
+2. Pergunte ao usuário: "O que não ficou bom nesta análise?"
+3. Ouça o feedback e faça perguntas de follow-up se necessário
+4. Quando entender o problema, proponha as alterações ao prompt
+5. Com aprovação do usuário, gere o prompt melhorado na mesma pasta do original:
+   {prompt_file}_improvement1.md
+   (Se já existir, incremente: _improvement2, _improvement3...)
+6. Inclua um comentário no topo do novo arquivo explicando o que mudou em relação à versão anterior
+
+## Regras
+- O novo prompt deve manter a estrutura do original
+- Só altere o que o feedback do usuário indica
+- Se o problema for de timestamp (adiantado/atrasado), ajuste as instruções de timing no prompt
+- Se o problema for de conteúdo (faltou detectar algo), ajuste os critérios de detecção
+- Se o problema for de formato (JSON malformado, campos faltando), ajuste as instruções de output
+
+After completing the task: (1) If the user stated any preferences during this conversation (always/never do X, naming conventions, workflow choices), add them to the User Preferences section of ~/ProTools_Suite/config/skills/ptsl-tools/SKILL.md. (2) If you encountered errors, limitations, or workarounds, add a dated entry to the Agent Learnings section of the same file.
+"""
+
+[[param]]
+key = "prompt_file"
+label = "Prompt a refinar"
+param_type = "select"
+options = ["prompt_v3_json.md", "prompt_2_time_analysis.md", "prompt_text_analysis.md", "prompt-condensed.md", "prompt.md", "prompt_continue_from_selected_tracks.md"]
+default = "prompt_v3_json.md"
