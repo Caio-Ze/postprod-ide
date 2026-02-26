@@ -51,6 +51,22 @@ source = "runtime"
 tier = "featured"
 needs_session = false
 
+[[tool.param]]
+key = "model"
+label = "AI Model"
+placeholder = "Select model"
+default = "flash"
+param_type = "select"
+options = ["flash", "pro"]
+
+[[tool.param]]
+key = "fps"
+label = "Video FPS"
+placeholder = "Frames per second"
+default = "4"
+param_type = "select"
+options = ["4", "8", "10"]
+
 [[tool]]
 id = "tvToSpotWorkflow"
 label = "TV -> SPOT Workflow"

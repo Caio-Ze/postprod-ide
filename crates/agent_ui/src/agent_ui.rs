@@ -225,6 +225,7 @@ impl ExternalAgent {
 pub enum ExternalAgentInitialContent {
     ThreadSummary(acp_thread::AgentSessionInfo),
     Text(String),
+    TextWithAutoSubmit(String),
 }
 
 /// Opens the profile management interface for configuring agent tools and settings.

@@ -8,6 +8,7 @@ use gpui::{
     ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription,
     WeakEntity, Window,
 };
+use agent_ui::AgentPanel;
 use editor::{Editor, EditorEvent};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -1666,6 +1667,7 @@ enum AgentBackend {
     Claude,
     Gemini,
     CopyOnly,
+    Native,
 }
 
 impl AgentBackend {
@@ -1674,6 +1676,7 @@ impl AgentBackend {
             Self::Claude => 0,
             Self::Gemini => 1,
             Self::CopyOnly => 2,
+            Self::Native => 3,
         }
     }
 
@@ -1682,12 +1685,14 @@ impl AgentBackend {
             Self::Claude => "claude",
             Self::Gemini => "gemini",
             Self::CopyOnly => "",
+            Self::Native => "native",
         }
     }
 
     fn badge_label(self, backends: &[BackendEntry]) -> SharedString {
         match self {
             Self::CopyOnly => "(copy prompt)".into(),
+            Self::Native => "(native agent)".into(),
             _ => backends
                 .iter()
                 .find(|b| b.id == self.backend_id())
@@ -1700,6 +1705,7 @@ impl AgentBackend {
         match self {
             Self::Claude | Self::Gemini => Color::Accent,
             Self::CopyOnly => Color::Muted,
+            Self::Native => Color::Success,
         }
     }
 
@@ -1710,6 +1716,7 @@ impl AgentBackend {
             Self::Claude => (status.info, status.info_background),
             Self::Gemini => (status.modified, status.modified_background),
             Self::CopyOnly => (status.hint, status.hint_background),
+            Self::Native => (status.success, status.success_background),
         }
     }
 }
@@ -1832,8 +1839,26 @@ impl Dashboard {
                                 .to_string_lossy()
                                 .to_string()
                         });
+                        let session_changed = dashboard.session_path != result;
                         dashboard.session_path = result;
                         dashboard.session_name = name;
+
+                        // Register session directory as a hidden worktree so the
+                        // native agent's terminal tool can cd into it.
+                        if session_changed {
+                            if let Some(session) = &dashboard.session_path {
+                                if let Some(session_dir) = Path::new(session).parent() {
+                                    let session_dir = session_dir.to_path_buf();
+                                    let workspace = dashboard.workspace.clone();
+                                    let _ = workspace.update(cx, |workspace, cx| {
+                                        let project = workspace.project().clone();
+                                        project.update(cx, |project, cx| {
+                                            project.find_or_create_worktree(&session_dir, false, cx)
+                                        }).detach();
+                                    });
+                                }
+                            }
+                        }
 
                         // Update the global for window title
                         let global_name = dashboard
@@ -2191,6 +2216,30 @@ impl Dashboard {
             }
         }
 
+        // Native backend: route prompt to the Zed agent panel (multi-line OK)
+        if self.agent_backend == AgentBackend::Native {
+            let workspace = self.workspace.clone();
+            let prompt = resolved_prompt;
+            let _ = workspace.update(cx, |workspace, cx| {
+                if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                    panel.update(cx, |panel, cx| {
+                        panel.new_external_thread_with_auto_submit(
+                            Some(prompt),
+                            window,
+                            cx,
+                        );
+                    });
+                    workspace.focus_panel::<AgentPanel>(window, cx);
+                }
+            });
+            return;
+        }
+
+        if self.agent_backend == AgentBackend::CopyOnly {
+            cx.write_to_clipboard(ClipboardItem::new_string(resolved_prompt));
+            return;
+        }
+
         // Collapse multi-line prompts into a single line to avoid
         // `zsh: parse error near '\n'` when spawning `claude -p "..."`.
         let resolved_prompt = resolved_prompt
@@ -2199,11 +2248,6 @@ impl Dashboard {
             .filter(|line| !line.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
-
-        if self.agent_backend == AgentBackend::CopyOnly {
-            cx.write_to_clipboard(ClipboardItem::new_string(resolved_prompt));
-            return;
-        }
 
         let backend_id = self.agent_backend.backend_id();
         let Some(config) = self.backends.iter().find(|b| b.id == backend_id) else {
@@ -2893,7 +2937,7 @@ impl Dashboard {
 
     /// Build Featured tool cards: full-width, accent border + left strip,
     /// 40px tinted icon, hover-reveal actions.
-    fn build_featured_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+    fn build_featured_cards(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let tools: Vec<ToolEntry> = self
             .tools
             .iter()
@@ -2914,6 +2958,15 @@ impl Dashboard {
                 let tool_icon = icon_for_tool(&tool.icon);
                 let tool_label: SharedString = tool.label.clone().into();
                 let tool_description: SharedString = tool.description.clone().into();
+
+                let has_params = !tool.params.is_empty();
+
+                // Render params first (returns owned Vec, releases &mut borrows)
+                let param_fields = if has_params {
+                    self.render_entry_params(&tool.id, &tool.params, window, cx)
+                } else {
+                    Vec::new()
+                };
 
                 let featured_drop =
                     cx.listener(|this, paths: &ExternalPaths, _window, cx| {
@@ -2985,6 +3038,17 @@ impl Dashboard {
                                     .child(action_buttons),
                             ),
                     )
+                    .when(has_params, |el| {
+                        el.child(
+                            h_flex()
+                                .px_2()
+                                .pb_2()
+                                .pl(px(50.))
+                                .gap_2()
+                                .flex_wrap()
+                                .children(param_fields),
+                        )
+                    })
                     .on_click(click_handler)
                     .into_any_element()
             })
@@ -3180,10 +3244,10 @@ impl Dashboard {
             .collect()
     }
 
-    fn render_featured_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_featured_section(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let is_open = !self.collapsed_sections.contains("featured");
         let cards = if is_open {
-            self.build_featured_cards(cx)
+            self.build_featured_cards(window, cx)
         } else {
             Vec::new()
         };
@@ -3743,6 +3807,7 @@ impl Dashboard {
             .child({
                 let entity_claude = entity.clone();
                 let entity_gemini = entity.clone();
+                let entity_native = entity.clone();
                 let entity_copy = entity;
 
                 ToggleButtonGroup::single_row(
@@ -3757,6 +3822,12 @@ impl Dashboard {
                         ToggleButtonSimple::new("Gemini", move |_, _, cx| {
                             let _ = entity_gemini.update(cx, |this, cx| {
                                 this.agent_backend = AgentBackend::Gemini;
+                                cx.notify();
+                            });
+                        }),
+                        ToggleButtonSimple::new("Native", move |_, _, cx| {
+                            let _ = entity_native.update(cx, |this, cx| {
+                                this.agent_backend = AgentBackend::Native;
                                 cx.notify();
                             });
                         }),
@@ -4054,7 +4125,7 @@ impl Render for Dashboard {
                             // Folder selectors
                             .child(self.render_folder_row(window, cx))
                             // Three-tier tool layout
-                            .child(self.render_featured_section(cx))
+                            .child(self.render_featured_section(window, cx))
                             .child(self.render_standard_section(window, cx))
                             .child(self.render_compact_section(cx))
                             // AI Agents

@@ -1624,6 +1624,21 @@ impl AgentPanel {
         );
     }
 
+    pub fn new_external_thread_with_auto_submit(
+        &mut self,
+        initial_text: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.external_thread(
+            None,
+            None,
+            initial_text.map(ExternalAgentInitialContent::TextWithAutoSubmit),
+            window,
+            cx,
+        );
+    }
+
     pub fn new_agent_thread(
         &mut self,
         agent: AgentType,

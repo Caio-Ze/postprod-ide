@@ -283,6 +283,11 @@ impl AcpThreadView {
             this.update_recent_history_from_cache(&history, cx);
         });
 
+        let auto_submit = matches!(
+            &initial_content,
+            Some(ExternalAgentInitialContent::TextWithAutoSubmit(_))
+        );
+
         let message_editor = cx.new(|cx| {
             let mut editor = MessageEditor::new(
                 workspace.clone(),
@@ -306,7 +311,8 @@ impl AcpThreadView {
                     ExternalAgentInitialContent::ThreadSummary(entry) => {
                         editor.insert_thread_summary(entry, window, cx);
                     }
-                    ExternalAgentInitialContent::Text(prompt) => {
+                    ExternalAgentInitialContent::Text(prompt)
+                    | ExternalAgentInitialContent::TextWithAutoSubmit(prompt) => {
                         editor.set_message(
                             vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))],
                             window,
@@ -333,6 +339,12 @@ impl AcpThreadView {
             window,
             Self::handle_message_editor_event,
         ));
+
+        if auto_submit {
+            cx.defer_in(window, |this: &mut Self, window, cx| {
+                this.send(window, cx);
+            });
+        }
 
         let recent_history_entries = history.read(cx).get_recent_sessions(3);
 
