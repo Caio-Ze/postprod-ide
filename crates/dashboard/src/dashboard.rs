@@ -15,8 +15,9 @@ use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
 use ui::{
     prelude::*, Button, ButtonLike, ButtonStyle, Callout, ContextMenu, Disclosure, Divider,
     DividerColor, DropdownMenu, DropdownStyle, Headline, HeadlineSize, Icon, IconButton,
-    IconName, IconSize, Label, LabelSize, Modal, ModalFooter, ModalHeader, PopoverMenu, Section,
-    ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip, WithScrollbar as _,
+    IconName, IconSize, Indicator, Label, LabelSize, Modal, ModalFooter, ModalHeader,
+    PopoverMenu, Section, ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip,
+    WithScrollbar as _,
 };
 use workspace::{
     item::{Item, ItemEvent},
@@ -1701,6 +1702,16 @@ impl AgentBackend {
             Self::CopyOnly => Color::Muted,
         }
     }
+
+    /// Returns (accent, accent_background) for card styling per backend.
+    fn card_accent(self, cx: &App) -> (gpui::Hsla, gpui::Hsla) {
+        let status = cx.theme().status();
+        match self {
+            Self::Claude => (status.info, status.info_background),
+            Self::Gemini => (status.modified, status.modified_background),
+            Self::CopyOnly => (status.hint, status.hint_background),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1739,6 +1750,8 @@ pub struct Dashboard {
     background_tools: HashSet<String>,
     // Collapsed section state (persisted)
     collapsed_sections: HashSet<String>,
+    // Expanded automation prompt previews (ephemeral)
+    expanded_automations: HashSet<String>,
     // Config parse errors
     tools_error: Option<String>,
     automations_error: Option<String>,
@@ -1967,6 +1980,7 @@ impl Dashboard {
                 _agents_reload_task: agents_reload_task,
                 background_tools,
                 collapsed_sections,
+                expanded_automations: HashSet::new(),
                 tools_error,
                 automations_error,
                 scroll_handle: ScrollHandle::new(),
@@ -2395,6 +2409,15 @@ impl Dashboard {
         cx.notify();
     }
 
+    fn toggle_automation_expanded(&mut self, automation_id: &str, cx: &mut Context<Self>) {
+        if self.expanded_automations.contains(automation_id) {
+            self.expanded_automations.remove(automation_id);
+        } else {
+            self.expanded_automations.insert(automation_id.to_string());
+        }
+        cx.notify();
+    }
+
     fn render_session_status(&self, _cx: &App) -> impl IntoElement {
         match &self.session_name {
             Some(name) => {
@@ -2668,34 +2691,43 @@ impl Dashboard {
             })
             .when(is_open && has_any, |el| {
                 el.child(
-                    h_flex()
-                        .px_2()
-                        .gap_4()
-                        .child(Self::delivery_badge("TV", status.tv_count, status.tv_count > 0))
-                        .child(Self::delivery_badge("NET", status.net_count, status.net_count > 0))
-                        .child(Self::delivery_badge("SPOT", status.spot_count, status.spot_count > 0))
-                        .child(Self::delivery_badge("MP3", status.mp3_count, status.mp3_count > 0)),
-                )
-                .children(status.warnings.iter().map(|w| {
-                    h_flex()
-                        .px_2()
+                    v_flex()
+                        .id("delivery-content-anim")
+                        .w_full()
+                        .gap_1()
                         .child(
-                            Label::new(format!("  {}", w))
-                                .color(Color::Warning)
-                                .size(LabelSize::XSmall),
+                            h_flex()
+                                .px_2()
+                                .gap_4()
+                                .child(Self::delivery_badge("TV", status.tv_count, status.tv_count > 0))
+                                .child(Self::delivery_badge("NET", status.net_count, status.net_count > 0))
+                                .child(Self::delivery_badge("SPOT", status.spot_count, status.spot_count > 0))
+                                .child(Self::delivery_badge("MP3", status.mp3_count, status.mp3_count > 0)),
                         )
-                }))
+                        .children(status.warnings.iter().map(|w| {
+                            h_flex()
+                                .px_2()
+                                .child(
+                                    Label::new(format!("  {}", w))
+                                        .color(Color::Warning)
+                                        .size(LabelSize::XSmall),
+                                )
+                        })),
+                )
             })
     }
 
     fn delivery_badge(label: &str, count: usize, ok: bool) -> impl IntoElement {
-        let indicator = if ok { " OK" } else { " --" };
-        let color = if ok { Color::Created } else { Color::Muted };
-
+        let dot_color = if ok { Color::Created } else { Color::Muted };
         h_flex()
-            .gap_1()
-            .child(Label::new(format!("{}: {}", label, count)).size(LabelSize::Small))
-            .child(Label::new(indicator).size(LabelSize::XSmall).color(color))
+            .gap_1p5()
+            .items_center()
+            .child(Indicator::dot().color(dot_color))
+            .child(
+                Label::new(format!("{}: {}", label, count))
+                    .size(LabelSize::Small)
+                    .color(if ok { Color::Default } else { Color::Muted }),
+            )
     }
 
     fn section_header(
@@ -3168,7 +3200,15 @@ impl Dashboard {
                     )
                 })
             })
-            .children(cards)
+            .when(is_open && !cards.is_empty(), |el| {
+                el.child(
+                    v_flex()
+                        .id("featured-content-anim")
+                        .w_full()
+                        .gap_2()
+                        .children(cards),
+                )
+            })
     }
 
     fn render_standard_section(
@@ -3185,6 +3225,7 @@ impl Dashboard {
                 let cards = self.build_standard_cards(window, cx);
                 el.child(
                     h_flex()
+                        .id("standard-content-anim")
                         .w_full()
                         .flex_wrap()
                         .gap(px(8.))
@@ -3195,12 +3236,62 @@ impl Dashboard {
 
     fn render_compact_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let is_open = !self.collapsed_sections.contains("compact");
+        let entity = cx.entity().downgrade();
+        let id_for_toggle = "compact".to_string();
+
+        let edit_btn = ButtonLike::new("edit-tools-btn")
+            .size(ButtonSize::Compact)
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Icon::new(IconName::FileToml)
+                            .color(Color::Muted)
+                            .size(IconSize::XSmall),
+                    )
+                    .child(
+                        Label::new("Edit TOML")
+                            .color(Color::Muted)
+                            .size(LabelSize::XSmall),
+                    ),
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                let path = tools_toml_path();
+                let workspace = this.workspace.clone();
+                cx.spawn_in(window, async move |_this, cx| {
+                    let _ = workspace.update_in(cx, |workspace, window, cx| {
+                        workspace
+                            .open_abs_path(path, OpenOptions::default(), window, cx)
+                            .detach();
+                    });
+                })
+                .detach();
+            }));
+
+        let header = h_flex()
+            .px_1()
+            .mb_2()
+            .gap_2()
+            .items_center()
+            .child(
+                Disclosure::new(SharedString::from("disc-compact"), is_open).on_click(
+                    move |_, _, cx| {
+                        let _ = entity.update(cx, |this, cx| {
+                            this.toggle_section(&id_for_toggle, cx);
+                        });
+                    },
+                ),
+            )
+            .child(
+                Label::new(ToolTier::Compact.label())
+                    .color(Color::Muted)
+                    .size(LabelSize::XSmall),
+            )
+            .child(Divider::horizontal().color(DividerColor::BorderVariant))
+            .child(edit_btn);
 
         if !is_open {
-            return v_flex()
-                .w_full()
-                .gap_2()
-                .child(self.section_header(ToolTier::Compact.label(), "compact", cx));
+            return v_flex().w_full().gap_2().child(header);
         }
 
         let cards = self.build_compact_cards(cx);
@@ -3208,9 +3299,10 @@ impl Dashboard {
         v_flex()
             .w_full()
             .gap_2()
-            .child(self.section_header(ToolTier::Compact.label(), "compact", cx))
+            .child(header)
             .child(
                 h_flex()
+                    .id("compact-content-anim")
                     .w_full()
                     .flex_wrap()
                     .gap(px(8.))
@@ -3438,109 +3530,179 @@ impl Dashboard {
         let entry_prompt = entry.prompt.clone();
         let badge_label = badge_label.clone();
         let has_params = !entry.params.is_empty();
+        let is_expanded = self.expanded_automations.contains(&entry.id);
+
+        let (accent, accent_bg) = self.agent_backend.card_accent(cx);
+        let card_bg = cx.theme().colors().elevated_surface_background;
+        let hover_bg = cx.theme().colors().ghost_element_hover;
+        let icon_tint_bg = accent_bg.opacity(0.15);
+        let editor_bg = cx.theme().colors().editor_background;
 
         let entity = cx.entity().downgrade();
 
         let click_entity = entity.clone();
         let click_id = entry_id.clone();
         let click_label = entry_label.clone();
-        let click_prompt = entry_prompt;
+        let click_prompt = entry_prompt.clone();
 
-        let edit_entity = entity;
+        let edit_entity = entity.clone();
         let edit_id = entry_id.clone();
 
-        let param_fields = self.render_entry_params(&entry.id, &entry.params, window, cx);
+        let disc_entity = entity;
+        let disc_id = entry_id.clone();
 
-        let card = v_flex()
+        let param_fields = self.render_entry_params(&entry.id, &entry.params, window, cx);
+        let group_name = SharedString::from(format!("automation-{}", entry_id));
+
+        div()
+            .id(SharedString::from(format!("automation-card-{}-{}", entry_id, idx)))
+            .group(group_name)
             .w_full()
+            .rounded_lg()
+            .border_1()
+            .border_color(accent.opacity(0.5))
+            .bg(card_bg)
+            .overflow_hidden()
+            .cursor_pointer()
+            .hover(move |style| style.bg(hover_bg))
             .child(
                 h_flex()
                     .w_full()
-                    .gap_1()
-                    .items_center()
                     .child(
-                        div().flex_1().child(
-                            ButtonLike::new(format!("automation-btn-{}-{}", entry_id, idx))
-                                .full_width()
-                                .size(ButtonSize::Large)
-                                .child(
+                        div()
+                            .w(px(3.))
+                            .h_full()
+                            .flex_shrink_0()
+                            .bg(accent),
+                    )
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .p_2()
+                                    .gap_3()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .size(px(36.))
+                                            .rounded(px(8.))
+                                            .bg(icon_tint_bg)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                Icon::new(icon)
+                                                    .size(IconSize::Medium)
+                                                    .color(icon_color),
+                                            ),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .child(Label::new(entry_label))
+                                            .child(
+                                                Label::new(entry_description)
+                                                    .color(Color::Muted)
+                                                    .size(LabelSize::XSmall),
+                                            ),
+                                    )
+                                    .child(
+                                        Label::new(badge_label)
+                                            .color(badge_color)
+                                            .size(LabelSize::XSmall),
+                                    )
+                                    .child(
+                                        Disclosure::new(
+                                            SharedString::from(format!("disc-auto-{}", disc_id)),
+                                            is_expanded,
+                                        )
+                                        .on_click(move |_, _, cx| {
+                                            let _ = disc_entity.update(cx, |this, cx| {
+                                                this.toggle_automation_expanded(&disc_id, cx);
+                                            });
+                                        }),
+                                    )
+                                    .child(
+                                        IconButton::new(
+                                            format!("edit-automation-{}", edit_id),
+                                            IconName::FileToml,
+                                        )
+                                        .icon_size(IconSize::Small)
+                                        .icon_color(Color::Muted)
+                                        .tooltip(Tooltip::text("Edit"))
+                                        .on_click(move |_, window, cx| {
+                                            let _ = edit_entity.update(cx, |this, cx| {
+                                                let path = automations_dir()
+                                                    .join(format!("{}.toml", edit_id));
+                                                let workspace = this.workspace.clone();
+                                                cx.spawn_in(window, async move |_this, cx| {
+                                                    let _ = workspace.update_in(
+                                                        cx,
+                                                        |workspace, window, cx| {
+                                                            workspace
+                                                                .open_abs_path(
+                                                                    path,
+                                                                    OpenOptions::default(),
+                                                                    window,
+                                                                    cx,
+                                                                )
+                                                                .detach();
+                                                        },
+                                                    );
+                                                })
+                                                .detach();
+                                            });
+                                        }),
+                                    ),
+                            )
+                            .when(has_params, |el| {
+                                el.child(
                                     h_flex()
                                         .w_full()
+                                        .pl(px(52.))
+                                        .pr_2()
+                                        .pb_1()
                                         .gap_2()
+                                        .flex_wrap()
+                                        .children(param_fields),
+                                )
+                            })
+                            .when(is_expanded, |el| {
+                                el.child(
+                                    div()
+                                        .w_full()
+                                        .px_3()
+                                        .pb_2()
                                         .child(
-                                            Icon::new(icon)
-                                                .color(icon_color)
-                                                .size(IconSize::Small),
-                                        )
-                                        .child(
-                                            v_flex()
-                                                .flex_1()
-                                                .items_start()
-                                                .child(Label::new(entry_label))
+                                            div()
+                                                .w_full()
+                                                .p_2()
+                                                .rounded_md()
+                                                .bg(editor_bg)
                                                 .child(
-                                                    Label::new(entry_description)
+                                                    Label::new(entry_prompt)
                                                         .color(Color::Muted)
                                                         .size(LabelSize::XSmall),
                                                 ),
-                                        )
-                                        .child(
-                                            Label::new(badge_label)
-                                                .color(badge_color)
-                                                .size(LabelSize::XSmall),
                                         ),
                                 )
-                                .on_click(move |_, window, cx| {
-                                    let _ = click_entity.update(cx, |this, cx| {
-                                        this.run_automation(
-                                            &click_id,
-                                            &click_label,
-                                            &click_prompt,
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                }),
-                        ),
-                    )
-                    .child(
-                        IconButton::new(format!("edit-automation-{}", edit_id), IconName::FileToml)
-                            .icon_size(IconSize::Small)
-                            .icon_color(Color::Muted)
-                            .tooltip(Tooltip::text("Edit"))
-                            .on_click(move |_, window, cx| {
-                                let _ = edit_entity.update(cx, |this, cx| {
-                                    let path = automations_dir().join(format!("{}.toml", edit_id));
-                                    let workspace = this.workspace.clone();
-                                    cx.spawn_in(window, async move |_this, cx| {
-                                        let _ =
-                                            workspace.update_in(cx, |workspace, window, cx| {
-                                                workspace
-                                                    .open_abs_path(
-                                                        path,
-                                                        OpenOptions::default(),
-                                                        window,
-                                                        cx,
-                                                    )
-                                                    .detach();
-                                            });
-                                    })
-                                    .detach();
-                                });
                             }),
                     ),
             )
-            .when(has_params, |el| {
-                el.child(
-                    h_flex()
-                        .w_full()
-                        .pl_8()
-                        .gap_2()
-                        .flex_wrap()
-                        .children(param_fields),
-                )
-            });
-
-        card
+            .on_click(move |_, window, cx| {
+                let _ = click_entity.update(cx, |this, cx| {
+                    this.run_automation(
+                        &click_id,
+                        &click_label,
+                        &click_prompt,
+                        window,
+                        cx,
+                    );
+                });
+            })
     }
 
     fn render_automations_section(
@@ -3683,15 +3845,23 @@ impl Dashboard {
                         ),
                 )
             })
-            .children(meta_cards)
-            .when(has_both, |el| {
+            .when(!is_empty, |el| {
                 el.child(
-                    div()
-                        .py_1()
-                        .child(Divider::horizontal().color(DividerColor::BorderVariant)),
+                    v_flex()
+                        .id("automations-content-anim")
+                        .w_full()
+                        .gap_1()
+                        .children(meta_cards)
+                        .when(has_both, |el| {
+                            el.child(
+                                div()
+                                    .py_1()
+                                    .child(Divider::horizontal().color(DividerColor::BorderVariant)),
+                            )
+                        })
+                        .children(regular_cards),
                 )
             })
-            .children(regular_cards)
     }
 
     fn render_ai_agents_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -3725,11 +3895,9 @@ impl Dashboard {
             })
             .collect();
 
-        v_flex()
-            .w_full()
-            .gap_1()
-            .child(self.section_header("AI AGENTS", "ai-agents", cx))
-            .children(agents.into_iter().map({
+        let agent_buttons: Vec<_> = agents
+            .into_iter()
+            .map({
                 move |(id, label, program, args)| {
                     let workspace = workspace.clone();
                     let cwd = cwd.clone();
@@ -3775,8 +3943,22 @@ impl Dashboard {
                                 workspace.spawn_in_terminal(spawn, window, cx).detach();
                             });
                         })
+                        .into_any_element()
                 }
-            }))
+            })
+            .collect();
+
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(self.section_header("AI AGENTS", "ai-agents", cx))
+            .child(
+                v_flex()
+                    .id("ai-agents-content-anim")
+                    .w_full()
+                    .gap_1()
+                    .children(agent_buttons),
+            )
     }
 }
 
@@ -3875,39 +4057,6 @@ impl Render for Dashboard {
                             .child(self.render_featured_section(cx))
                             .child(self.render_standard_section(window, cx))
                             .child(self.render_compact_section(cx))
-                            // Edit Tools button
-                            .child(
-                                ButtonLike::new("edit-tools-btn")
-                                    .full_width()
-                                    .size(ButtonSize::Medium)
-                                    .child(
-                                        h_flex()
-                                            .w_full()
-                                            .gap_2()
-                                            .child(
-                                                Icon::new(IconName::FileToml)
-                                                    .color(Color::Muted)
-                                                    .size(IconSize::Small),
-                                            )
-                                            .child(
-                                                Label::new("Edit Tools (TOML)")
-                                                    .color(Color::Muted)
-                                                    .size(LabelSize::Small),
-                                            ),
-                                    )
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        let path = tools_toml_path();
-                                        let workspace = this.workspace.clone();
-                                        cx.spawn_in(window, async move |_this, cx| {
-                                            let _ = workspace.update_in(cx, |workspace, window, cx| {
-                                                workspace
-                                                    .open_abs_path(path, OpenOptions::default(), window, cx)
-                                                    .detach();
-                                            });
-                                        })
-                                        .detach();
-                                    })),
-                            )
                             // AI Agents
                             .child(self.render_ai_agents_section(cx))
                             // Automations
