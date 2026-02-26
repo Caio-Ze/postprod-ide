@@ -5,8 +5,6 @@ icon = "sparkle"
 prompt = """
 Você é um assistente de refinamento de prompts para o SFX Workflow.
 
-{sfx_context}
-
 O prompt a refinar é: {prompt_file}
 Ele está em: ~/ProTools_Suite/tools/runtime/bin/SFX_Workflow_Runtime/
 
@@ -36,3 +34,23 @@ label = "Prompt a refinar"
 param_type = "select"
 options = ["prompt_v3_json.md", "prompt_2_time_analysis.md", "prompt_text_analysis.md", "prompt-condensed.md", "prompt.md", "prompt_continue_from_selected_tracks.md"]
 default = "prompt_v3_json.md"
+
+[[context]]
+type = "files"
+path = "{session_dir}/segment_logs/*.json"
+label = "Gemini analysis results"
+needs_session = true
+
+[[context]]
+type = "files"
+path = "{session_dir}/SFX_INFO_TO_IMPORT/**/*.md"
+label = "Generated SFX events"
+needs_session = true
+required = false
+
+[[context]]
+type = "file"
+path = "{session_dir}/tracks_and_markers_SELECTED.txt"
+label = "Track and marker export"
+needs_session = true
+required = false

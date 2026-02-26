@@ -10,3 +10,9 @@ Using the PTSL agent tools on {session_path}:
 4. Solo the LOC track (hide+inactivate everything else)
 5. Verify with list that only LOC is active
 """
+
+[[context]]
+type = "command"
+run = "agent-manage-tracks list --output-json --session {session_path}"
+label = "Pro Tools track list"
+needs_session = true

@@ -30,3 +30,8 @@ label = "Track"
 placeholder = "LOC"
 default = "LOC"
 param_type = "text"
+
+[[context]]
+type = "command"
+run = "ls -1 {pasta_ativa}"
+label = "Session folders in active folder"

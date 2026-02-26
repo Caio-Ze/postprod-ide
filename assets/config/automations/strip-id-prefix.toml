@@ -10,3 +10,8 @@ Process session folders in {pasta_ativa}.
 4. Once confirmed, rename each folder by removing the 5-digit prefix and underscore. Rename matching .ptx files inside, preserving _V suffixes.
 5. Print a final summary of everything renamed.
 """
+
+[[context]]
+type = "command"
+run = "ls -1 {pasta_ativa}"
+label = "Session folders in active folder"

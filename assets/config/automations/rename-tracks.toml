@@ -10,3 +10,9 @@ Using the PTSL agent tools on {session_path}:
 4. For each track I specify, rename it to the new name I provide
 5. Verify the final track list
 """
+
+[[context]]
+type = "command"
+run = "agent-manage-tracks list --output-json --session {session_path}"
+label = "Pro Tools track list"
+needs_session = true

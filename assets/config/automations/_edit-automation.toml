@@ -41,3 +41,9 @@ When editing prompts, use exact tool commands (check reference.md for correct sy
 
 Edit the .toml file directly. To delete a button, remove its .toml file.
 """
+
+[[context]]
+type = "files"
+path = "~/ProTools_Suite/config/skills/ptsl-tools/*.md"
+label = "PTSL skill documentation"
+required = false

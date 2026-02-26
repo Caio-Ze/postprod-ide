@@ -10,3 +10,8 @@ Process session folders in {pasta_ativa}.
 4. Ask for confirmation. Once confirmed, rename folders and matching .ptx files (preserve _V suffixes, skip files that don't match the folder name pattern).
 5. Print a final summary of everything renamed.
 """
+
+[[context]]
+type = "command"
+run = "ls -1 {pasta_ativa}"
+label = "Session folders in active folder"

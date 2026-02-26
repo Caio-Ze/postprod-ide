@@ -10,3 +10,9 @@ Using the PTSL agent tools on {session_path}:
 4. Convert the normalized file to MP3 using agent-convert-mp3
 5. Report all output file paths
 """
+
+[[context]]
+type = "command"
+run = "agent-manage-tracks list --output-json --session {session_path}"
+label = "Pro Tools track list"
+needs_session = true

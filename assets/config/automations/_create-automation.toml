@@ -69,3 +69,9 @@ Then ask me:
 
 Create a new .toml file in ~/ProTools_Suite/config/automations/ using the id as the filename (e.g., my-button.toml).
 """
+
+[[context]]
+type = "files"
+path = "~/ProTools_Suite/config/skills/ptsl-tools/*.md"
+label = "PTSL skill documentation"
+required = false

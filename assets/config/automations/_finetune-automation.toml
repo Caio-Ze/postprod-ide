@@ -60,3 +60,9 @@ After I confirm:
 If the automation ran successfully with no issues, say so — not every prompt needs fixing.
 Still check if the prompt has a self-improvement step at the end — if missing, suggest adding it.
 """
+
+[[context]]
+type = "files"
+path = "~/ProTools_Suite/config/skills/ptsl-tools/*.md"
+label = "PTSL skill documentation"
+required = false

@@ -1,0 +1,18 @@
+id = "make-video-from-source"
+label = "Make Video from Source"
+description = "Ask for a source (URL or image folder), generate a Remotion video, render it to the active folder, and open it."
+icon = "sparkle"
+
+prompt = """
+Ask the user: "What is the video source? Provide a website URL to scrape content from, or a path to a folder of images."
+
+Read the relevant rules from ~/.claude/skills/remotion-best-practices/rules/ before writing any code (start with compositions.md, assets.md, images.md, animations.md, sequencing.md — add others as needed for the source type).
+
+Scaffold a self-contained Remotion project in {pasta_ativa}/video-project/: create package.json, src/index.ts, src/Root.tsx, and src/VideoComposition.tsx. Build the composition using the source content and following the skill rules. Run `npm install` in the project folder.
+
+Render: run `npx remotion render src/index.ts VideoComposition {pasta_ativa}/output.mp4` from the project folder.
+
+Open the result for the user: `open {pasta_ativa}/output.mp4`.
+
+After completing the task: (1) If the user stated any preferences during this conversation (always/never do X, naming conventions, workflow choices), add them to the User Preferences section of ~/ProTools_Suite/config/skills/ptsl-tools/SKILL.md. (2) If you encountered errors, limitations, or workarounds, add a dated entry to the Agent Learnings section of the same file.
+"""

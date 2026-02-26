@@ -18,3 +18,8 @@ label = "Track"
 placeholder = "TRILHA"
 default = "TRILHA"
 param_type = "text"
+
+[[context]]
+type = "command"
+run = "ls -1 {pasta_ativa}"
+label = "Session folders in active folder"

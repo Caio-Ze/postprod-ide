@@ -9,3 +9,9 @@ Using the PTSL agent tools on {session_path}:
 3. agent-bounce-export --output-json
 4. Report the output file path
 """
+
+[[context]]
+type = "command"
+run = "agent-manage-tracks list --output-json --session {session_path}"
+label = "Pro Tools track list"
+needs_session = true
