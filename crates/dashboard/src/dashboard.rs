@@ -22,8 +22,9 @@ use ui::{
 };
 use workspace::{
     item::{Item, ItemEvent},
+    notifications::NotificationId,
     with_active_or_new_workspace, DraggedSelection, ModalView, OpenOptions, Pane,
-    ProToolsSessionName, Workspace,
+    ProToolsSessionName, Toast, Workspace,
 };
 
 use util::ResultExt as _;
@@ -57,6 +58,9 @@ actions!(
 pub struct RunDashboardTool {
     pub tool_id: String,
 }
+
+/// Marker type for the context-launcher failure toast notification ID.
+struct ContextLauncherToast;
 
 // ---------------------------------------------------------------------------
 // Init
@@ -2052,7 +2056,11 @@ impl Dashboard {
             (cmd, work_dir)
         };
 
-        let mut args = vec!["--output-json".to_string()];
+        let mut args = if is_agent_tool {
+            vec!["--output-json".to_string()]
+        } else {
+            vec![]
+        };
 
         if tool.needs_session {
             if let Some(session) = session_path {
@@ -2183,6 +2191,16 @@ impl Dashboard {
         suite_root()
     }
 
+    /// Find the context-launcher binary using the runtime path resolution.
+    /// Returns None if the binary is not deployed (fallback to dashboard substitution).
+    fn resolve_context_launcher(&self) -> Option<PathBuf> {
+        let candidate = self.runtime_path.join("tools/context-launcher");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        None
+    }
+
     fn run_automation(
         &self,
         entry_id: &str,
@@ -2191,99 +2209,258 @@ impl Dashboard {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let resolved_prompt = if let Some(session) = &self.session_path {
-            prompt.replace("{session_path}", session)
-        } else {
-            prompt.replace("{session_path}", "<no session open>")
+        // Build fallback prompt using dashboard's own variable substitution.
+        // Used when context-launcher is not available or fails.
+        let fallback_prompt = {
+            let mut resolved = if let Some(session) = &self.session_path {
+                prompt.replace("{session_path}", session)
+            } else {
+                prompt.replace("{session_path}", "<no session open>")
+            };
+
+            resolved = if let Some(pa) = &self.pasta_ativa {
+                resolved.replace("{pasta_ativa}", &pa.to_string_lossy())
+            } else {
+                resolved.replace("{pasta_ativa}", "<no active folder selected>")
+            };
+
+            resolved = if let Some(pd) = &self.pasta_destino {
+                resolved.replace("{pasta_destino}", &pd.to_string_lossy())
+            } else {
+                resolved.replace("{pasta_destino}", "<no destination folder selected>")
+            };
+
+            if let Some(values) = self.param_values.get(entry_id) {
+                for (key, value) in values {
+                    resolved = resolved.replace(&format!("{{{key}}}"), value);
+                }
+            }
+
+            resolved
         };
 
-        let resolved_prompt = if let Some(pa) = &self.pasta_ativa {
-            resolved_prompt.replace("{pasta_ativa}", &pa.to_string_lossy())
-        } else {
-            resolved_prompt.replace("{pasta_ativa}", "<no active folder selected>")
-        };
+        // Capture values needed by the async block
+        let launcher_path = self.resolve_context_launcher();
+        let workspace = self.workspace.clone();
+        let agent_backend = self.agent_backend;
+        let backends = self.backends.clone();
+        let agent_cwd = self.agent_cwd();
+        let entry_id = entry_id.to_string();
+        let entry_label = entry_label.to_string();
 
-        let mut resolved_prompt = if let Some(pd) = &self.pasta_destino {
-            resolved_prompt.replace("{pasta_destino}", &pd.to_string_lossy())
-        } else {
-            resolved_prompt.replace("{pasta_destino}", "<no destination folder selected>")
-        };
-
-        // Interpolate [[param]] values
-        if let Some(values) = self.param_values.get(entry_id) {
+        // Build context-launcher CLI args
+        let mut launcher_args = vec!["--automation".to_string(), entry_id.clone()];
+        if let Some(values) = self.param_values.get(&entry_id) {
             for (key, value) in values {
-                resolved_prompt = resolved_prompt.replace(&format!("{{{key}}}"), value);
+                if !value.is_empty() {
+                    launcher_args.push("--param".to_string());
+                    launcher_args.push(format!("{}={}", key, value));
+                }
             }
         }
 
-        // Native backend: route prompt to the Zed agent panel (multi-line OK)
-        if self.agent_backend == AgentBackend::Native {
-            let workspace = self.workspace.clone();
-            let prompt = resolved_prompt;
-            let _ = workspace.update(cx, |workspace, cx| {
-                if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                    panel.update(cx, |panel, cx| {
-                        panel.new_external_thread_with_auto_submit(
-                            Some(prompt),
-                            window,
+        cx.spawn_in(window, async move |_this, cx| {
+            // Phase 1: Run context-launcher → Result<String, String>.
+            // Ok = enriched prompt (stdout), Err = human-readable reason.
+            let result: Result<String, String> = if let Some(launcher) = launcher_path {
+                let args = launcher_args;
+                let output_result = cx.background_executor().spawn(async move {
+                    smol::process::Command::new(&launcher)
+                        .args(&args)
+                        .output()
+                        .await
+                }).await;
+
+                match output_result {
+                    Ok(output) if output.status.success() => {
+                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        if stdout.trim().is_empty() {
+                            Err("context-launcher returned empty output".into())
+                        } else {
+                            Ok(stdout)
+                        }
+                    }
+                    Ok(output) => {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        let snippet = stderr.lines().next().unwrap_or("unknown error");
+                        Err(format!("exit {}: {snippet}", output.status))
+                    }
+                    Err(e) => Err(format!("{e}")),
+                }
+            } else {
+                Err("context-launcher not installed".into())
+            };
+
+            // Phase 2: Route enriched prompt on success, or show toast on failure.
+            match result {
+                Ok(enriched_prompt) => {
+                    if agent_backend == AgentBackend::Native {
+                        let prompt = enriched_prompt;
+                        let _ = workspace.update_in(cx, |workspace, window, cx| {
+                            if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                                panel.update(cx, |panel, cx| {
+                                    panel.new_external_thread_with_auto_submit(
+                                        Some(prompt),
+                                        window,
+                                        cx,
+                                    );
+                                });
+                                workspace.focus_panel::<AgentPanel>(window, cx);
+                            }
+                        });
+                        return;
+                    }
+
+                    if agent_backend == AgentBackend::CopyOnly {
+                        let _ = cx.update(|_window, cx| {
+                            cx.write_to_clipboard(ClipboardItem::new_string(enriched_prompt));
+                        });
+                        return;
+                    }
+
+                    // Terminal backend: collapse multi-line prompt to single line
+                    // to avoid `zsh: parse error near '\n'` when spawning
+                    // `claude -p "..."`.
+                    let resolved_prompt = enriched_prompt
+                        .lines()
+                        .map(|line| line.trim())
+                        .filter(|line| !line.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+
+                    let backend_id = agent_backend.backend_id();
+                    let Some(config) = backends.iter().find(|b| b.id == backend_id) else {
+                        log::warn!("dashboard: no backend config for '{backend_id}'");
+                        return;
+                    };
+
+                    let command = resolve_bin(&config.command);
+                    let escaped = resolved_prompt.replace("'", "'\\''");
+                    let flags = &config.flags;
+                    let prompt_flag = &config.prompt_flag;
+                    let full_command = format!("{command} {flags} {prompt_flag} '{escaped}'");
+
+                    let spawn = SpawnInTerminal {
+                        id: TaskId(format!("automation-{}", entry_id)),
+                        label: entry_label.clone(),
+                        full_label: entry_label.clone(),
+                        command: Some(full_command),
+                        args: vec![],
+                        command_label: entry_label,
+                        cwd: Some(agent_cwd),
+                        use_new_terminal: true,
+                        allow_concurrent_runs: false,
+                        reveal: RevealStrategy::Always,
+                        show_command: true,
+                        show_rerun: true,
+                        ..Default::default()
+                    };
+
+                    let _ = workspace.update_in(cx, |workspace, window, cx| {
+                        workspace.spawn_in_terminal(spawn, window, cx).detach();
+                    });
+                }
+                Err(reason) => {
+                    log::warn!("context-launcher: {reason}");
+
+                    // Capture routing state for the "Run without context" button.
+                    let ws_for_toast = workspace.clone();
+                    let fallback = fallback_prompt.clone();
+                    let backends_for_toast = backends.clone();
+                    let cwd_for_toast = agent_cwd.clone();
+                    let id_for_toast = entry_id.clone();
+                    let label_for_toast = entry_label.clone();
+
+                    let _ = workspace.update_in(cx, |workspace, _window, cx| {
+                        workspace.show_toast(
+                            Toast::new(
+                                NotificationId::unique::<ContextLauncherToast>(),
+                                format!(
+                                    "Context enrichment failed for '{}': {}",
+                                    entry_label, reason
+                                ),
+                            )
+                            .on_click("Run without context", move |window, cx| {
+                                if agent_backend == AgentBackend::CopyOnly {
+                                    cx.write_to_clipboard(ClipboardItem::new_string(
+                                        fallback.clone(),
+                                    ));
+                                    return;
+                                }
+
+                                if agent_backend == AgentBackend::Native {
+                                    let prompt = fallback.clone();
+                                    let _ = ws_for_toast.update(cx, |workspace, cx| {
+                                        if let Some(panel) =
+                                            workspace.panel::<AgentPanel>(cx)
+                                        {
+                                            panel.update(cx, |panel, cx| {
+                                                panel
+                                                    .new_external_thread_with_auto_submit(
+                                                        Some(prompt),
+                                                        window,
+                                                        cx,
+                                                    );
+                                            });
+                                            workspace
+                                                .focus_panel::<AgentPanel>(window, cx);
+                                        }
+                                    });
+                                    return;
+                                }
+
+                                // Terminal backend
+                                let resolved = fallback
+                                    .lines()
+                                    .map(|l| l.trim())
+                                    .filter(|l| !l.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                let backend_id = agent_backend.backend_id();
+                                let Some(config) = backends_for_toast
+                                    .iter()
+                                    .find(|b| b.id == backend_id)
+                                else {
+                                    return;
+                                };
+                                let command = resolve_bin(&config.command);
+                                let escaped = resolved.replace("'", "'\\''");
+                                let full_command = format!(
+                                    "{command} {} {} '{escaped}'",
+                                    config.flags, config.prompt_flag
+                                );
+
+                                let spawn = SpawnInTerminal {
+                                    id: TaskId(format!(
+                                        "automation-{}",
+                                        id_for_toast
+                                    )),
+                                    label: label_for_toast.clone(),
+                                    full_label: label_for_toast.clone(),
+                                    command: Some(full_command),
+                                    args: vec![],
+                                    command_label: label_for_toast.clone(),
+                                    cwd: Some(cwd_for_toast.clone()),
+                                    use_new_terminal: true,
+                                    allow_concurrent_runs: false,
+                                    reveal: RevealStrategy::Always,
+                                    show_command: true,
+                                    show_rerun: true,
+                                    ..Default::default()
+                                };
+
+                                let _ = ws_for_toast.update(cx, |workspace, cx| {
+                                    workspace
+                                        .spawn_in_terminal(spawn, window, cx)
+                                        .detach();
+                                });
+                            }),
                             cx,
                         );
                     });
-                    workspace.focus_panel::<AgentPanel>(window, cx);
                 }
-            });
-            return;
-        }
-
-        if self.agent_backend == AgentBackend::CopyOnly {
-            cx.write_to_clipboard(ClipboardItem::new_string(resolved_prompt));
-            return;
-        }
-
-        // Collapse multi-line prompts into a single line to avoid
-        // `zsh: parse error near '\n'` when spawning `claude -p "..."`.
-        let resolved_prompt = resolved_prompt
-            .lines()
-            .map(|line| line.trim())
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
-
-        let backend_id = self.agent_backend.backend_id();
-        let Some(config) = self.backends.iter().find(|b| b.id == backend_id) else {
-            log::warn!("dashboard: no backend config for '{backend_id}'");
-            return;
-        };
-
-        // Shell-escape the prompt with single quotes (POSIX-safe) and bake
-        // it into the command string so `build_no_quote` doesn't split it
-        // into separate unquoted tokens.
-        let command = resolve_bin(&config.command);
-        let escaped = resolved_prompt.replace("'", "'\\''");
-        let flags = &config.flags;
-        let prompt_flag = &config.prompt_flag;
-        let full_command = format!("{command} {flags} {prompt_flag} '{escaped}'");
-
-        let spawn = SpawnInTerminal {
-            id: TaskId(format!("automation-{}", entry_id)),
-            label: entry_label.to_string(),
-            full_label: entry_label.to_string(),
-            command: Some(full_command),
-            args: vec![],
-            command_label: entry_label.to_string(),
-            cwd: Some(self.agent_cwd()),
-            use_new_terminal: true,
-            allow_concurrent_runs: false,
-            reveal: RevealStrategy::Always,
-            show_command: true,
-            show_rerun: true,
-            ..Default::default()
-        };
-
-        let workspace = self.workspace.clone();
-        let _ = workspace.update(cx, |workspace, cx| {
-            workspace.spawn_in_terminal(spawn, window, cx).detach();
-        });
+            }
+        }).detach();
     }
 
     fn set_folder(&mut self, target: FolderTarget, path: PathBuf, cx: &mut Context<Self>) {
