@@ -15,6 +15,8 @@ IMPORTANT: Only process sessions inside {pasta_ativa}. Do not access or modify a
 
 volume: {volume}
 If a dB value is set above, use it directly. If empty, ask me before starting.
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_vol-up-bounce-all.md). Do NOT edit SKILL.md or reference.md directly.
 """
 
 [[param]]

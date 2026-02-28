@@ -5,7 +5,7 @@ icon = "sparkle"
 prompt = """
 I want to create a new one-click button for the ProTools Studio dashboard.
 
-IMPORTANT: First read the skill directory at ~/ProTools_Suite/config/skills/ptsl-tools/ (SKILL.md, reference.md, workflows.md) — it contains all the rules, tool reference, domain knowledge, session lifecycle, and bouncing workflow that every automation inherits. Prompts should be SHORT (4-8 lines of task steps). Do not repeat anything that SKILL.md already covers (behavioral rules, backup file filtering, folder structure, version convention, tool usage details).
+IMPORTANT: First read the skill directory at ~/ProTools_Suite/plugin/skills/ptsl-tools/ (SKILL.md, reference.md, workflows.md) — it contains all the rules, tool reference, domain knowledge, session lifecycle, and bouncing workflow that every automation inherits. Prompts should be SHORT (4-8 lines of task steps). Do not repeat anything that SKILL.md already covers (behavioral rules, backup file filtering, folder structure, version convention, tool usage details).
 
 How automation buttons work:
 - Each button is a separate .toml file in ~/ProTools_Suite/config/automations/
@@ -28,8 +28,7 @@ Prompt style convention:
 - Tool binaries are at ~/ProTools_Suite/tools/agent/. Use just the binary name in prompts (agents resolve the path from the skill).
 - Always include a "Verify session is open (use get_session_path)" step before PTSL operations.
 - Every prompt MUST end with a self-improvement step:
-  "After completing the task: (1) If the user stated any preferences during this conversation (always/never do X, naming conventions, workflow choices), add them to the User Preferences section of ~/ProTools_Suite/config/skills/ptsl-tools/SKILL.md. (2) If you encountered errors, limitations, or workarounds, add a dated entry to the Agent Learnings section of the same file."
-  SKILL.md has two agent-writable sections at the bottom (User Preferences and Agent Learnings) — these are the ONLY parts agents may modify.
+  "After completing the task: if the user stated preferences, or you encountered errors, limitations, or workarounds — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/2026-02-27_<automation-id>.md). Include what happened, what you learned, and any user preferences. Do NOT edit SKILL.md or reference.md directly."
 - prompt MUST come BEFORE any [[param]] blocks in the TOML file.
 
 Runtime parameters ([[param]]):
@@ -72,6 +71,6 @@ Create a new .toml file in ~/ProTools_Suite/config/automations/ using the id as 
 
 [[context]]
 type = "files"
-path = "~/ProTools_Suite/config/skills/ptsl-tools/*.md"
+path = "~/ProTools_Suite/plugin/skills/ptsl-tools/*.md"
 label = "PTSL skill documentation"
 required = false

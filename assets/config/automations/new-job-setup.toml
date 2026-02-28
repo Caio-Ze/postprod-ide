@@ -10,4 +10,6 @@ Using the PTSL agent tools, set up a new job from template. All paths are fixed 
 4. For each moved file: check its channel count with ffprobe. Derive a simplified track name (strip leading job prefix and strip _Vdigits and everything after, remove extension). If mono (1ch): use agent-manage-tracks create-mono. If stereo (2ch): use agent-manage-tracks create.
 5. Open the session using agent-manage-tracks markers (this leaves it open). For each file: run agent-import-audio to get the initial clip_id, then run agent-get-clip-list to find the actual clip(s) by filename. If mono: spot with a single clip_id. If stereo: find .L and .R clip IDs and pass both to agent-spot-clip. Spot all at --position 0.
 6. Verify with agent-manage-tracks list. Report the new session path and a summary of tracks created, files imported, and positions spotted.
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_new-job-setup.md). Do NOT edit SKILL.md or reference.md directly.
 """

@@ -14,5 +14,5 @@ Render: run `npx remotion render src/index.ts VideoComposition {pasta_ativa}/out
 
 Open the result for the user: `open {pasta_ativa}/output.mp4`.
 
-After completing the task: (1) If the user stated any preferences during this conversation (always/never do X, naming conventions, workflow choices), add them to the User Preferences section of ~/ProTools_Suite/config/skills/ptsl-tools/SKILL.md. (2) If you encountered errors, limitations, or workarounds, add a dated entry to the Agent Learnings section of the same file.
+After completing the task: if the user stated preferences, or you encountered errors, limitations, or workarounds — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/2026-02-27_make-video-from-source.md). Include what happened, what you learned, and any user preferences. Do NOT edit SKILL.md or reference.md directly.
 """

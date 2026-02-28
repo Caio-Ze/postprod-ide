@@ -9,6 +9,8 @@ Using the PTSL agent tools on {session_path}:
 3. Show me the track list and ask which tracks I want to rename
 4. For each track I specify, rename it to the new name I provide
 5. Verify the final track list
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_rename-tracks.md). Do NOT edit SKILL.md or reference.md directly.
 """
 
 [[context]]

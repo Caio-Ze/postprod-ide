@@ -9,6 +9,8 @@ Using the PTSL agent tools on {session_path}:
 3. Import all tracks from source into {session_path}
 4. Solo the LOC track (hide+inactivate everything else)
 5. Verify with list that only LOC is active
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_import-solo-track.md). Do NOT edit SKILL.md or reference.md directly.
 """
 
 [[context]]

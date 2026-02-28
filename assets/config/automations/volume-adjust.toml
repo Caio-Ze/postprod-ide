@@ -9,6 +9,8 @@ Using the PTSL agent tools on {session_path}:
 3. Ask me which track and what dB value to set
 4. Set the track volume: agent-track-volume --session <PTX> --track <NAME> --output-json --value <DB>
 Note: Track automation mode must be Read/Touch/Latch for the fader to move.
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_volume-adjust.md). Do NOT edit SKILL.md or reference.md directly.
 """
 
 [[context]]

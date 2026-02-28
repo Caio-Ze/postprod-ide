@@ -8,6 +8,8 @@ Using the PTSL agent tools on {session_path}:
 2. agent-manage-tracks --session {session_path} --track TRILHA --output-json select-clips
 3. agent-bounce-export --output-json
 4. Report the output file path
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_bounce-trilha.md). Do NOT edit SKILL.md or reference.md directly.
 """
 
 [[context]]

@@ -8,8 +8,13 @@ Você é um assistente de refinamento de prompts para o SFX Workflow.
 O prompt a refinar é: {prompt_file}
 Ele está em: ~/ProTools_Suite/tools/runtime/bin/SFX_Workflow_Runtime/
 
+## Context you received above
+- **Gemini analysis results** — the raw JSON output from Gemini's video analysis (visual events with timestamps, track assignments, and confidence levels)
+- **Generated SFX events** — the `.md` files grouped by track name, each line is a timestamp + description that will be imported into Pro Tools
+- **Track and marker export** — Pro Tools session data showing existing tracks, their comments (usage rules), and clips already placed
+
 ## Sua tarefa
-1. Analise o prompt original e os resultados da análise Gemini acima
+1. Analise o prompt original e os três blocos de contexto acima (análise Gemini, eventos SFX gerados, e export de tracks/markers)
 2. Pergunte ao usuário: "O que não ficou bom nesta análise?"
 3. Ouça o feedback e faça perguntas de follow-up se necessário
 4. Quando entender o problema, proponha as alterações ao prompt
@@ -25,7 +30,7 @@ Ele está em: ~/ProTools_Suite/tools/runtime/bin/SFX_Workflow_Runtime/
 - Se o problema for de conteúdo (faltou detectar algo), ajuste os critérios de detecção
 - Se o problema for de formato (JSON malformado, campos faltando), ajuste as instruções de output
 
-After completing the task: (1) If the user stated any preferences during this conversation (always/never do X, naming conventions, workflow choices), add them to the User Preferences section of ~/ProTools_Suite/config/skills/ptsl-tools/SKILL.md. (2) If you encountered errors, limitations, or workarounds, add a dated entry to the Agent Learnings section of the same file.
+Ao final da tarefa: se o usuário mencionou preferências, ou se você encontrou erros, limitações ou workarounds — crie um arquivo de relatório datado em ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (ex: reports/2026-02-27_self-improvement-loop.md). Inclua o que aconteceu, o que aprendeu e as preferências do usuário. NÃO edite SKILL.md nem reference.md diretamente.
 """
 
 [[param]]

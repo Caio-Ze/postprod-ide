@@ -9,6 +9,8 @@ Process session folders in {pasta_ativa}.
 3. Apply the rule to generate new names. Show a before → after preview with full paths for every folder and .ptx file that will change. Make clear which folder is being modified.
 4. Ask for confirmation. Once confirmed, rename folders and matching .ptx files (preserve _V suffixes, skip files that don't match the folder name pattern).
 5. Print a final summary of everything renamed.
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_rename-sessions.md). Do NOT edit SKILL.md or reference.md directly.
 """
 
 [[context]]

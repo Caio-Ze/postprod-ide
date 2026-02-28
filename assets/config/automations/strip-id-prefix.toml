@@ -9,6 +9,8 @@ Process session folders in {pasta_ativa}.
 3. Show the active folder full path, how many sessions matched, and a before → after preview with full paths for each folder and .ptx file. Ask for confirmation.
 4. Once confirmed, rename each folder by removing the 5-digit prefix and underscore. Rename matching .ptx files inside, preserving _V suffixes.
 5. Print a final summary of everything renamed.
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_strip-id-prefix.md). Do NOT edit SKILL.md or reference.md directly.
 """
 
 [[context]]

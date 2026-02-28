@@ -9,6 +9,8 @@ Using the PTSL agent tools on {session_path}:
 3. Normalize the exported WAV to -23 LUFS using agent-bounce-normalize-tv
 4. Convert the normalized file to MP3 using agent-convert-mp3
 5. Report all output file paths
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_export-normalize.md). Do NOT edit SKILL.md or reference.md directly.
 """
 
 [[context]]

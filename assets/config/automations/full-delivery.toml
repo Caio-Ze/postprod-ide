@@ -12,6 +12,8 @@ Using the PTSL agent tools, perform full delivery for {pasta_ativa}:
 6. Convert to MP3 (agent-convert-mp3)
 7. Organize files to ~/ProTools_Suite/4_Finalizados/ (TV/, NET/, MP3/)
 8. Report the final file inventory
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_full-delivery.md). Do NOT edit SKILL.md or reference.md directly.
 """
 
 [[context]]

@@ -9,4 +9,6 @@ Using the PTSL agent tools:
 3. Extract text from the reference document using agent-extract-text
 4. Compare both texts using agent-compare-texts
 5. Report the differences found
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_compare-texts.md). Do NOT edit SKILL.md or reference.md directly.
 """

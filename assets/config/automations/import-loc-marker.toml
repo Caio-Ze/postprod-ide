@@ -13,4 +13,6 @@ IMPORTANT: Only process sessions inside {pasta_ativa}. Do not access or modify a
    d. agent-spot-clip --clip-id <CLIP_ID> --track LOC --position <IN_SAMPLE> --output-json
 3. If a session has no LOC folder, no .wav files, or no IN marker, skip it and report why.
 4. Sleep 5 seconds before next session. Report progress after each one.
+
+After completing the task: if you encountered errors, limitations, or workarounds, or if the user stated any preferences — create a dated report file in ~/ProTools_Suite/plugin/skills/ptsl-tools/reports/ (e.g. reports/YYYY-MM-DD_import-loc-marker.md). Do NOT edit SKILL.md or reference.md directly.
 """

@@ -487,56 +487,27 @@ fn load_agents_config() -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>) 
     load_toml_agents(&agents_toml_path())
 }
 
-fn old_agent_skills_dir() -> PathBuf {
-    suite_root()
-        .join("1_Sessões")
-        .join("Pro tools_EDITSESSION")
-        .join("agent-skills")
-}
-
 fn ensure_config_extracted(cx: &App) {
     let dir = config_dir();
-    let old_dir = old_agent_skills_dir();
 
-    // Skill directory — extract all files under config/skills/ptsl-tools/
-    let skill_dir = dir.join("skills/ptsl-tools");
-
-    // Migration: move old single-file SKILL.md into the new directory
-    let old_skill_flat = dir.join("SKILL.md");
-    if old_skill_flat.exists() && !old_skill_flat.is_symlink() {
-        std::fs::create_dir_all(&skill_dir).log_err();
-        std::fs::rename(&old_skill_flat, skill_dir.join("SKILL.md")).log_err();
-        log::info!("config: migrated SKILL.md into skills/ptsl-tools/");
-    }
-
-    // Also check old agent-skills/ location
-    if !skill_dir.join("SKILL.md").exists() {
-        let old_file = old_dir.join("SKILL.md");
-        if old_file.exists() {
-            std::fs::create_dir_all(&skill_dir).log_err();
-            std::fs::copy(&old_file, skill_dir.join("SKILL.md")).log_err();
-            log::info!("config: migrated SKILL.md from old agent-skills/");
-        }
-    }
-
-    // Extract skill files from embedded assets.
-    // SKILL.md: only create if missing (preserve user edits).
-    // reference.md, workflows.md: always overwrite (not user-editable).
-    std::fs::create_dir_all(&skill_dir).log_err();
-    let prefix = "config/skills/ptsl-tools/";
-    if let Ok(files) = cx.asset_source().list(prefix) {
-        for asset_path in &files {
-            let filename: &str =
-                asset_path.strip_prefix(prefix).unwrap_or(asset_path);
-            let dest = skill_dir.join(filename);
-            if filename == "SKILL.md" && dest.exists() {
-                continue; // preserve user edits
-            }
-            if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
-                std::fs::write(&dest, data.as_ref()).log_err();
+    // Migration: remove old skill symlinks (replaced by plugin system)
+    let home = util::paths::home_dir();
+    for link_path in [
+        home.join(".claude/skills/ptsl-tools"),
+        home.join(".agents/skills/ptsl-tools"),
+        home.join(".gemini/skills/ptsl-tools"),
+    ] {
+        if link_path.is_symlink() {
+            if let Ok(target) = std::fs::read_link(&link_path) {
+                if target.to_string_lossy().contains("config/skills/ptsl-tools") {
+                    std::fs::remove_file(&link_path).log_err();
+                    log::info!(
+                        "config: removed old skill symlink at {}",
+                        link_path.display()
+                    );
+                }
             }
         }
-        log::info!("config: extracted skill files to skills/ptsl-tools/");
     }
 
     // Guide — extracted once on first install, never overwritten.
@@ -615,47 +586,6 @@ fn ensure_config_extracted(cx: &App) {
                 if let Ok(Some(data)) = cx.asset_source().load(asset_path) {
                     std::fs::write(&dest, data.as_ref()).log_err();
                 }
-            }
-        }
-    }
-
-    // Ensure global skill symlinks point to the skill DIRECTORY.
-    // Each agent platform gets: ~/.{platform}/skills/ptsl-tools → config/skills/ptsl-tools/
-    if skill_dir.exists() {
-        let home = util::paths::home_dir();
-        for agent_skills_parent in [
-            home.join(".claude/skills"),
-            home.join(".agents/skills"),
-            home.join(".gemini/skills"),
-        ] {
-            let link_path = agent_skills_parent.join("ptsl-tools");
-
-            let needs_update = if link_path.is_symlink() {
-                match std::fs::read_link(&link_path) {
-                    Ok(existing_target) => existing_target != skill_dir,
-                    Err(_) => true,
-                }
-            } else if link_path.is_dir() {
-                // Real directory (not a symlink) — replace with directory symlink.
-                // This handles migration from the old layout where ptsl-tools/
-                // was a real dir containing a SKILL.md file symlink.
-                true
-            } else {
-                !link_path.exists()
-            };
-
-            if needs_update {
-                std::fs::create_dir_all(&agent_skills_parent).log_err();
-                // Remove stale symlink (could be file symlink to old SKILL.md, or directory)
-                if link_path.is_symlink() || link_path.exists() {
-                    if link_path.is_dir() && !link_path.is_symlink() {
-                        std::fs::remove_dir_all(&link_path).log_err();
-                    } else {
-                        std::fs::remove_file(&link_path).log_err();
-                    }
-                }
-                #[cfg(unix)]
-                std::os::unix::fs::symlink(&skill_dir, &link_path).log_err();
             }
         }
     }
@@ -4002,15 +3932,15 @@ impl Dashboard {
                                 cx.notify();
                             });
                         }),
-                        ToggleButtonSimple::new("Native", move |_, _, cx| {
-                            let _ = entity_native.update(cx, |this, cx| {
-                                this.agent_backend = AgentBackend::Native;
-                                cx.notify();
-                            });
-                        }),
                         ToggleButtonSimple::new("Copy", move |_, _, cx| {
                             let _ = entity_copy.update(cx, |this, cx| {
                                 this.agent_backend = AgentBackend::CopyOnly;
+                                cx.notify();
+                            });
+                        }),
+                        ToggleButtonSimple::new("Native", move |_, _, cx| {
+                            let _ = entity_native.update(cx, |this, cx| {
+                                this.agent_backend = AgentBackend::Native;
                                 cx.notify();
                             });
                         }),

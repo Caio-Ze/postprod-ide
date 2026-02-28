@@ -109,31 +109,6 @@ if [[ -d "$AUTOMATIONS_SRC" ]]; then
     echo "    automations/ — $(ls "$AUTOMATIONS_DST"/*.toml 2>/dev/null | wc -l | tr -d ' ') files"
 fi
 
-# --- Skill directory (progressive disclosure: SKILL.md + reference files) ---
-SKILL_SRC="$REPO_ROOT/assets/config/skills/ptsl-tools"
-SKILL_DST="$SUITE_ROOT/config/skills/ptsl-tools"
-# When SKILL_SRC is a symlink to SKILL_DST (dev setup), they resolve to the
-# same directory — copying would be a no-op or destructive.  Skip in that case.
-SKILL_SRC_REAL="$(cd "$SKILL_SRC" 2>/dev/null && pwd -P)" || true
-SKILL_DST_REAL="$(cd "$SKILL_DST" 2>/dev/null && pwd -P)" || true
-if [[ -d "$SKILL_SRC" && "$SKILL_SRC_REAL" != "$SKILL_DST_REAL" ]]; then
-    mkdir -p "$SKILL_DST"
-    # SKILL.md: only copy if missing (user editable)
-    if [[ ! -f "$SKILL_DST/SKILL.md" ]]; then
-        cp "$SKILL_SRC/SKILL.md" "$SKILL_DST/"
-        echo "    Extracted SKILL.md"
-    else
-        echo "    SKILL.md — preserved"
-    fi
-    # reference.md and workflows.md: always overwrite (not user-editable)
-    for f in reference.md workflows.md; do
-        cp "$SKILL_SRC/$f" "$SKILL_DST/"
-    done
-    echo "    Updated reference.md, workflows.md"
-elif [[ -L "$SKILL_SRC" ]]; then
-    echo "    skills/ptsl-tools — symlinked (skipping copy)"
-fi
-
 # --- .env template ---
 env_example="$PTSL_SDK/templates/.env.example"
 if [[ -f "$env_example" ]]; then
