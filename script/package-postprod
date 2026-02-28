@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build PostProd Tools and package everything into ~/ProTools_Suite/
+# Build PostProd IDE and package everything into ~/PostProd_IDE/
 # Optionally creates a distributable .tar.gz archive.
 #
 # Usage: ./script/package-postprod [--skip-build]
@@ -9,7 +9,7 @@
 #   GO_PROJECT_PATH    — path to Go project repo (session-monitor) (default: ~/Documents/Go_project)
 set -euo pipefail
 
-SUITE_ROOT="$HOME/ProTools_Suite"
+SUITE_ROOT="$HOME/PostProd_IDE"
 PTSL_SDK="${PROTOOLS_SDK_PATH:-$HOME/Documents/Rust_projects/PROTOOLS_SDK_PTSL}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -26,10 +26,11 @@ fi
 echo "==> PostProd Tools $VERSION ($ARCH)"
 
 echo "==> Creating workspace directories..."
-mkdir -p "$SUITE_ROOT/config"
-mkdir -p "$SUITE_ROOT/config"
+mkdir -p "$SUITE_ROOT/config/tools"
+mkdir -p "$SUITE_ROOT/config/automations"
 mkdir -p "$SUITE_ROOT/tools/agent"
 mkdir -p "$SUITE_ROOT/tools/runtime"
+mkdir -p "$SUITE_ROOT/deliveries"
 
 if [[ "$skip_build" == false ]]; then
     echo "==> Building postprod-ide (release)..."
@@ -71,51 +72,8 @@ else
     echo "    Falling back to Rust session-monitor"
 fi
 
-# Extract default config files only if they don't exist (preserve user edits)
-echo "==> Checking config defaults..."
-for name in TOOLS.toml AGENTS.toml GUIDE.md; do
-    dest="$SUITE_ROOT/config/$name"
-    if [[ ! -f "$dest" ]]; then
-        src="$REPO_ROOT/assets/config/$name"
-        if [[ -f "$src" ]]; then
-            cp "$src" "$dest"
-            echo "    Extracted default $name"
-        fi
-    else
-        echo "    $name exists — preserved"
-    fi
-done
-
-# Automations directory (one .toml per automation, only extract if missing)
-AUTOMATIONS_SRC="$REPO_ROOT/assets/config/automations"
-AUTOMATIONS_DST="$SUITE_ROOT/config/automations"
-if [[ -d "$AUTOMATIONS_SRC" ]]; then
-    mkdir -p "$AUTOMATIONS_DST"
-    for f in "$AUTOMATIONS_SRC"/*.toml; do
-        name=$(basename "$f")
-        if [[ ! -f "$AUTOMATIONS_DST/$name" ]]; then
-            cp "$f" "$AUTOMATIONS_DST/"
-            echo "    Extracted $name"
-        fi
-    done
-    echo "    automations/ — $(ls "$AUTOMATIONS_DST"/*.toml 2>/dev/null | wc -l | tr -d ' ') files"
-fi
-
-# Deploy centralized .env.example and create .env if missing
-env_example="$PTSL_SDK/templates/.env.example"
-if [[ -f "$env_example" ]]; then
-    cp "$env_example" "$SUITE_ROOT/config/.env.example"
-    echo "    Updated .env.example"
-    if [[ ! -f "$SUITE_ROOT/config/.env" ]]; then
-        cp "$env_example" "$SUITE_ROOT/config/.env"
-        echo "    Created .env from template (fill in your API keys)"
-    else
-        echo "    .env exists — preserved"
-    fi
-fi
-
 echo "==> Done. Workspace at $SUITE_ROOT"
-echo "    config/  — TOML configs (user-editable)"
+echo "    config/  — tool and automation TOMLs (user-managed, from product repos)"
 echo "    tools/   — agent + runtime binaries"
 
 # ---------------------------------------------------------------------------
@@ -130,14 +88,11 @@ echo ""
 echo "==> Creating distributable archive..."
 
 rm -rf "$ARCHIVE_DIR"
-mkdir -p "$ARCHIVE_DIR/config"
+mkdir -p "$ARCHIVE_DIR/config/tools"
+mkdir -p "$ARCHIVE_DIR/config/automations"
 mkdir -p "$ARCHIVE_DIR/tools/agent"
 mkdir -p "$ARCHIVE_DIR/tools/runtime"
-
-# Include .env.example in archive
-if [[ -f "$SUITE_ROOT/config/.env.example" ]]; then
-    cp "$SUITE_ROOT/config/.env.example" "$ARCHIVE_DIR/config/"
-fi
+mkdir -p "$ARCHIVE_DIR/deliveries"
 
 # App binary
 BINARY="$REPO_ROOT/target/release/postprod-ide"
@@ -170,5 +125,6 @@ echo ""
 echo "Install instructions:"
 echo "  1. Extract:  tar xzf ${ARCHIVE_NAME}.tar.gz"
 echo "  2. Clear quarantine:  xattr -cr ${ARCHIVE_NAME}/"
-echo "  3. Copy binary to /Applications/ or ~/ProTools_Suite/"
-echo "  4. Copy tools/ to ~/ProTools_Suite/tools/"
+echo "  3. Copy binary to /Applications/ or ~/PostProd_IDE/"
+echo "  4. Copy tools/ to ~/PostProd_IDE/tools/"
+echo "  5. Install product configs from a product repo (e.g. postprod-protools)"

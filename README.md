@@ -1,14 +1,14 @@
-# PostProd Tools
+# PostProd IDE
 
-> **TL;DR:** A macOS app that sits next to Pro Tools and does the boring stuff for you. 30+ tools for bouncing, normalizing, batch processing, and file management — all talking to Pro Tools directly via gRPC. Plus AI agents that can chain it all together from a single prompt.
+> **TL;DR:** A macOS automation platform for post-production. Tools, automations, and AI agents are installed from product repos. Currently ships with a Pro Tools product: 30+ tools for bouncing, normalizing, batch processing, and file management via gRPC — plus AI agents that can chain it all together from a single prompt.
 
-A native macOS application for audio post-production. One app, one window — a dashboard with 30+ automation tools that talk directly to Avid Pro Tools, plus AI agents that can run entire delivery workflows autonomously.
+A native macOS platform for post-production automation. One app, one dashboard — tools and automations appear automatically when installed from product repos. AI agents can compose tools freely to solve problems we didn't anticipate.
+
+The first product on the platform: **Pro Tools automation** — 30+ tools that talk directly to Avid Pro Tools via gRPC, plus AI agents that run entire delivery workflows autonomously.
 
 Built on top of [Zed](https://github.com/zed-industries/zed), the GPU-accelerated code editor.
 
 ![PostProd Tools Dashboard](DOCS/dashboard-screenshot.png)
-
-**Expected launch: March 13, 2026** — The application is in active daily use for real production work. The remaining work is packaging everything into a single `.app` bundle that runs out of the box with no setup.
 
 ## Who this is for
 
@@ -36,11 +36,22 @@ These tools run from the dashboard with a single click. If Pro Tools is running,
 
 ## What you get
 
-### A single application
+### A platform that stays out of the way
 
-Download, open, and start working. PostProd Tools is a native macOS app — not a browser tool, not a plugin, not a collection of scripts you need to install separately. Every tool is bundled inside the application. The dashboard shows your tools, your sessions, and your delivery status in one window.
+PostProd IDE is a native macOS app — not a browser tool, not a plugin, not a collection of scripts. Install a product repo (like [PostProd Tools](https://github.com/Caio-Ze/postprod-tools) for Pro Tools) and its tools and automations appear in the dashboard automatically. The app creates the workspace, you bring the content.
 
-### 30+ tools that control Pro Tools directly
+```
+~/PostProd_IDE/
+├── config/
+│   ├── tools/          ← Tool definitions (.toml) — from product repos
+│   └── automations/    ← Automation definitions (.toml) — from product repos
+├── tools/
+│   ├── runtime/        ← Runtime tool binaries
+│   └── agent/          ← Agent tool binaries
+└── deliveries/         ← Delivery-ready files
+```
+
+### The Pro Tools product: 30+ tools that control Pro Tools directly
 
 Every tool communicates with Pro Tools over the PTSL gRPC protocol. This means:
 
@@ -90,18 +101,7 @@ The app detects your open Pro Tools session automatically. The window title show
 
 ### Organized project workspace
 
-The file explorer shows your entire delivery structure side by side:
-
-```
-ProTools_Suite/
-├── 1_Sessoes/          ← Pro Tools sessions
-├── 2_Imports/          ← Source audio
-├── 3_Processamento/    ← Work in progress
-├── 4_Finalizados/      ← Delivery-ready files
-└── 5_Arquivo/          ← Archive
-```
-
-You see your sessions, exports, and deliveries in one place — with search, git tracking, and a built-in terminal.
+The file explorer shows your workspace side by side — tools, configs, and deliveries in one place, with search, git tracking, and a built-in terminal.
 
 ### Delivery monitoring
 
@@ -121,7 +121,7 @@ PostProd Tools integrates autonomous AI agents (Claude Code, Gemini CLI) that ru
 
 A concrete example: you click "Full Delivery" in the dashboard and the agent autonomously bounces the session, normalizes to -23 LUFS, converts to MP3, renames files for broadcast standards, organizes them into delivery folders, and verifies the output — all from a single click. The agent decides what to do at each step based on what it finds on disk.
 
-Automations are defined in a simple TOML file. Add or edit them at any time — the dashboard picks up changes automatically. No recompilation, no restarts.
+Automations are defined in simple TOML files — one per automation. Add or edit them at any time in `config/automations/`. The dashboard picks up changes automatically. No recompilation, no restarts. Automations come from product repos, so each product ships its own workflows.
 
 ## How it compares
 
@@ -162,18 +162,17 @@ Both languages produce universal macOS binaries (Apple Silicon + Intel). Rust vi
 
 ## Current state
 
-The application is in active daily use for real audio post-production work on macOS (Apple Silicon and Intel). What remains before the March 13 launch:
+The application is in active daily use for real audio post-production work on macOS (Apple Silicon and Intel). The platform is functional — tools and automations load from product repos, the dashboard reloads configs every 30 seconds, and AI agents compose tools autonomously. What remains:
 
-- Bundling all tools inside the `.app` package (currently resolved from a companion build)
 - Custom application icon
 - Code signing for macOS distribution
 - Installer and first-launch experience
+- Product repo install scripts (currently manual file copy)
 
-For developers interested in the tool binaries: see the companion [PostProd Tools](https://github.com/Caio-Ze/postprod-tools) repository.
+For the Pro Tools tool binaries: see the companion [PostProd Tools](https://github.com/Caio-Ze/postprod-tools) repository.
 
 ## License
 
 This repository (the IDE) is a fork of [Zed](https://github.com/zed-industries/zed) and is open source. The original Zed code is licensed under AGPL-3.0 and Apache-2.0. New code added for PostProd Tools is licensed under GPL-3.0-or-later.
 
 The companion tool binaries ([PostProd Tools](https://github.com/Caio-Ze/postprod-tools)) are distributed separately and are not covered by this license.
-

@@ -129,9 +129,7 @@ fn fail_to_open_window_async(e: anyhow::Error, cx: &mut AsyncApp) {
 }
 
 fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
-    eprintln!(
-        "PostProd Tools failed to open a window: {e:?}."
-    );
+    eprintln!("PostProd Tools failed to open a window: {e:?}.");
     #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
     {
         process::exit(1);
@@ -151,12 +149,7 @@ fn fail_to_open_window(e: anyhow::Error, _cx: &mut App) {
                 .add_notification(
                     notification_id,
                     Notification::new("PostProd Tools failed to launch")
-                        .body(Some(
-                            format!(
-                                "{e:?}."
-                            )
-                            .as_str(),
-                        ))
+                        .body(Some(format!("{e:?}.").as_str()))
                         .priority(Priority::High)
                         .icon(ashpd::desktop::Icon::with_names(&[
                             "dialog-question-symbolic",
@@ -1321,29 +1314,16 @@ async fn restore_or_create_workspace(app_state: Arc<AppState>, cx: &mut AsyncApp
             }
         }
     } else {
-        // Ensure ~/ProTools_Suite/ folder structure exists
-        let suite_root = util::paths::home_dir().join("ProTools_Suite");
-        for sub in [
-            "1_Sessões",
-            "2_Imports",
-            "3_Processamento",
-            "4_Finalizados",
-            "5_Arquivo",
-        ] {
-            let _ = std::fs::create_dir_all(suite_root.join(sub));
-        }
+        // Ensure workspace root exists (dashboard creates subdirectories)
+        let suite_root = match std::env::var("POSTPROD_WORKSPACE") {
+            Ok(p) => PathBuf::from(p),
+            Err(_) => util::paths::home_dir().join("PostProd_IDE"),
+        };
+        std::fs::create_dir_all(&suite_root).log_err();
 
-        // Open workspace with ProTools_Suite as worktree root
-        let task = cx.update(|cx| {
-            Workspace::new_local(
-                vec![suite_root],
-                app_state,
-                None,
-                None,
-                None,
-                cx,
-            )
-        });
+        // Open workspace with PostProd_IDE as worktree root
+        let task =
+            cx.update(|cx| Workspace::new_local(vec![suite_root], app_state, None, None, None, cx));
         task.await?;
     }
 
@@ -1407,11 +1387,7 @@ pub(crate) async fn restorable_workspace_locations(
 }
 
 fn clear_persisted_state() {
-    let dirs_to_clear = [
-        paths::database_dir(),
-        paths::state_dir(),
-        paths::temp_dir(),
-    ];
+    let dirs_to_clear = [paths::database_dir(), paths::state_dir(), paths::temp_dir()];
     for dir in &dirs_to_clear {
         if dir.exists() {
             std::fs::remove_dir_all(dir).log_err();
@@ -1444,7 +1420,11 @@ fn stdout_is_a_pty() -> bool {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "postprod-ide", disable_version_flag = true, max_term_width = 100)]
+#[command(
+    name = "postprod-ide",
+    disable_version_flag = true,
+    max_term_width = 100
+)]
 struct Args {
     /// A sequence of space-separated paths or urls that you want to open.
     ///

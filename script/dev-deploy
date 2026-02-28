@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Build PostProd Tools and deploy the workspace, so you can test
+# Build PostProd IDE and deploy the workspace, so you can test
 # the distribution as a real user would experience it.
 #
 # This replaces bare `cargo build --release` as the standard dev workflow.
-# After running, dashboard tool buttons, agent skills, and config extraction
-# all work exactly like production.
+# After running, dashboard tool buttons and agent tools work exactly like production.
+# Config files (tools, automations) come from product repos — this script only syncs binaries.
 #
 # Usage:
 #   ./script/dev-deploy              # build + deploy (incremental)
@@ -19,7 +19,7 @@
 #                        (default: ~/Documents/Go_project)
 set -euo pipefail
 
-SUITE_ROOT="$HOME/ProTools_Suite"
+SUITE_ROOT="$HOME/PostProd_IDE"
 PTSL_SDK="${PROTOOLS_SDK_PATH:-$HOME/Documents/Rust_projects/PROTOOLS_SDK_PTSL}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -42,9 +42,11 @@ if [[ "$fresh" == true ]]; then
 fi
 
 echo "==> Creating workspace directories..."
-mkdir -p "$SUITE_ROOT/config"
+mkdir -p "$SUITE_ROOT/config/tools"
+mkdir -p "$SUITE_ROOT/config/automations"
 mkdir -p "$SUITE_ROOT/tools/agent"
 mkdir -p "$SUITE_ROOT/tools/runtime"
+mkdir -p "$SUITE_ROOT/deliveries"
 
 # --- Build ---
 if [[ "$skip_build" == false ]]; then
@@ -77,46 +79,6 @@ if [[ -f "$GO_SM/session-monitor" ]]; then
     echo "    Go session-monitor deployed (replaces Rust)"
 else
     echo "    Go session-monitor not found — run: cd $GO_PROJECT && ./deploy.sh"
-fi
-
-# --- Config defaults (only if missing — preserves user edits) ---
-echo "==> Checking config defaults..."
-for name in TOOLS.toml AGENTS.toml GUIDE.md; do
-    dest="$SUITE_ROOT/config/$name"
-    if [[ ! -f "$dest" ]]; then
-        src="$REPO_ROOT/assets/config/$name"
-        if [[ -f "$src" ]]; then
-            cp "$src" "$dest"
-            echo "    Extracted $name"
-        fi
-    else
-        echo "    $name — preserved"
-    fi
-done
-
-# --- Automations directory (one .toml per automation, only extract if missing) ---
-AUTOMATIONS_SRC="$REPO_ROOT/assets/config/automations"
-AUTOMATIONS_DST="$SUITE_ROOT/config/automations"
-if [[ -d "$AUTOMATIONS_SRC" ]]; then
-    mkdir -p "$AUTOMATIONS_DST"
-    for f in "$AUTOMATIONS_SRC"/*.toml; do
-        name=$(basename "$f")
-        if [[ ! -f "$AUTOMATIONS_DST/$name" ]]; then
-            cp "$f" "$AUTOMATIONS_DST/"
-            echo "    Extracted $name"
-        fi
-    done
-    echo "    automations/ — $(ls "$AUTOMATIONS_DST"/*.toml 2>/dev/null | wc -l | tr -d ' ') files"
-fi
-
-# --- .env template ---
-env_example="$PTSL_SDK/templates/.env.example"
-if [[ -f "$env_example" ]]; then
-    cp "$env_example" "$SUITE_ROOT/config/.env.example"
-    if [[ ! -f "$SUITE_ROOT/config/.env" ]]; then
-        cp "$env_example" "$SUITE_ROOT/config/.env"
-        echo "    Created .env from template"
-    fi
 fi
 
 echo ""

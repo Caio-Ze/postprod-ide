@@ -63,7 +63,7 @@ check "v prefix stripped" "[[ '$EXTRACTED' == '$VERSION' ]]" "expected $VERSION,
 echo ""
 echo -e "${BOLD}--- Packaging (--skip-build, fake binaries) ---${RESET}"
 
-# Create a fake ~/ProTools_Suite in /tmp so the script doesn't need real binaries
+# Create a fake ~/PostProd_IDE in /tmp so the script doesn't need real binaries
 FAKE_SUITE=$(mktemp -d)
 FAKE_BINARY="$REPO_ROOT/target/release/postprod-ide"
 

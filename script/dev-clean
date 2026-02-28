@@ -1,0 +1,21 @@
+#!/bin/bash
+# Launch PostProd IDE with a clean sandbox workspace.
+# This creates a completely independent workspace at ~/PostProd_IDE_clean/
+# for testing the fresh-user experience without touching your real setup.
+#
+# Usage:
+#   ./script/dev-clean              # launch clean sandbox
+#   ./script/dev-clean --fresh      # wipe sandbox first, then launch
+#
+# Your normal workspace at ~/PostProd_IDE/ is never affected.
+
+set -euo pipefail
+
+CLEAN_ROOT="$HOME/PostProd_IDE_clean"
+
+if [[ "${1:-}" == "--fresh" ]]; then
+    echo "Wiping $CLEAN_ROOT..."
+    rm -rf "$CLEAN_ROOT"
+fi
+
+POSTPROD_WORKSPACE="$CLEAN_ROOT" exec ./target/release/postprod-ide

@@ -1,9 +1,0 @@
-id = "test-native-agent"
-label = "Test Native Agent"
-description = "Simple test for the native agent panel backend"
-icon = "sparkle"
-prompt = """
-You are a helpful assistant. The user is testing the native agent panel integration.
-
-Say hello and confirm you can see this message. Then list 3 files in the current working directory.
-"""
