@@ -1102,6 +1102,10 @@ fn config_dir() -> PathBuf {
     suite_root().join("config")
 }
 
+fn state_dir() -> PathBuf {
+    config_dir().join(".state")
+}
+
 fn tools_dir() -> PathBuf {
     suite_root().join("tools")
 }
@@ -1129,9 +1133,26 @@ fn ensure_workspace_dirs() {
         agent_tools_dir(),
         runtime_tools_dir(),
         suite_root().join("deliveries"),
+        state_dir(),
     ] {
         if !dir.exists() {
             std::fs::create_dir_all(&dir).log_err();
+        }
+    }
+
+    // One-time migration: move state files from old locations into config/.state/
+    let migrations = [
+        (suite_root().join(".active_folder"), state_dir().join("active_folder")),
+        (suite_root().join(".recent_folders"), state_dir().join("recent_folders")),
+        (suite_root().join(".destination_folder"), state_dir().join("destination_folder")),
+        (suite_root().join(".recent_destinations"), state_dir().join("recent_destinations")),
+        (config_dir().join(".background_tools"), state_dir().join("background_tools")),
+        (config_dir().join(".collapsed_sections"), state_dir().join("collapsed_sections")),
+        (config_dir().join(".param_values.toml"), state_dir().join("param_values.toml")),
+    ];
+    for (old, new) in &migrations {
+        if old.exists() && !new.exists() {
+            std::fs::rename(old, new).log_err();
         }
     }
 }
@@ -1213,7 +1234,7 @@ fn scan_delivery_folder() -> DeliveryStatus {
 // ---------------------------------------------------------------------------
 
 fn active_folder_file() -> PathBuf {
-    suite_root().join(".active_folder")
+    state_dir().join("active_folder")
 }
 
 fn read_active_folder() -> Option<PathBuf> {
@@ -1243,7 +1264,7 @@ fn write_active_folder(path: &Path) {
 // ---------------------------------------------------------------------------
 
 fn recent_folders_file() -> PathBuf {
-    suite_root().join(".recent_folders")
+    state_dir().join("recent_folders")
 }
 
 fn read_recent_folders() -> Vec<PathBuf> {
@@ -1277,11 +1298,11 @@ fn add_to_recent_folders(path: &Path) {
 // ---------------------------------------------------------------------------
 
 fn destination_folder_file() -> PathBuf {
-    suite_root().join(".destination_folder")
+    state_dir().join("destination_folder")
 }
 
 fn recent_destinations_file() -> PathBuf {
-    suite_root().join(".recent_destinations")
+    state_dir().join("recent_destinations")
 }
 
 fn read_destination_folder() -> Option<PathBuf> {
@@ -1329,7 +1350,7 @@ fn add_to_destination_recent(path: &Path) {
 // ---------------------------------------------------------------------------
 
 fn background_tools_file() -> PathBuf {
-    config_dir().join(".background_tools")
+    state_dir().join("background_tools")
 }
 
 fn read_background_tools() -> HashSet<String> {
@@ -1355,7 +1376,7 @@ fn write_background_tools(set: &HashSet<String>) {
 // ---------------------------------------------------------------------------
 
 fn collapsed_sections_file() -> PathBuf {
-    config_dir().join(".collapsed_sections")
+    state_dir().join("collapsed_sections")
 }
 
 fn read_collapsed_sections() -> HashSet<String> {
@@ -1381,7 +1402,7 @@ fn write_collapsed_sections(set: &HashSet<String>) {
 // ---------------------------------------------------------------------------
 
 fn param_values_file() -> PathBuf {
-    config_dir().join(".param_values.toml")
+    state_dir().join("param_values.toml")
 }
 
 fn read_param_values() -> HashMap<String, HashMap<String, String>> {
