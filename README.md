@@ -8,7 +8,7 @@ The first product on the platform: **Pro Tools automation** — 30+ tools that t
 
 Built on top of [Zed](https://github.com/zed-industries/zed), the GPU-accelerated code editor.
 
-![PostProd Tools Dashboard](DOCS/dashboard-screenshot.png)
+<!-- ![PostProd IDE Dashboard](DOCS/dashboard-screenshot.png) -->
 
 ## Who this is for
 
@@ -18,13 +18,13 @@ Audio post-production for broadcast, advertising, and streaming is a volume game
 
 These are hours of mechanical, repetitive work that require precision but not creativity. A missed normalization, a wrong filename, a forgotten MP3 conversion — any of these means a rejected delivery and wasted time.
 
-PostProd Tools was built for this reality. It replaces the manual repetition with one-click tools and AI-driven workflows that handle the entire chain — from open session to verified delivery — while the engineer focuses on the actual creative work.
+PostProd IDE was built for this reality. It replaces the manual repetition with one-click tools and AI-driven workflows that handle the entire chain — from open session to verified delivery — while the engineer focuses on the actual creative work.
 
 ### Independent creators and YouTubers
 
 You don't need a production company to have a production problem. If you're a YouTuber, a podcaster, or an independent audio creator, you know the feeling: the creative work takes an hour, the file management takes another hour. Renaming episodes, converting formats, normalizing loudness for different platforms, organizing folders — none of this is creative work, but it still eats your time.
 
-PostProd Tools is not limited to Pro Tools. Many of the tools work directly on files and folders — no DAW required:
+PostProd IDE is not limited to Pro Tools. Many of the tools work directly on files and folders — no DAW required:
 
 - **File renaming** — Batch rename audio files to match naming conventions, strip prefixes, add dates, convert between naming standards
 - **Format conversion** — Convert between WAV, MP3, and other formats in bulk
@@ -43,6 +43,7 @@ PostProd IDE is a native macOS app — not a browser tool, not a plugin, not a c
 ```
 ~/PostProd_IDE/
 ├── config/
+│   ├── .state/         ← Runtime state (active folder, recent folders, etc.)
 │   ├── tools/          ← Tool definitions (.toml) — from product repos
 │   └── automations/    ← Automation definitions (.toml) — from product repos
 ├── tools/
@@ -70,7 +71,7 @@ Every tool communicates with Pro Tools over the PTSL gRPC protocol. This means:
 
 Session Monitor is the centerpiece of PostProd Tools. Built in Go with the Bubble Tea framework, it runs in the background and watches what happens in Pro Tools — when you open a session, when you save, when you close. And it acts on it.
 
-![Session Monitor](DOCS/session-monitor-screenshot.png)
+<!-- ![Session Monitor](DOCS/session-monitor-screenshot.png) -->
 
 **What it does today:**
 - **3-row VU meter waveform** — real-time animated display with clip detection (red), hot signal (yellow), and body (cyan). 20 columns, 16 animation frames at 12fps
@@ -109,9 +110,9 @@ A background scan checks your delivery folder and reports what's ready: TV versi
 
 ## AI agents — not just an assistant
 
-PostProd Tools integrates autonomous AI agents (Claude Code, Gemini CLI) that run in the built-in terminal. This is fundamentally different from chat-based assistants like SoundFlow's [Session Assistant](https://soundflow.org/session-assistant):
+PostProd IDE integrates autonomous AI agents (Claude Code, Gemini CLI) that run in the built-in terminal. This is fundamentally different from chat-based assistants like SoundFlow's [Session Assistant](https://soundflow.org/session-assistant):
 
-| | **PostProd Tools agents** | **SoundFlow Session Assistant** |
+| | **PostProd IDE agents** | **SoundFlow Session Assistant** |
 |---|---|---|
 | Reads your file tree | Yes — sees sessions, audio, exports | No — only sees Pro Tools session state |
 | Creates/edits files | Yes — renames exports, moves deliveries, writes scripts | No — limited to Pro Tools track operations |
@@ -125,7 +126,7 @@ Automations are defined in simple TOML files — one per automation. Add or edit
 
 ## How it compares
 
-| | **PostProd Tools** | **[SoundFlow](https://soundflow.org/)** | **[Keyboard Maestro](https://www.keyboardmaestro.com/)** | **Custom scripts** |
+| | **PostProd IDE** | **[SoundFlow](https://soundflow.org/)** | **[Keyboard Maestro](https://www.keyboardmaestro.com/)** | **Custom scripts** |
 |---|---|---|---|---|
 | **How it talks to PT** | gRPC (PTSL protocol) | SFX protocol + GUI hooks | GUI simulation (clicks, keystrokes) | AppleScript / osascript |
 | **Breaks on UI changes** | No | Partially | Yes | Often |
@@ -140,13 +141,13 @@ Automations are defined in simple TOML files — one per automation. Add or edit
 
 ### Where PostProd Tools is different
 
-PostProd Tools is not trying to replace SoundFlow's macro library. It solves a different problem: **automating the entire post-production pipeline** — not just what happens inside Pro Tools, but everything around it. File management, audio processing, format conversion, delivery verification, and the repetitive session-to-session workflow that eats hours every day.
+PostProd IDE is not trying to replace SoundFlow's macro library. It solves a different problem: **automating the entire post-production pipeline** — not just what happens inside Pro Tools, but everything around it. File management, audio processing, format conversion, delivery verification, and the repetitive session-to-session workflow that eats hours every day.
 
 The tools don't simulate the Pro Tools interface. They talk to the engine directly. And the AI agents don't just execute single commands — they run multi-step workflows end-to-end, reading your project structure and making decisions based on what they find.
 
 ## Built in Rust and Go
 
-Two languages, each where it's strongest. Rust is the brute force — the IDE, the gRPC protocol layer, 27 agent tools, every batch processing pipeline, audio normalization. Go is the polish — the Session Monitor TUI, where responsiveness and animation matter more than raw throughput.
+Two languages, each where it's strongest. Rust is the brute force — the IDE, the gRPC protocol layer, 28 agent tools, every batch processing pipeline, audio normalization. Go is the polish — the Session Monitor TUI, where responsiveness and animation matter more than raw throughput.
 
 - **Instant execution** — Every tool is a compiled native binary. No interpreter startup, no VM warmup. When you're processing 40 sessions in a batch, the difference between a 200ms tool and a 2-second script adds up to minutes saved per run.
 
@@ -173,6 +174,6 @@ For the Pro Tools tool binaries: see the companion [PostProd Tools](https://gith
 
 ## License
 
-This repository (the IDE) is a fork of [Zed](https://github.com/zed-industries/zed) and is open source. The original Zed code is licensed under AGPL-3.0 and Apache-2.0. New code added for PostProd Tools is licensed under GPL-3.0-or-later.
+This repository (the IDE) is a fork of [Zed](https://github.com/zed-industries/zed) and is open source. The original Zed code is licensed under AGPL-3.0 and Apache-2.0. New code added for PostProd IDE is licensed under GPL-3.0-or-later.
 
 The companion tool binaries ([PostProd Tools](https://github.com/Caio-Ze/postprod-tools)) are distributed separately and are not covered by this license.
