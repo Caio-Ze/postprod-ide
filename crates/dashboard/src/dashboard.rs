@@ -769,13 +769,13 @@ pub fn init_global_hotkeys(cx: &mut App) {
                 let config_path = global_hotkeys_toml_path();
                 let new_content = std::fs::read_to_string(&config_path).unwrap_or_default();
 
-                let _ = this.update(cx, |manager: &mut GlobalHotkeyManager, _cx| {
+                this.update(cx, |manager: &mut GlobalHotkeyManager, _cx| {
                     if new_content != manager.last_config_content {
                         log::info!("global hotkey: config changed, re-registering");
                         manager.last_config_content = new_content;
                         manager.register_hotkeys_from_config();
                     }
-                });
+                }).log_err();
             }
         });
 
@@ -1255,7 +1255,7 @@ fn read_active_folder() -> Option<PathBuf> {
 }
 
 fn write_active_folder(path: &Path) {
-    let _ = std::fs::write(active_folder_file(), path.to_string_lossy().as_bytes());
+    std::fs::write(active_folder_file(), path.to_string_lossy().as_bytes()).log_err();
     add_to_recent_folders(path);
 }
 
@@ -1328,7 +1328,7 @@ fn read_recent_destinations() -> Vec<PathBuf> {
 }
 
 fn write_destination_folder(path: &Path) {
-    let _ = std::fs::write(destination_folder_file(), path.to_string_lossy().as_bytes());
+    std::fs::write(destination_folder_file(), path.to_string_lossy().as_bytes()).log_err();
     add_to_destination_recent(path);
 }
 
@@ -1671,7 +1671,7 @@ impl Dashboard {
                         })
                         .await;
 
-                    let _ = this.update(
+                    this.update(
                         cx,
                         |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
                             let name = result.as_ref().map(|p| {
@@ -1692,7 +1692,7 @@ impl Dashboard {
                                     if let Some(session_dir) = Path::new(session).parent() {
                                         let session_dir = session_dir.to_path_buf();
                                         let workspace = dashboard.workspace.clone();
-                                        let _ = workspace.update(cx, |workspace, cx| {
+                                        workspace.update(cx, |workspace, cx| {
                                             let project = workspace.project().clone();
                                             project
                                                 .update(cx, |project, cx| {
@@ -1703,7 +1703,7 @@ impl Dashboard {
                                                     )
                                                 })
                                                 .detach();
-                                        });
+                                        }).log_err();
                                     }
                                 }
                             }
@@ -1714,7 +1714,7 @@ impl Dashboard {
 
                             cx.notify();
                         },
-                    );
+                    ).log_err();
 
                     cx.background_executor().timer(Duration::from_secs(5)).await;
                 }
@@ -1728,13 +1728,13 @@ impl Dashboard {
                         .spawn(async { scan_delivery_folder() })
                         .await;
 
-                    let _ = this.update(
+                    this.update(
                         cx,
                         |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
                             dashboard.delivery_status = status;
                             cx.notify();
                         },
-                    );
+                    ).log_err();
 
                     cx.background_executor()
                         .timer(Duration::from_secs(15))
@@ -1754,7 +1754,7 @@ impl Dashboard {
                         .spawn(async { load_automations_registry() })
                         .await;
 
-                    let _ = this.update(
+                    this.update(
                         cx,
                         |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
                             dashboard.automations = merged;
@@ -1785,7 +1785,7 @@ impl Dashboard {
                                 .retain(|k, _| valid_keys.contains(k));
                             cx.notify();
                         },
-                    );
+                    ).log_err();
                 }
             });
 
@@ -1801,7 +1801,7 @@ impl Dashboard {
                         .spawn(async { load_tools_registry() })
                         .await;
 
-                    let _ = this.update(
+                    this.update(
                         cx,
                         |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
                             dashboard.tools = merged;
@@ -1819,7 +1819,7 @@ impl Dashboard {
                             }
                             cx.notify();
                         },
-                    );
+                    ).log_err();
                 }
             });
 
@@ -1835,14 +1835,14 @@ impl Dashboard {
                         .spawn(async { load_agents_config() })
                         .await;
 
-                    let _ = this.update(
+                    this.update(
                         cx,
                         |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
                             dashboard.backends = backends;
                             dashboard.agent_launchers = agent_launchers;
                             cx.notify();
                         },
-                    );
+                    ).log_err();
                 }
             });
 
@@ -2179,7 +2179,7 @@ impl Dashboard {
                 Ok(enriched_prompt) => {
                     if agent_backend == AgentBackend::Native {
                         let prompt = enriched_prompt;
-                        let _ = workspace.update_in(cx, |workspace, window, cx| {
+                        workspace.update_in(cx, |workspace, window, cx| {
                             if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                                 panel.update(cx, |panel, cx| {
                                     panel.new_external_thread_with_auto_submit(
@@ -2190,14 +2190,14 @@ impl Dashboard {
                                 });
                                 workspace.focus_panel::<AgentPanel>(window, cx);
                             }
-                        });
+                        }).log_err();
                         return;
                     }
 
                     if agent_backend == AgentBackend::CopyOnly {
-                        let _ = cx.update(|_window, cx| {
+                        cx.update(|_window, cx| {
                             cx.write_to_clipboard(ClipboardItem::new_string(enriched_prompt));
-                        });
+                        }).log_err();
                         return;
                     }
 
@@ -2239,9 +2239,9 @@ impl Dashboard {
                         ..Default::default()
                     };
 
-                    let _ = workspace.update_in(cx, |workspace, window, cx| {
+                    workspace.update_in(cx, |workspace, window, cx| {
                         workspace.spawn_in_terminal(spawn, window, cx).detach();
-                    });
+                    }).log_err();
                 }
                 Err(reason) => {
                     log::warn!("context-launcher: {reason}");
@@ -2254,7 +2254,7 @@ impl Dashboard {
                     let id_for_toast = entry_id.clone();
                     let label_for_toast = entry_label.clone();
 
-                    let _ = workspace.update_in(cx, |workspace, _window, cx| {
+                    workspace.update_in(cx, |workspace, _window, cx| {
                         workspace.show_toast(
                             Toast::new(
                                 NotificationId::unique::<ContextLauncherToast>(),
@@ -2275,7 +2275,7 @@ impl Dashboard {
 
                                     if agent_backend == AgentBackend::Native {
                                         let prompt = fallback.clone();
-                                        let _ = ws_for_toast.update(cx, |workspace, cx| {
+                                        ws_for_toast.update(cx, |workspace, cx| {
                                             if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                                                 panel.update(cx, |panel, cx| {
                                                     panel.new_external_thread_with_auto_submit(
@@ -2286,7 +2286,7 @@ impl Dashboard {
                                                 });
                                                 workspace.focus_panel::<AgentPanel>(window, cx);
                                             }
-                                        });
+                                        }).log_err();
                                         return;
                                     }
 
@@ -2326,14 +2326,14 @@ impl Dashboard {
                                         ..Default::default()
                                     };
 
-                                    let _ = ws_for_toast.update(cx, |workspace, cx| {
+                                    ws_for_toast.update(cx, |workspace, cx| {
                                         workspace.spawn_in_terminal(spawn, window, cx).detach();
-                                    });
+                                    }).log_err();
                                 },
                             ),
                             cx,
                         );
-                    });
+                    }).log_err();
                 }
             }
         })
@@ -2383,11 +2383,11 @@ impl Dashboard {
             if let Ok(Ok(Some(paths))) = receiver.await {
                 if let Some(path) = paths.into_iter().next() {
                     write_active_folder(&path);
-                    let _ = this.update(cx, |this, cx| {
+                    this.update(cx, |this, cx| {
                         this.active_folder = Some(path);
                         this.recent_folders = read_recent_folders();
                         cx.notify();
-                    });
+                    }).log_err();
                 }
             }
         })
@@ -2406,11 +2406,11 @@ impl Dashboard {
             if let Ok(Ok(Some(paths))) = receiver.await {
                 if let Some(path) = paths.into_iter().next() {
                     write_destination_folder(&path);
-                    let _ = this.update(cx, |this, cx| {
+                    this.update(cx, |this, cx| {
                         this.destination_folder = Some(path);
                         this.recent_destinations = read_recent_destinations();
                         cx.notify();
-                    });
+                    }).log_err();
                 }
             }
         })
@@ -2425,13 +2425,13 @@ impl Dashboard {
         cx: &mut Context<Self>,
     ) {
         let workspace = self.workspace.clone();
-        let _ = workspace.update(cx, |workspace, cx| {
+        workspace.update(cx, |workspace, cx| {
             workspace.toggle_modal(window, cx, {
                 let tool_id = tool_id.clone();
                 let tool_label = tool_label.clone();
                 move |window, cx| GlobalShortcutModal::new(tool_id, tool_label, window, cx)
             });
-        });
+        }).log_err();
     }
 
     // -- Param editor helpers --
@@ -2489,9 +2489,9 @@ impl Dashboard {
             cx.background_executor()
                 .timer(Duration::from_millis(500))
                 .await;
-            let _ = this.update(cx, |this, _cx| {
+            this.update(cx, |this, _cx| {
                 write_param_values(&this.param_values);
-            });
+            }).log_err();
         }));
     }
 
@@ -2552,7 +2552,7 @@ impl Dashboard {
                 let entity = entity.clone();
                 move |path, _window, cx: &mut App| {
                     write_active_folder(&path);
-                    let _ = entity.update(cx, |this, cx| {
+                    entity.update(cx, |this, cx| {
                         this.active_folder = Some(path);
                         this.recent_folders = read_recent_folders();
                         cx.notify();
@@ -2562,7 +2562,7 @@ impl Dashboard {
             {
                 let entity = entity.clone();
                 move |_window, cx: &mut App| {
-                    let _ = entity.update(cx, |this, cx| {
+                    entity.update(cx, |this, cx| {
                         this.pick_active_folder(cx);
                     });
                 }
@@ -2582,7 +2582,7 @@ impl Dashboard {
                 let entity = entity.clone();
                 move |path, _window, cx: &mut App| {
                     write_destination_folder(&path);
-                    let _ = entity.update(cx, |this, cx| {
+                    entity.update(cx, |this, cx| {
                         this.destination_folder = Some(path);
                         this.recent_destinations = read_recent_destinations();
                         cx.notify();
@@ -2591,7 +2591,7 @@ impl Dashboard {
             },
             {
                 move |_window, cx: &mut App| {
-                    let _ = entity.update(cx, |this, cx| {
+                    entity.update(cx, |this, cx| {
                         this.pick_destination_folder(cx);
                     });
                 }
@@ -2857,9 +2857,9 @@ impl Dashboard {
             .child(
                 Disclosure::new(SharedString::from(format!("disc-{}", section_id)), is_open)
                     .on_click(move |_, _, cx| {
-                        let _ = entity.update(cx, |this, cx| {
+                        entity.update(cx, |this, cx| {
                             this.toggle_section(&id_for_toggle, cx);
-                        });
+                        }).log_err();
                     }),
             )
             .child(
@@ -2893,7 +2893,7 @@ impl Dashboard {
             let session_path = session_path.clone();
             let tool_param_values = tool_param_values.clone();
             if is_background {
-                let _ = workspace.update(cx, |_workspace, cx| {
+                workspace.update(cx, |_workspace, cx| {
                     Self::spawn_tool_background(
                         &tool,
                         &runtime_path,
@@ -2903,9 +2903,9 @@ impl Dashboard {
                         &tool_param_values,
                         cx,
                     );
-                });
+                }).log_err();
             } else {
-                let _ = workspace.update(cx, |workspace, cx| {
+                workspace.update(cx, |workspace, cx| {
                     Self::spawn_tool_entry(
                         &tool,
                         &runtime_path,
@@ -2917,7 +2917,7 @@ impl Dashboard {
                         window,
                         cx,
                     );
-                });
+                }).log_err();
             }
         }
     }
@@ -2962,7 +2962,7 @@ impl Dashboard {
                 }))
                 .on_click(move |_, _, cx| {
                     let tool_id = toggle_tool_id.clone();
-                    let _ = toggle_entity.update(cx, |this, cx| {
+                    toggle_entity.update(cx, |this, cx| {
                         if this.background_tools.contains(&tool_id) {
                             this.background_tools.remove(&tool_id);
                         } else {
@@ -2970,7 +2970,7 @@ impl Dashboard {
                         }
                         write_background_tools(&this.background_tools);
                         cx.notify();
-                    });
+                    }).log_err();
                 })
                 .visible_on_hover(group_name.clone()),
             )
@@ -2985,9 +2985,9 @@ impl Dashboard {
                 .on_click(move |_, window, cx| {
                     let tool_id = globe_tool_id.clone();
                     let tool_label = globe_tool_label.clone();
-                    let _ = globe_entity.update(cx, |this, cx| {
+                    globe_entity.update(cx, |this, cx| {
                         this.open_global_shortcut_modal(tool_id, tool_label, window, cx);
-                    });
+                    }).log_err();
                 })
                 .visible_on_hover(group_name),
             )
@@ -3377,11 +3377,11 @@ impl Dashboard {
                 let path = tools_config_dir();
                 let workspace = this.workspace.clone();
                 cx.spawn_in(window, async move |_this, cx| {
-                    let _ = workspace.update_in(cx, |workspace, window, cx| {
+                    workspace.update_in(cx, |workspace, window, cx| {
                         workspace
                             .open_abs_path(path, OpenOptions::default(), window, cx)
                             .detach();
-                    });
+                    }).log_err();
                 })
                 .detach();
             }));
@@ -3394,9 +3394,9 @@ impl Dashboard {
             .child(
                 Disclosure::new(SharedString::from("disc-compact"), is_open).on_click(
                     move |_, _, cx| {
-                        let _ = entity.update(cx, |this, cx| {
+                        entity.update(cx, |this, cx| {
                             this.toggle_section(&id_for_toggle, cx);
-                        });
+                        }).log_err();
                     },
                 ),
             )
@@ -3508,7 +3508,7 @@ impl Dashboard {
                                     let entity = path_entity.clone();
                                     let entry_id = path_entry_id.clone();
                                     let param_key = path_param_key.clone();
-                                    let _ = entity.update(cx, |_this, cx| {
+                                    entity.update(cx, |_this, cx| {
                                         let receiver = cx.prompt_for_paths(PathPromptOptions {
                                             files: false,
                                             directories: true,
@@ -3521,7 +3521,7 @@ impl Dashboard {
                                                 if let Some(path) = paths.into_iter().next() {
                                                     let path_str =
                                                         path.to_string_lossy().to_string();
-                                                    let _ = entity.update(
+                                                    entity.update(
                                                         cx,
                                                         |this: &mut Dashboard, cx| {
                                                             this.param_values
@@ -3534,12 +3534,12 @@ impl Dashboard {
                                                             write_param_values(&this.param_values);
                                                             cx.notify();
                                                         },
-                                                    );
+                                                    ).log_err();
                                                 }
                                             }
                                         })
                                         .detach();
-                                    });
+                                    }).log_err();
                                 }),
                             )
                             .into_any_element()
@@ -3576,15 +3576,14 @@ impl Dashboard {
                                         option.clone(),
                                         None,
                                         move |_window, cx: &mut App| {
-                                            let _ =
-                                                entity.update(cx, |this: &mut Dashboard, cx| {
-                                                    this.param_values
-                                                        .entry(entry_id.clone())
-                                                        .or_default()
-                                                        .insert(param_key.clone(), value.clone());
-                                                    write_param_values(&this.param_values);
-                                                    cx.notify();
-                                                });
+                                            entity.update(cx, |this: &mut Dashboard, cx| {
+                                                this.param_values
+                                                    .entry(entry_id.clone())
+                                                    .or_default()
+                                                    .insert(param_key.clone(), value.clone());
+                                                write_param_values(&this.param_values);
+                                                cx.notify();
+                                            }).log_err();
                                         },
                                     );
                                 }
@@ -3716,9 +3715,9 @@ impl Dashboard {
                                         )
                                         .on_click(
                                             move |_, _, cx| {
-                                                let _ = disc_entity.update(cx, |this, cx| {
+                                                disc_entity.update(cx, |this, cx| {
                                                     this.toggle_automation_expanded(&disc_id, cx);
-                                                });
+                                                }).log_err();
                                             },
                                         ),
                                     )
@@ -3732,12 +3731,12 @@ impl Dashboard {
                                         .tooltip(Tooltip::text("Edit"))
                                         .on_click(
                                             move |_, window, cx| {
-                                                let _ = edit_entity.update(cx, |this, cx| {
+                                                edit_entity.update(cx, |this, cx| {
                                                     let path = automations_dir()
                                                         .join(format!("{}.toml", edit_id));
                                                     let workspace = this.workspace.clone();
                                                     cx.spawn_in(window, async move |_this, cx| {
-                                                        let _ = workspace.update_in(
+                                                        workspace.update_in(
                                                             cx,
                                                             |workspace, window, cx| {
                                                                 workspace
@@ -3749,10 +3748,10 @@ impl Dashboard {
                                                                     )
                                                                     .detach();
                                                             },
-                                                        );
+                                                        ).log_err();
                                                     })
                                                     .detach();
-                                                });
+                                                }).log_err();
                                             },
                                         ),
                                     ),
@@ -3783,9 +3782,9 @@ impl Dashboard {
                     ),
             )
             .on_click(move |_, window, cx| {
-                let _ = click_entity.update(cx, |this, cx| {
+                click_entity.update(cx, |this, cx| {
                     this.run_automation(&click_id, &click_label, &click_prompt, window, cx);
-                });
+                }).log_err();
             })
     }
 
@@ -3803,9 +3802,9 @@ impl Dashboard {
         let disc_entity = cx.entity().downgrade();
         let disclosure = Disclosure::new(SharedString::from("disc-automations"), is_open).on_click(
             move |_, _, cx| {
-                let _ = disc_entity.update(cx, |this, cx| {
+                disc_entity.update(cx, |this, cx| {
                     this.toggle_section("automations", cx);
-                });
+                }).log_err();
             },
         );
 
@@ -3832,28 +3831,28 @@ impl Dashboard {
                     "agent-backend-toggle",
                     [
                         ToggleButtonSimple::new("Claude", move |_, _, cx| {
-                            let _ = entity_claude.update(cx, |this, cx| {
+                            entity_claude.update(cx, |this, cx| {
                                 this.agent_backend = AgentBackend::Claude;
                                 cx.notify();
-                            });
+                            }).log_err();
                         }),
                         ToggleButtonSimple::new("Gemini", move |_, _, cx| {
-                            let _ = entity_gemini.update(cx, |this, cx| {
+                            entity_gemini.update(cx, |this, cx| {
                                 this.agent_backend = AgentBackend::Gemini;
                                 cx.notify();
-                            });
+                            }).log_err();
                         }),
                         ToggleButtonSimple::new("Copy", move |_, _, cx| {
-                            let _ = entity_copy.update(cx, |this, cx| {
+                            entity_copy.update(cx, |this, cx| {
                                 this.agent_backend = AgentBackend::CopyOnly;
                                 cx.notify();
-                            });
+                            }).log_err();
                         }),
                         ToggleButtonSimple::new("Native", move |_, _, cx| {
-                            let _ = entity_native.update(cx, |this, cx| {
+                            entity_native.update(cx, |this, cx| {
                                 this.agent_backend = AgentBackend::Native;
                                 cx.notify();
-                            });
+                            }).log_err();
                         }),
                     ],
                 )
@@ -4016,7 +4015,7 @@ impl Dashboard {
                             let cwd = cwd.clone();
                             let label = label.clone();
                             let id = id.clone();
-                            let _ = workspace.update(cx, |workspace, cx| {
+                            workspace.update(cx, |workspace, cx| {
                                 let spawn = SpawnInTerminal {
                                     id: TaskId(format!("ai-agent-{}", id)),
                                     label: label.clone(),
@@ -4034,7 +4033,7 @@ impl Dashboard {
                                     ..Default::default()
                                 };
                                 workspace.spawn_in_terminal(spawn, window, cx).detach();
-                            });
+                            }).log_err();
                         })
                         .into_any_element()
                 }
@@ -4078,7 +4077,7 @@ impl Render for Dashboard {
                         .cloned()
                         .unwrap_or_default();
                     if is_background {
-                        let _ = this.workspace.update(cx, |_workspace, cx| {
+                        this.workspace.update(cx, |_workspace, cx| {
                             Self::spawn_tool_background(
                                 &tool,
                                 &runtime_path,
@@ -4088,9 +4087,9 @@ impl Render for Dashboard {
                                 &tool_param_values,
                                 cx,
                             );
-                        });
+                        }).log_err();
                     } else {
-                        let _ = this.workspace.update(cx, |workspace, cx| {
+                        this.workspace.update(cx, |workspace, cx| {
                             Self::spawn_tool_entry(
                                 &tool,
                                 &runtime_path,
@@ -4102,7 +4101,7 @@ impl Render for Dashboard {
                                 window,
                                 cx,
                             );
-                        });
+                        }).log_err();
                     }
                 }
             }))
