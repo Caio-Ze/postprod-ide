@@ -11,7 +11,7 @@
 # Usage: ./script/test-versioning
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 TAG="v0.99.0-test"
 VERSION="0.99.0-test"
 ARCH="$(uname -m)"
@@ -78,7 +78,7 @@ else
 fi
 
 # Run packaging script with --skip-build
-SUITE_ROOT="$FAKE_SUITE" "$REPO_ROOT/script/package-postprod" --skip-build > /dev/null 2>&1 || true
+SUITE_ROOT="$FAKE_SUITE" "$REPO_ROOT/script/postprod/package-postprod" --skip-build > /dev/null 2>&1 || true
 
 ARCHIVE_NAME="PostProdTools-${VERSION}-${ARCH}"
 ARCHIVE_PATH="$REPO_ROOT/target/${ARCHIVE_NAME}.tar.gz"

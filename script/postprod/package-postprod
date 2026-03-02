@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Build PostProd IDE and package everything into ~/PostProd_IDE/
-# Optionally creates a distributable .tar.gz archive.
+# Build PostProd IDE and create a distributable .tar.gz archive.
+#
+# This script builds into a staging area under target/ — it does NOT
+# modify ~/PostProd_IDE/. The workspace is a version-controlled repo
+# that you curate and ship directly.
 #
 # Usage: ./script/package-postprod [--skip-build]
 #
@@ -9,9 +12,8 @@
 #   GO_PROJECT_PATH    — path to Go project repo (session-monitor) (default: ~/Documents/Go_project)
 set -euo pipefail
 
-SUITE_ROOT="$HOME/PostProd_IDE"
 PTSL_SDK="${PROTOOLS_SDK_PATH:-$HOME/Documents/Rust_projects/PROTOOLS_SDK_PTSL}"
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 # Version from git tag (v1.0.0 → 1.0.0), fallback to "dev"
 RAW_VERSION=$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null || echo "dev")
@@ -25,12 +27,9 @@ fi
 
 echo "==> PostProd Tools $VERSION ($ARCH)"
 
-echo "==> Creating workspace directories..."
-mkdir -p "$SUITE_ROOT/config/tools"
-mkdir -p "$SUITE_ROOT/config/automations"
-mkdir -p "$SUITE_ROOT/tools/agent"
-mkdir -p "$SUITE_ROOT/tools/runtime"
-mkdir -p "$SUITE_ROOT/deliveries"
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
 
 if [[ "$skip_build" == false ]]; then
     echo "==> Building postprod-ide (release)..."
@@ -44,40 +43,8 @@ if [[ "$skip_build" == false ]]; then
     fi
 fi
 
-# Copy agent tool binaries (release)
-if [[ -d "$PTSL_SDK/target/release" ]]; then
-    echo "==> Copying agent tool binaries..."
-    for bin in "$PTSL_SDK/target/release/agent-"*; do
-        [[ -f "$bin" && -x "$bin" ]] || continue
-        cp "$bin" "$SUITE_ROOT/tools/agent/"
-    done
-    echo "    $(ls "$SUITE_ROOT/tools/agent/" | wc -l | tr -d ' ') agent tools installed"
-fi
-
-# Copy runtime via rsync (preserves internal structure)
-if [[ -d "$PTSL_SDK/target/runtime" ]]; then
-    echo "==> Syncing runtime tools..."
-    rsync -a --delete "$PTSL_SDK/target/runtime/" "$SUITE_ROOT/tools/runtime/"
-fi
-
-# Go session-monitor (replaces Rust version in package)
-GO_PROJECT="${GO_PROJECT_PATH:-$HOME/Documents/Go_project}"
-GO_SM="$GO_PROJECT/target/runtime/bin/Session_Monitor"
-if [[ -f "$GO_SM/session-monitor" ]]; then
-    echo "==> Syncing Go session-monitor..."
-    rsync -a "$GO_SM/" "$SUITE_ROOT/tools/runtime/bin/Session_Monitor/"
-    echo "    Go session-monitor (replaces Rust)"
-else
-    echo "    WARNING: Go session-monitor not found at $GO_SM"
-    echo "    Falling back to Rust session-monitor"
-fi
-
-echo "==> Done. Workspace at $SUITE_ROOT"
-echo "    config/  — tool and automation TOMLs (user-managed, from product repos)"
-echo "    tools/   — agent + runtime binaries"
-
 # ---------------------------------------------------------------------------
-# Create distributable archive
+# Create distributable archive (entirely in target/, never touches ~/PostProd_IDE/)
 # ---------------------------------------------------------------------------
 
 ARCHIVE_NAME="PostProdTools-${VERSION}-${ARCH}"
@@ -102,17 +69,36 @@ else
     echo "    WARNING: postprod-ide binary not found at $BINARY"
 fi
 
-# Agent tools
-if [[ -d "$SUITE_ROOT/tools/agent" ]]; then
-    for bin in "$SUITE_ROOT/tools/agent/agent-"*; do
+# Agent tools — from SDK deploy folder or raw build output
+if [[ -d "$PTSL_SDK/target/agent" ]]; then
+    echo "==> Copying agent tools from target/agent/..."
+    rsync -a "$PTSL_SDK/target/agent/" "$ARCHIVE_DIR/tools/agent/"
+elif [[ -d "$PTSL_SDK/target/release" ]]; then
+    echo "==> Copying agent tools from target/release/..."
+    for bin in "$PTSL_SDK/target/release/agent-"*; do
         [[ -f "$bin" && -x "$bin" ]] || continue
         cp "$bin" "$ARCHIVE_DIR/tools/agent/"
     done
 fi
+agent_count=$(find "$ARCHIVE_DIR/tools/agent" -maxdepth 1 -type f -perm +111 2>/dev/null | wc -l | tr -d ' ')
+echo "    $agent_count agent tools packaged"
 
-# Runtime tools
-if [[ -d "$SUITE_ROOT/tools/runtime" ]] && ls "$SUITE_ROOT/tools/runtime/"* >/dev/null 2>&1; then
-    rsync -a "$SUITE_ROOT/tools/runtime/" "$ARCHIVE_DIR/tools/runtime/"
+# Runtime tools — from SDK deploy folder
+if [[ -d "$PTSL_SDK/target/runtime" ]]; then
+    echo "==> Copying runtime tools..."
+    rsync -a "$PTSL_SDK/target/runtime/" "$ARCHIVE_DIR/tools/runtime/"
+fi
+
+# Go session-monitor (replaces Rust version in package)
+GO_PROJECT="${GO_PROJECT_PATH:-$HOME/Documents/Go_project}"
+GO_SM="$GO_PROJECT/target/runtime/bin/Session_Monitor"
+if [[ -f "$GO_SM/session-monitor" ]]; then
+    echo "==> Copying Go session-monitor..."
+    rsync -a "$GO_SM/" "$ARCHIVE_DIR/tools/runtime/bin/Session_Monitor/"
+    echo "    Go session-monitor (replaces Rust)"
+else
+    echo "    WARNING: Go session-monitor not found at $GO_SM"
+    echo "    Falling back to Rust session-monitor"
 fi
 
 # Create archive
@@ -120,6 +106,7 @@ tar -czf "$ARCHIVE_PATH" -C "$REPO_ROOT/target" "$ARCHIVE_NAME"
 rm -rf "$ARCHIVE_DIR"
 
 ARCHIVE_SIZE=$(du -h "$ARCHIVE_PATH" | cut -f1)
+echo ""
 echo "==> Archive ready: $ARCHIVE_PATH ($ARCHIVE_SIZE)"
 echo ""
 echo "Install instructions:"
