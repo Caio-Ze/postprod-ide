@@ -249,33 +249,6 @@ fn general_page(cx: &App) -> SettingsPage {
             }),
         ]
     }
-    fn security_section() -> [SettingsPageItem; 2] {
-        [
-            SettingsPageItem::SectionHeader("Security"),
-            SettingsPageItem::SettingItem(SettingItem {
-                title: "Trust All Projects By Default",
-                description: "When opening Zed, avoid Restricted Mode by auto-trusting all projects, enabling use of all features without having to give permission to each new project.",
-                field: Box::new(SettingField {
-                    json_path: Some("session.trust_all_projects"),
-                    pick: |settings_content| {
-                        settings_content
-                            .session
-                            .as_ref()
-                            .and_then(|session| session.trust_all_worktrees.as_ref())
-                    },
-                    write: |settings_content, value, _| {
-                        settings_content
-                            .session
-                            .get_or_insert_default()
-                            .trust_all_worktrees = value;
-                    },
-                }),
-                metadata: None,
-                files: USER,
-            }),
-        ]
-    }
-
     fn workspace_restoration_section() -> [SettingsPageItem; 3] {
         [
             SettingsPageItem::SectionHeader("Workspace Restoration"),
@@ -419,7 +392,6 @@ fn general_page(cx: &App) -> SettingsPage {
         items: concat_sections!(
             @vec,
             general_settings_section(cx),
-            security_section(),
             workspace_restoration_section(),
             scoped_settings_section(),
             privacy_section(),

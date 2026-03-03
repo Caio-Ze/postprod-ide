@@ -43,6 +43,7 @@ members = [
     "crates/crashes",
     "crates/credentials_provider",
     "crates/csv_preview",
+    "crates/dashboard",
     "crates/dap",
     "crates/dap_adapters",
     "crates/db",
@@ -307,6 +308,7 @@ crashes = { path = "crates/crashes" }
 credentials_provider = { path = "crates/credentials_provider" }
 crossbeam = "0.8.4"
 csv_preview = { path = "crates/csv_preview"}
+dashboard = { path = "crates/dashboard" }
 dap = { path = "crates/dap" }
 dap_adapters = { path = "crates/dap_adapters" }
 db = { path = "crates/db" }
@@ -586,6 +588,7 @@ futures-concurrency = "7.7.1"
 futures-lite = "1.13"
 gh-workflow = { git = "https://github.com/zed-industries/gh-workflow", rev = "37f3c0575d379c218a9c455ee67585184e40d43f" }
 git2 = { version = "0.20.1", default-features = false, features = ["vendored-libgit2"] }
+global-hotkey = "0.7"
 globset = "0.4"
 heapless = "0.9.2"
 handlebars = "4.3"

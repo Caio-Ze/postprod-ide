@@ -2,6 +2,65 @@
 use std::process::Command;
 
 fn main() {
+    // ── PostProd IDE: PTSL SDK dev symlinks ──────────────────────────
+    #[cfg(target_os = "macos")]
+    {
+        let out_dir = std::env::var("OUT_DIR").unwrap_or_default();
+        let target_profile_dir = std::path::Path::new(&out_dir)
+            .ancestors()
+            .nth(3)
+            .expect("could not find target profile dir");
+
+        // Runtime tools symlink
+        let runtime_src = std::path::Path::new("../../../PROTOOLS_SDK_PTSL/target/runtime");
+        let runtime_dst = target_profile_dir.join("runtime");
+        if runtime_src.exists() {
+            println!("cargo:rerun-if-changed=../../../PROTOOLS_SDK_PTSL/target/runtime");
+            if !runtime_dst.exists() {
+                if let Ok(canonical) = runtime_src.canonicalize() {
+                    std::os::unix::fs::symlink(&canonical, &runtime_dst).ok();
+                    println!("cargo::warning=Linked runtime → {}", runtime_dst.display());
+                }
+            }
+        }
+
+        // Agent tools symlink
+        let agent_src = std::path::Path::new("../../../PROTOOLS_SDK_PTSL/target/agent");
+        let agent_dst = target_profile_dir.join("agent");
+        if agent_src.exists() {
+            println!("cargo:rerun-if-changed=../../../PROTOOLS_SDK_PTSL/target/agent");
+            if !agent_dst.exists() {
+                if let Ok(canonical) = agent_src.canonicalize() {
+                    std::os::unix::fs::symlink(&canonical, &agent_dst).ok();
+                    println!(
+                        "cargo::warning=Linked agent tools → {}",
+                        agent_dst.display()
+                    );
+                }
+            }
+        }
+    }
+
+    // ── PostProd IDE: version from git tags ──────────────────────────
+    println!("cargo:rerun-if-changed=../../.git/refs/tags");
+    let protools_version = if let Ok(output) = Command::new("git")
+        .args(["describe", "--tags", "--abbrev=0"])
+        .output()
+        && output.status.success()
+    {
+        let tag = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let version = tag.strip_prefix('v').unwrap_or(&tag).to_string();
+        if let Ok(build_profile) = std::env::var("PROFILE")
+            && build_profile == "release"
+        {
+            println!("cargo::warning=Info: using '{version}' from git tag for PROTOOLS_VERSION");
+        }
+        version
+    } else {
+        std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0-dev".to_string())
+    };
+    println!("cargo:rustc-env=PROTOOLS_VERSION={protools_version}");
+
     #[cfg(target_os = "linux")]
     {
         // Add rpaths for libraries that webrtc-sys dlopens at runtime.
@@ -226,8 +285,8 @@ fn main() {
                 res.set_toolkit_path(explicit_rc_toolkit_path.as_str());
             }
             res.set_icon(icon.to_str().unwrap());
-            res.set("FileDescription", "Zed");
-            res.set("ProductName", "Zed");
+            res.set("FileDescription", "PostProd Tools");
+            res.set("ProductName", "PostProd Tools");
 
             if let Err(e) = res.compile() {
                 eprintln!("{}", e);

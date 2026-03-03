@@ -837,6 +837,15 @@ impl Pane {
         self.should_display_welcome_page = should_display_welcome_page;
     }
 
+    pub fn set_can_drop(
+        &mut self,
+        can_drop_predicate: Option<
+            Arc<dyn Fn(&dyn Any, &mut Window, &mut App) -> bool + 'static>,
+        >,
+    ) {
+        self.can_drop_predicate = can_drop_predicate;
+    }
+
     pub fn set_can_split(
         &mut self,
         can_split_predicate: Option<
@@ -1957,7 +1966,7 @@ impl Pane {
         // Find the items to close.
         let mut items_to_close = Vec::new();
         for item in &self.items {
-            if should_close(item.item_id()) {
+            if should_close(item.item_id()) && !item.prevent_close(cx) {
                 items_to_close.push(item.boxed_clone());
             }
         }
