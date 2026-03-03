@@ -6,9 +6,9 @@ use global_hotkey::{
 };
 use gpui::{
     Action, App, AsyncApp, ClipboardItem, Context, Corner, DismissEvent, Entity, EventEmitter,
-    ExternalPaths, FocusHandle, Focusable, IntoElement, Keystroke, KeystrokeEvent, ParentElement,
-    PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription, WeakEntity,
-    Window, actions,
+    ExternalPaths, FocusHandle, Focusable, IntoElement, Keystroke, KeystrokeEvent, MouseButton,
+    ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription,
+    WeakEntity, Window, actions,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -3708,52 +3708,85 @@ impl Dashboard {
                                             .color(badge_color)
                                             .size(LabelSize::XSmall),
                                     )
+                                    // Wrapper stops mouse_down propagation to prevent the card's
+                                    // window-level click tracking from interfering with child buttons.
                                     .child(
-                                        Disclosure::new(
-                                            SharedString::from(format!("disc-auto-{}", disc_id)),
-                                            is_expanded,
-                                        )
-                                        .on_click(
-                                            move |_, _, cx| {
-                                                disc_entity.update(cx, |this, cx| {
-                                                    this.toggle_automation_expanded(&disc_id, cx);
-                                                }).log_err();
-                                            },
-                                        ),
-                                    )
-                                    .child(
-                                        IconButton::new(
-                                            format!("edit-automation-{}", edit_id),
-                                            IconName::FileToml,
-                                        )
-                                        .icon_size(IconSize::Small)
-                                        .icon_color(Color::Muted)
-                                        .tooltip(Tooltip::text("Edit"))
-                                        .on_click(
-                                            move |_, window, cx| {
-                                                edit_entity.update(cx, |this, cx| {
-                                                    let path = automations_dir()
-                                                        .join(format!("{}.toml", edit_id));
-                                                    let workspace = this.workspace.clone();
-                                                    cx.spawn_in(window, async move |_this, cx| {
-                                                        workspace.update_in(
-                                                            cx,
-                                                            |workspace, window, cx| {
-                                                                workspace
-                                                                    .open_abs_path(
-                                                                        path,
-                                                                        OpenOptions::default(),
-                                                                        window,
-                                                                        cx,
-                                                                    )
-                                                                    .detach();
-                                                            },
-                                                        ).log_err();
-                                                    })
-                                                    .detach();
-                                                }).log_err();
-                                            },
-                                        ),
+                                        h_flex()
+                                            .gap_1()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                |_, window, cx| {
+                                                    window.prevent_default();
+                                                    cx.stop_propagation();
+                                                },
+                                            )
+                                            .child(
+                                                Disclosure::new(
+                                                    SharedString::from(format!(
+                                                        "disc-auto-{}",
+                                                        disc_id
+                                                    )),
+                                                    is_expanded,
+                                                )
+                                                .on_click(
+                                                    move |_, _, cx| {
+                                                        disc_entity
+                                                            .update(cx, |this, cx| {
+                                                                this.toggle_automation_expanded(
+                                                                    &disc_id, cx,
+                                                                );
+                                                            })
+                                                            .log_err();
+                                                    },
+                                                ),
+                                            )
+                                            .child(
+                                                IconButton::new(
+                                                    format!("edit-automation-{}", edit_id),
+                                                    IconName::FileToml,
+                                                )
+                                                .icon_size(IconSize::Small)
+                                                .icon_color(Color::Muted)
+                                                .tooltip(Tooltip::text("Edit"))
+                                                .on_click(
+                                                    move |_, window, cx| {
+                                                        edit_entity
+                                                            .update(cx, |this, cx| {
+                                                                let path = automations_dir()
+                                                                    .join(format!(
+                                                                        "{}.toml",
+                                                                        edit_id
+                                                                    ));
+                                                                let workspace =
+                                                                    this.workspace.clone();
+                                                                cx.spawn_in(
+                                                                    window,
+                                                                    async move |_this, cx| {
+                                                                        workspace
+                                                                            .update_in(
+                                                                                cx,
+                                                                                |workspace,
+                                                                                 window,
+                                                                                 cx| {
+                                                                                    workspace
+                                                                                        .open_abs_path(
+                                                                                            path,
+                                                                                            OpenOptions::default(),
+                                                                                            window,
+                                                                                            cx,
+                                                                                        )
+                                                                                        .detach();
+                                                                                },
+                                                                            )
+                                                                            .log_err();
+                                                                    },
+                                                                )
+                                                                .detach();
+                                                            })
+                                                            .log_err();
+                                                    },
+                                                ),
+                                            ),
                                     ),
                             )
                             .when(has_params, |el| {
@@ -3783,7 +3816,11 @@ impl Dashboard {
             )
             .on_click(move |_, window, cx| {
                 click_entity.update(cx, |this, cx| {
-                    this.run_automation(&click_id, &click_label, &click_prompt, window, cx);
+                    if this.expanded_automations.contains(click_id.as_str()) {
+                        this.toggle_automation_expanded(&click_id, cx);
+                    } else {
+                        this.run_automation(&click_id, &click_label, &click_prompt, window, cx);
+                    }
                 }).log_err();
             })
     }
