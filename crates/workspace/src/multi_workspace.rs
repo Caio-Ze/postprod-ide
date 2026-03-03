@@ -408,6 +408,10 @@ impl MultiWorkspace {
         if changed {
             cx.emit(MultiWorkspaceEvent::ActiveWorkspaceChanged);
         }
+        // Always emit Activate — ensure_dashboard() uses this as a refresh signal.
+        // Unconditional so re-activating the same workspace recovers stale dashboard state.
+        let workspace = self.workspaces[index].clone();
+        workspace.update(cx, |_, cx| cx.emit(WorkspaceEvent::Activate));
         cx.notify();
     }
 

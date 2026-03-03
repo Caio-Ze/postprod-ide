@@ -7,7 +7,7 @@ use fs::Fs;
 use futures::channel::mpsc;
 use futures::{Future, StreamExt};
 use gpui::{App, AppContext as _, BackgroundExecutor, Task};
-use http_client::{self, AsyncBody, HttpClient, HttpClientWithUrl, Method, Request};
+use http_client::{self, AsyncBody, HttpClientWithUrl, Method, Request};
 use parking_lot::Mutex;
 use regex::Regex;
 use release_channel::ReleaseChannel;
@@ -38,7 +38,7 @@ use self::event_coalescer::EventCoalescer;
 
 pub struct Telemetry {
     clock: Arc<dyn SystemClock>,
-    http_client: Arc<HttpClientWithUrl>,
+    _http_client: Arc<HttpClientWithUrl>,
     executor: BackgroundExecutor,
     state: Arc<Mutex<TelemetryState>>,
 }
@@ -238,7 +238,7 @@ impl Telemetry {
 
         let this = Arc::new(Self {
             clock,
-            http_client: client,
+            _http_client: client,
             executor: cx.background_executor().clone(),
             state,
         });
@@ -582,6 +582,7 @@ impl Telemetry {
         self.state.lock().is_staff
     }
 
+    #[allow(dead_code)]
     fn build_request(
         self: &Arc<Self>,
         // We take in the JSON bytes buffer so we can reuse the existing allocation.
@@ -596,7 +597,7 @@ impl Telemetry {
         Ok(Request::builder()
             .method(Method::POST)
             .uri(
-                self.http_client
+                self._http_client
                     .build_zed_api_url("/telemetry/events", &[])?
                     .as_ref(),
             )
@@ -647,11 +648,10 @@ impl Telemetry {
             )
         };
 
-        let request = self.build_request(json_bytes, &request_body)?;
-        let response = self.http_client.send(request).await?;
-        if response.status() != 200 {
-            log::error!("Failed to send events: HTTP {:?}", response.status());
-        }
+        // Telemetry disabled in PostProd Tools — events are written to local
+        // log file above but never sent over the network.
+        drop(json_bytes);
+        drop(request_body);
 
         anyhow::Ok(())
     }

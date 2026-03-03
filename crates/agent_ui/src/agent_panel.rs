@@ -2354,6 +2354,24 @@ impl AgentPanel {
         );
     }
 
+    pub fn new_external_thread_with_auto_submit(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.external_thread(
+            None,
+            None,
+            Some(AgentInitialContent::ContentBlock {
+                blocks: vec![acp::ContentBlock::Text(acp::TextContent::new(text))],
+                auto_submit: true,
+            }),
+            window,
+            cx,
+        );
+    }
+
     pub fn new_agent_thread(
         &mut self,
         agent: AgentType,
