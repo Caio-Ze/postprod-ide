@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# Build PostProd IDE and create a distributable .tar.gz archive.
+#
+# This script builds into a staging area under target/ — it does NOT
+# modify ~/PostProd_IDE/. The workspace is a version-controlled repo
+# that you curate and ship directly.
+#
+# Usage: ./script/package-postprod [--skip-build]
+#
+# Environment variables:
+#   PROTOOLS_SDK_PATH  — path to PROTOOLS_SDK_PTSL repo (default: ~/Documents/Rust_projects/PROTOOLS_SDK_PTSL)
+#   GO_PROJECT_PATH    — path to Go project repo (session-monitor) (default: ~/Documents/Go_project)
+set -euo pipefail
+
+PTSL_SDK="${PROTOOLS_SDK_PATH:-$HOME/Documents/Rust_projects/PROTOOLS_SDK_PTSL}"
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+# Version from git tag (v1.0.0 → 1.0.0), fallback to "dev"
+RAW_VERSION=$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null || echo "dev")
+VERSION="${RAW_VERSION#v}"
+ARCH="$(uname -m)"
+
+skip_build=false
+if [[ "${1:-}" == "--skip-build" ]]; then
+    skip_build=true
+fi
+
+echo "==> PostProd Tools $VERSION ($ARCH)"
+
+# ---------------------------------------------------------------------------
+# Build
+# ---------------------------------------------------------------------------
+
+if [[ "$skip_build" == false ]]; then
+    echo "==> Building postprod-ide (release)..."
+    cargo build --release -p postprod-ide --manifest-path "$REPO_ROOT/Cargo.toml"
+
+    if [[ -d "$PTSL_SDK" ]]; then
+        echo "==> Building agent-tools (release)..."
+        cargo build --release -p agent-tools --manifest-path "$PTSL_SDK/Cargo.toml"
+    else
+        echo "    PTSL SDK not found at $PTSL_SDK — skipping agent tools build"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Create distributable archive (entirely in target/, never touches ~/PostProd_IDE/)
+# ---------------------------------------------------------------------------
+
+ARCHIVE_NAME="PostProdTools-${VERSION}-${ARCH}"
+ARCHIVE_DIR="$REPO_ROOT/target/$ARCHIVE_NAME"
+ARCHIVE_PATH="$REPO_ROOT/target/${ARCHIVE_NAME}.tar.gz"
+
+echo ""
+echo "==> Creating distributable archive..."
+
+rm -rf "$ARCHIVE_DIR"
+mkdir -p "$ARCHIVE_DIR/config/tools"
+mkdir -p "$ARCHIVE_DIR/config/automations"
+mkdir -p "$ARCHIVE_DIR/tools/agent"
+mkdir -p "$ARCHIVE_DIR/tools/runtime"
+mkdir -p "$ARCHIVE_DIR/deliveries"
+
+# App binary
+BINARY="$REPO_ROOT/target/release/postprod-ide"
+if [[ -f "$BINARY" ]]; then
+    cp "$BINARY" "$ARCHIVE_DIR/"
+else
+    echo "    WARNING: postprod-ide binary not found at $BINARY"
+fi
+
+# Agent tools — from SDK deploy folder or raw build output
+if [[ -d "$PTSL_SDK/target/agent" ]]; then
+    echo "==> Copying agent tools from target/agent/..."
+    rsync -a "$PTSL_SDK/target/agent/" "$ARCHIVE_DIR/tools/agent/"
+elif [[ -d "$PTSL_SDK/target/release" ]]; then
+    echo "==> Copying agent tools from target/release/..."
+    for bin in "$PTSL_SDK/target/release/agent-"*; do
+        [[ -f "$bin" && -x "$bin" ]] || continue
+        cp "$bin" "$ARCHIVE_DIR/tools/agent/"
+    done
+fi
+agent_count=$(find "$ARCHIVE_DIR/tools/agent" -maxdepth 1 -type f -perm +111 2>/dev/null | wc -l | tr -d ' ')
+echo "    $agent_count agent tools packaged"
+
+# Runtime tools — from SDK deploy folder
+if [[ -d "$PTSL_SDK/target/runtime" ]]; then
+    echo "==> Copying runtime tools..."
+    rsync -a "$PTSL_SDK/target/runtime/" "$ARCHIVE_DIR/tools/runtime/"
+fi
+
+# Go session-monitor (replaces Rust version in package)
+GO_PROJECT="${GO_PROJECT_PATH:-$HOME/Documents/Go_project}"
+GO_SM="$GO_PROJECT/target/runtime/bin/Session_Monitor"
+if [[ -f "$GO_SM/session-monitor" ]]; then
+    echo "==> Copying Go session-monitor..."
+    rsync -a "$GO_SM/" "$ARCHIVE_DIR/tools/runtime/bin/Session_Monitor/"
+    echo "    Go session-monitor (replaces Rust)"
+else
+    echo "    WARNING: Go session-monitor not found at $GO_SM"
+    echo "    Falling back to Rust session-monitor"
+fi
+
+# Create archive
+tar -czf "$ARCHIVE_PATH" -C "$REPO_ROOT/target" "$ARCHIVE_NAME"
+rm -rf "$ARCHIVE_DIR"
+
+ARCHIVE_SIZE=$(du -h "$ARCHIVE_PATH" | cut -f1)
+echo ""
+echo "==> Archive ready: $ARCHIVE_PATH ($ARCHIVE_SIZE)"
+echo ""
+echo "Install instructions:"
+echo "  1. Extract:  tar xzf ${ARCHIVE_NAME}.tar.gz"
+echo "  2. Clear quarantine:  xattr -cr ${ARCHIVE_NAME}/"
+echo "  3. Copy binary to /Applications/ or ~/PostProd_IDE/"
+echo "  4. Copy tools/ to ~/PostProd_IDE/tools/"
+echo "  5. Install product configs from a product repo (e.g. postprod-protools)"

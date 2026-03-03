@@ -1128,6 +1128,10 @@ pub struct PreviousWorkspaceState {
     pub focused_dock: Option<DockPosition>,
 }
 
+pub struct ProToolsSessionName(pub String);
+
+impl Global for ProToolsSessionName {}
+
 pub struct WorkspaceStore {
     workspaces: HashSet<(gpui::AnyWindowHandle, WeakEntity<Workspace>)>,
     client: Arc<Client>,
@@ -5831,7 +5835,14 @@ impl Workspace {
         }
 
         if title.is_empty() {
-            title = "empty project".to_string();
+            title = "PostProd Tools".to_string();
+        }
+
+        if let Some(session_name) = cx.try_global::<ProToolsSessionName>() {
+            if !session_name.0.is_empty() {
+                title.push_str(" — ");
+                title.push_str(&session_name.0);
+            }
         }
 
         if let Some(path) = self.active_item(cx).and_then(|item| item.project_path(cx)) {

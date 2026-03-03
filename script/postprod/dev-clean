@@ -1,0 +1,15 @@
+#!/bin/bash
+# Launch PostProd IDE with the clean sandbox workspace.
+# This points the app at ~/PostProd_IDE_clean/ (via POSTPROD_WORKSPACE env var)
+# for testing the fresh-user experience without touching your main setup.
+#
+# Usage:
+#   ./script/dev-clean    # launch with clean sandbox workspace
+#
+# Your normal workspace at ~/PostProd_IDE/ is never affected.
+
+set -euo pipefail
+
+CLEAN_ROOT="$HOME/PostProd_IDE_clean"
+
+POSTPROD_WORKSPACE="$CLEAN_ROOT" exec ./target/release/postprod-ide

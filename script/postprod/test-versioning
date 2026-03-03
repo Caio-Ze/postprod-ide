@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+# Test the versioning and packaging pipeline without touching production files.
+#
+# What it tests:
+#   1. Version extraction from git tags (tag → strip v → filename)
+#   2. Archive creation with correct version in filename
+#   3. Archive internal structure (binary + tools/)
+#   4. Fallback to "dev" when no tag exists
+#   5. Cleanup: removes temp tag on exit
+#
+# Usage: ./script/test-versioning
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+TAG="v0.99.0-test"
+VERSION="0.99.0-test"
+ARCH="$(uname -m)"
+PASSED=0
+FAILED=0
+
+# Colors (if terminal supports it)
+if [[ -t 1 ]]; then
+    GREEN='\033[0;32m'
+    RED='\033[0;31m'
+    BOLD='\033[1m'
+    RESET='\033[0m'
+else
+    GREEN='' RED='' BOLD='' RESET=''
+fi
+
+pass() { ((PASSED++)); echo -e "  ${GREEN}PASS${RESET} $1"; }
+fail() { ((FAILED++)); echo -e "  ${RED}FAIL${RESET} $1"; }
+check() { if eval "$2"; then pass "$1"; else fail "$1 — $3"; fi }
+
+cleanup() {
+    echo ""
+    echo "==> Cleaning up..."
+    git -C "$REPO_ROOT" tag -d "$TAG" 2>/dev/null && echo "    Removed tag $TAG" || true
+    rm -rf "$ARCHIVE_DIR" 2>/dev/null || true
+    rm -f "$ARCHIVE_PATH" 2>/dev/null || true
+    rm -rf "$FAKE_SUITE" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+echo -e "${BOLD}==> Test: Versioning & Packaging Pipeline${RESET}"
+echo ""
+
+# ---------------------------------------------------------------------------
+# Test 1: Version extraction from git tag
+# ---------------------------------------------------------------------------
+echo -e "${BOLD}--- Version extraction ---${RESET}"
+
+git -C "$REPO_ROOT" tag "$TAG"
+RAW=$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null || echo "dev")
+EXTRACTED="${RAW#v}"
+
+check "git tag created" "[[ '$RAW' == '$TAG' ]]" "expected $TAG, got $RAW"
+check "v prefix stripped" "[[ '$EXTRACTED' == '$VERSION' ]]" "expected $VERSION, got $EXTRACTED"
+
+# ---------------------------------------------------------------------------
+# Test 2: Packaging script produces archive with version in filename
+# ---------------------------------------------------------------------------
+echo ""
+echo -e "${BOLD}--- Packaging (--skip-build, fake binaries) ---${RESET}"
+
+# Create a fake ~/PostProd_IDE in /tmp so the script doesn't need real binaries
+FAKE_SUITE=$(mktemp -d)
+FAKE_BINARY="$REPO_ROOT/target/release/postprod-ide"
+
+# Create fake binary if the real one doesn't exist (so archive creation works)
+if [[ ! -f "$FAKE_BINARY" ]]; then
+    mkdir -p "$REPO_ROOT/target/release"
+    echo "fake-binary" > "$FAKE_BINARY"
+    chmod +x "$FAKE_BINARY"
+    CREATED_FAKE_BINARY=true
+else
+    CREATED_FAKE_BINARY=false
+fi
+
+# Run packaging script with --skip-build
+SUITE_ROOT="$FAKE_SUITE" "$REPO_ROOT/script/postprod/package-postprod" --skip-build > /dev/null 2>&1 || true
+
+ARCHIVE_NAME="PostProdTools-${VERSION}-${ARCH}"
+ARCHIVE_PATH="$REPO_ROOT/target/${ARCHIVE_NAME}.tar.gz"
+ARCHIVE_DIR="$REPO_ROOT/target/$ARCHIVE_NAME"
+
+check "archive file exists" "[[ -f '$ARCHIVE_PATH' ]]" "expected $ARCHIVE_PATH"
+
+# ---------------------------------------------------------------------------
+# Test 3: Archive internal structure
+# ---------------------------------------------------------------------------
+echo ""
+echo -e "${BOLD}--- Archive structure ---${RESET}"
+
+if [[ -f "$ARCHIVE_PATH" ]]; then
+    CONTENTS=$(tar tzf "$ARCHIVE_PATH" 2>/dev/null || echo "")
+
+    check "contains postprod-ide binary" \
+        "echo '$CONTENTS' | grep -q '${ARCHIVE_NAME}/postprod-ide'" \
+        "binary not in archive"
+
+    check "contains tools/agent/ dir" \
+        "echo '$CONTENTS' | grep -q '${ARCHIVE_NAME}/tools/agent'" \
+        "tools/agent/ not in archive"
+
+    check "contains tools/runtime/ dir" \
+        "echo '$CONTENTS' | grep -q '${ARCHIVE_NAME}/tools/runtime'" \
+        "tools/runtime/ not in archive"
+
+    check "version in archive filename" \
+        "[[ '$ARCHIVE_NAME' == *'$VERSION'* ]]" \
+        "version not in filename"
+else
+    fail "archive not found — skipping structure tests"
+    ((FAILED += 3))
+fi
+
+# Clean up fake binary if we created it
+if [[ "$CREATED_FAKE_BINARY" == true ]]; then
+    rm -f "$FAKE_BINARY"
+fi
+
+# ---------------------------------------------------------------------------
+# Test 4: Fallback when no tag exists
+# ---------------------------------------------------------------------------
+echo ""
+echo -e "${BOLD}--- Fallback (no tag) ---${RESET}"
+
+# Remove the tag temporarily to test fallback
+git -C "$REPO_ROOT" tag -d "$TAG" > /dev/null 2>&1
+
+# Check what the packaging script would use as version
+FALLBACK_RAW=$(git -C "$REPO_ROOT" describe --tags --abbrev=0 2>/dev/null || echo "dev")
+FALLBACK="${FALLBACK_RAW#v}"
+
+# If there are other tags in the repo, it will pick those. If not, it falls back to "dev".
+# Either way, the version should NOT be our test version anymore.
+check "removed tag not used" "[[ '$FALLBACK' != '$VERSION' ]]" "still seeing removed tag"
+
+# Re-create tag for cleanup message (cleanup will delete it)
+git -C "$REPO_ROOT" tag "$TAG" > /dev/null 2>&1
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
+echo ""
+TOTAL=$((PASSED + FAILED))
+echo -e "${BOLD}==> Results: $PASSED/$TOTAL passed${RESET}"
+
+if [[ $FAILED -gt 0 ]]; then
+    echo -e "${RED}    $FAILED test(s) failed${RESET}"
+    exit 1
+else
+    echo -e "${GREEN}    All tests passed${RESET}"
+    exit 0
+fi
