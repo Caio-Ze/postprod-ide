@@ -1,14 +1,11 @@
 mod platforms;
 mod system_window_tabs;
 
-use feature_flags::{AgentV2FeatureFlag, FeatureFlagAppExt};
 use gpui::{
     AnyElement, App, Context, Decorations, Entity, Hsla, InteractiveElement, IntoElement,
     MouseButton, ParentElement, StatefulInteractiveElement, Styled, Window, WindowControlArea, div,
     px,
 };
-use project::DisableAiSettings;
-use settings::Settings;
 use smallvec::SmallVec;
 use std::mem;
 use ui::{
@@ -70,8 +67,30 @@ impl PlatformTitleBar {
         SystemWindowTabs::init(cx);
     }
 
-    pub fn is_multi_workspace_enabled(cx: &App) -> bool {
-        cx.has_flag::<AgentV2FeatureFlag>() && !DisableAiSettings::get_global(cx).disable_ai
+    pub fn is_workspace_sidebar_open(&self) -> bool {
+        self.workspace_sidebar_open
+    }
+
+    pub fn set_workspace_sidebar_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.workspace_sidebar_open = open;
+        cx.notify();
+    }
+
+    pub fn sidebar_has_notifications(&self) -> bool {
+        self.sidebar_has_notifications
+    }
+
+    pub fn set_sidebar_has_notifications(
+        &mut self,
+        has_notifications: bool,
+        cx: &mut Context<Self>,
+    ) {
+        self.sidebar_has_notifications = has_notifications;
+        cx.notify();
+    }
+
+    pub fn is_multi_workspace_enabled(_cx: &App) -> bool {
+        true
     }
 }
 

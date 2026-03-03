@@ -59,8 +59,8 @@ use std::{
 };
 use theme::ThemeSettings;
 use ui::{
-    Color, ContextMenu, ContextMenuEntry, DecoratedIcon, Divider, Icon, IconDecoration,
-    IconDecorationKind, IndentGuideColors, IndentGuideLayout, KeyBinding, Label, LabelSize,
+    Color, ContextMenu, ContextMenuEntry, DecoratedIcon, Icon, IconDecoration,
+    IconDecorationKind, IndentGuideColors, IndentGuideLayout, Label, LabelSize,
     ListItem, ListItemSpacing, ScrollAxes, ScrollableHandle, Scrollbars, StickyCandidate, Tooltip,
     WithScrollbar, prelude::*, v_flex,
 };
@@ -6886,8 +6886,6 @@ impl Render for ProjectPanel {
                     .with_priority(3)
                 }))
         } else {
-            let focus_handle = self.focus_handle(cx);
-
             v_flex()
                 .id("empty-project_panel")
                 .p_4()
@@ -6897,42 +6895,14 @@ impl Render for ProjectPanel {
                 .gap_1()
                 .track_focus(&self.focus_handle(cx))
                 .child(
-                    Button::new("open_project", "Open Project")
-                        .full_width()
-                        .key_binding(KeyBinding::for_action_in(
-                            &workspace::Open::default(),
-                            &focus_handle,
-                            cx,
-                        ))
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.workspace
-                                .update(cx, |_, cx| {
-                                    window.dispatch_action(
-                                        workspace::Open::default().boxed_clone(),
-                                        cx,
-                                    );
-                                })
-                                .log_err();
-                        })),
+                    Label::new("PostProd Tools")
+                        .size(LabelSize::Large)
+                        .color(Color::Muted),
                 )
                 .child(
-                    h_flex()
-                        .w_1_2()
-                        .gap_2()
-                        .child(Divider::horizontal())
-                        .child(Label::new("or").size(LabelSize::XSmall).color(Color::Muted))
-                        .child(Divider::horizontal()),
-                )
-                .child(
-                    Button::new("clone_repo", "Clone Repository")
-                        .full_width()
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.workspace
-                                .update(cx, |_, cx| {
-                                    window.dispatch_action(git::Clone.boxed_clone(), cx);
-                                })
-                                .log_err();
-                        })),
+                    Label::new("Use the Dashboard tab to run tools")
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
                 )
                 .when(is_local, |div| {
                     div.when(panel_settings.drag_and_drop, |div| {

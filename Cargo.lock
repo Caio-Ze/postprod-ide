@@ -4543,6 +4543,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashboard"
+version = "0.1.0"
+dependencies = [
+ "agent_ui",
+ "editor",
+ "global-hotkey",
+ "gpui",
+ "log",
+ "paths",
+ "project",
+ "schemars",
+ "serde",
+ "smol",
+ "task",
+ "toml 0.8.23",
+ "ui",
+ "util",
+ "workspace",
+]
+
+[[package]]
 name = "dashmap"
 version = "6.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7427,6 +7448,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
+name = "global-hotkey"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9247516746aa8e53411a0db9b62b0e24efbcf6a76e0ba73e5a91b512ddabed7"
+dependencies = [
+ "crossbeam-channel",
+ "keyboard-types",
+ "objc2",
+ "objc2-app-kit",
+ "once_cell",
+ "thiserror 2.0.17",
+ "windows-sys 0.59.0",
+ "x11rb",
+ "xkeysym",
+]
+
+[[package]]
 name = "globset"
 version = "0.4.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9182,6 +9220,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyboard-types"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b750dcadc39a09dbadd74e118f6dd6598df77fa01df0cfcdc52c28dece74528a"
+dependencies = [
+ "bitflags 2.10.0",
+ "serde",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "keymap_editor"
 version = "0.1.0"
 dependencies = [
@@ -9633,9 +9682,9 @@ checksum = "7a79a3332a6609480d7d0c9eab957bca6b455b91bb84e66d19f5ff66294b85b8"
 
 [[package]]
 name = "libc"
-version = "0.2.182"
+version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6800badb6cb2082ffd7b6a67e6125bb39f18782f793520caee8cb8846be06112"
+checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
 
 [[package]]
 name = "libdbus-sys"
@@ -10793,9 +10842,9 @@ dependencies = [
 
 [[package]]
 name = "nbformat"
-version = "1.2.0"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4983a40792c45e8639f77ef8e4461c55679cbc618f4b9e83830e8c7e79c8383"
+checksum = "fb4717d82ad8b09135fb2a2a65460786a8410fcca25cebe266990a8e9646b65d"
 dependencies = [
  "anyhow",
  "chrono",
@@ -11267,6 +11316,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b7c2599ce0ec54857b29ce62166b0ed9b4f6f1a70ccc9a71165b6154caca8c05"
 dependencies = [
  "objc2-encode",
+]
+
+[[package]]
+name = "objc2-app-kit"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6f29f568bec459b0ddff777cec4fe3fd8666d82d5a40ebd0ff7e66134f89bcc"
+dependencies = [
+ "bitflags 2.10.0",
+ "objc2",
+ "objc2-foundation",
 ]
 
 [[package]]
@@ -12868,6 +12928,177 @@ dependencies = [
  "embedded-io 0.4.0",
  "embedded-io 0.6.1",
  "serde",
+]
+
+[[package]]
+name = "postprod-ide"
+version = "0.228.0"
+dependencies = [
+ "acp_thread",
+ "acp_tools",
+ "action_log",
+ "activity_indicator",
+ "agent",
+ "agent-client-protocol",
+ "agent_servers",
+ "agent_settings",
+ "agent_ui",
+ "anyhow",
+ "ashpd",
+ "askpass",
+ "assets",
+ "audio",
+ "auto_update",
+ "auto_update_ui",
+ "breadcrumbs",
+ "call",
+ "channel",
+ "chrono",
+ "clap",
+ "cli",
+ "client",
+ "clock",
+ "codestral",
+ "collab_ui",
+ "collections",
+ "command_palette",
+ "component",
+ "component_preview",
+ "copilot",
+ "copilot_chat",
+ "copilot_ui",
+ "crashes",
+ "csv_preview",
+ "dap_adapters",
+ "dashboard",
+ "db",
+ "debug_adapter_extension",
+ "debugger_tools",
+ "debugger_ui",
+ "dev_container",
+ "diagnostics",
+ "edit_prediction",
+ "edit_prediction_ui",
+ "editor",
+ "encoding_selector",
+ "env_logger 0.11.8",
+ "etw_tracing",
+ "extension",
+ "extension_host",
+ "extensions_ui",
+ "feature_flags",
+ "feedback",
+ "file_finder",
+ "fs",
+ "futures 0.3.31",
+ "git",
+ "git_graph",
+ "git_hosting_providers",
+ "git_ui",
+ "go_to_line",
+ "gpui",
+ "gpui_platform",
+ "gpui_tokio",
+ "http_client",
+ "image",
+ "image_viewer",
+ "inspector_ui",
+ "install_cli",
+ "itertools 0.14.0",
+ "journal",
+ "json_schema_store",
+ "keymap_editor",
+ "language",
+ "language_extension",
+ "language_model",
+ "language_models",
+ "language_onboarding",
+ "language_selector",
+ "language_tools",
+ "languages",
+ "line_ending_selector",
+ "log",
+ "markdown",
+ "markdown_preview",
+ "menu",
+ "migrator",
+ "mimalloc",
+ "miniprofiler_ui",
+ "nc",
+ "node_runtime",
+ "notifications",
+ "onboarding",
+ "outline",
+ "outline_panel",
+ "parking_lot",
+ "paths",
+ "picker",
+ "pkg-config",
+ "pretty_assertions",
+ "profiling",
+ "project",
+ "project_panel",
+ "project_symbols",
+ "prompt_store",
+ "proto",
+ "rayon",
+ "recent_projects",
+ "release_channel",
+ "remote",
+ "repl",
+ "reqwest_client",
+ "rope",
+ "search",
+ "semver",
+ "serde",
+ "serde_json",
+ "session",
+ "settings",
+ "settings_profile_selector",
+ "settings_ui",
+ "shellexpand 2.1.2",
+ "smol",
+ "snippet_provider",
+ "snippets_ui",
+ "svg_preview",
+ "sysinfo 0.37.2",
+ "system_specs",
+ "tab_switcher",
+ "task",
+ "tasks_ui",
+ "telemetry",
+ "telemetry_events",
+ "tempfile",
+ "terminal_view",
+ "theme",
+ "theme_extension",
+ "theme_selector",
+ "time",
+ "time_format",
+ "title_bar",
+ "toolchain_selector",
+ "tracing",
+ "ui",
+ "ui_prompt",
+ "url",
+ "urlencoding",
+ "util",
+ "uuid",
+ "vim",
+ "vim_mode_setting",
+ "watch",
+ "web_search",
+ "web_search_providers",
+ "which_key",
+ "windows 0.61.3",
+ "winresource",
+ "workspace",
+ "zed-reqwest",
+ "zed_actions",
+ "zed_env_vars",
+ "zlog",
+ "zlog_settings",
+ "ztracing",
 ]
 
 [[package]]
@@ -14682,9 +14913,9 @@ dependencies = [
 
 [[package]]
 name = "runtimelib"
-version = "1.4.0"
+version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa84884e45ed4a1e663120cef3fc11f14d1a2a1933776e1c31599f7bd2dd0c9e"
+checksum = "524187cd923df8c146810a9f09be45fcaf4e5ba168f22f5f85598ca3c08c9202"
 dependencies = [
  "async-dispatcher",
  "async-std",
@@ -21755,176 +21986,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zed"
-version = "0.228.0"
-dependencies = [
- "acp_thread",
- "acp_tools",
- "action_log",
- "activity_indicator",
- "agent",
- "agent-client-protocol",
- "agent_servers",
- "agent_settings",
- "agent_ui",
- "anyhow",
- "ashpd",
- "askpass",
- "assets",
- "audio",
- "auto_update",
- "auto_update_ui",
- "breadcrumbs",
- "call",
- "channel",
- "chrono",
- "clap",
- "cli",
- "client",
- "clock",
- "codestral",
- "collab_ui",
- "collections",
- "command_palette",
- "component",
- "component_preview",
- "copilot",
- "copilot_chat",
- "copilot_ui",
- "crashes",
- "csv_preview",
- "dap_adapters",
- "db",
- "debug_adapter_extension",
- "debugger_tools",
- "debugger_ui",
- "dev_container",
- "diagnostics",
- "edit_prediction",
- "edit_prediction_ui",
- "editor",
- "encoding_selector",
- "env_logger 0.11.8",
- "etw_tracing",
- "extension",
- "extension_host",
- "extensions_ui",
- "feature_flags",
- "feedback",
- "file_finder",
- "fs",
- "futures 0.3.31",
- "git",
- "git_graph",
- "git_hosting_providers",
- "git_ui",
- "go_to_line",
- "gpui",
- "gpui_platform",
- "gpui_tokio",
- "http_client",
- "image",
- "image_viewer",
- "inspector_ui",
- "install_cli",
- "itertools 0.14.0",
- "journal",
- "json_schema_store",
- "keymap_editor",
- "language",
- "language_extension",
- "language_model",
- "language_models",
- "language_onboarding",
- "language_selector",
- "language_tools",
- "languages",
- "line_ending_selector",
- "log",
- "markdown",
- "markdown_preview",
- "menu",
- "migrator",
- "mimalloc",
- "miniprofiler_ui",
- "nc",
- "node_runtime",
- "notifications",
- "onboarding",
- "outline",
- "outline_panel",
- "parking_lot",
- "paths",
- "picker",
- "pkg-config",
- "pretty_assertions",
- "profiling",
- "project",
- "project_panel",
- "project_symbols",
- "prompt_store",
- "proto",
- "rayon",
- "recent_projects",
- "release_channel",
- "remote",
- "repl",
- "reqwest_client",
- "rope",
- "search",
- "semver",
- "serde",
- "serde_json",
- "session",
- "settings",
- "settings_profile_selector",
- "settings_ui",
- "shellexpand 2.1.2",
- "smol",
- "snippet_provider",
- "snippets_ui",
- "svg_preview",
- "sysinfo 0.37.2",
- "system_specs",
- "tab_switcher",
- "task",
- "tasks_ui",
- "telemetry",
- "telemetry_events",
- "tempfile",
- "terminal_view",
- "theme",
- "theme_extension",
- "theme_selector",
- "time",
- "time_format",
- "title_bar",
- "toolchain_selector",
- "tracing",
- "ui",
- "ui_prompt",
- "url",
- "urlencoding",
- "util",
- "uuid",
- "vim",
- "vim_mode_setting",
- "watch",
- "web_search",
- "web_search_providers",
- "which_key",
- "windows 0.61.3",
- "winresource",
- "workspace",
- "zed-reqwest",
- "zed_actions",
- "zed_env_vars",
- "zlog",
- "zlog_settings",
- "ztracing",
-]
-
-[[package]]
 name = "zed-font-kit"
 version = "0.14.1-zed"
 source = "git+https://github.com/zed-industries/font-kit?rev=110523127440aefb11ce0cf280ae7c5071337ec5#110523127440aefb11ce0cf280ae7c5071337ec5"
@@ -22177,9 +22238,9 @@ dependencies = [
 
 [[package]]
 name = "zeromq"
-version = "0.5.0"
+version = "0.6.0-pre.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b32e1e46c4e278efd0c1153f2db0113924b9bc5fff9f9221853d035e2d26fadf"
+checksum = "f06ccf13d2d6709a7463d175b88598c88a5dc63c8907ffb6f32a8a16baf77c1f"
 dependencies = [
  "async-dispatcher",
  "async-std",

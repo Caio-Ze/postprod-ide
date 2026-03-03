@@ -1,11 +1,9 @@
 use anyhow::Result;
-use feature_flags::{AgentV2FeatureFlag, FeatureFlagAppExt};
 use gpui::{
     App, Context, Entity, EntityId, EventEmitter, Focusable, ManagedView, Pixels, Render,
     Subscription, Task, Tiling, Window, WindowId, actions, px,
 };
-use project::{DisableAiSettings, Project};
-use settings::Settings;
+use project::Project;
 use std::future::Future;
 use std::path::PathBuf;
 use ui::prelude::*;
@@ -63,8 +61,8 @@ pub struct MultiWorkspace {
 
 impl EventEmitter<MultiWorkspaceEvent> for MultiWorkspace {}
 
-pub fn multi_workspace_enabled(cx: &App) -> bool {
-    cx.has_flag::<AgentV2FeatureFlag>() && !DisableAiSettings::get_global(cx).disable_ai
+pub fn multi_workspace_enabled(_cx: &App) -> bool {
+    true
 }
 
 impl MultiWorkspace {
@@ -207,6 +205,8 @@ impl MultiWorkspace {
             cx.emit(MultiWorkspaceEvent::ActiveWorkspaceChanged);
         }
         cx.notify();
+        let workspace = self.workspaces[index].clone();
+        workspace.update(cx, |_, cx| cx.emit(WorkspaceEvent::Activate));
     }
 
     pub fn activate_next_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
