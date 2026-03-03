@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Build PostProd IDE in release mode.
+#
+# The workspace (~~/PostProd_IDE/) is a version-controlled repo that you
+# manage and ship directly. This script does not touch it.
+#
+# Usage:
+#   ./script/dev-deploy              # build release binary
+#   ./script/dev-deploy --run        # build + launch
+#
+# Fresh install simulation:
+#   1. Delete ~/PostProd_IDE/
+#   2. ./script/dev-deploy --run
+#   3. Clone your config repo into ~/PostProd_IDE/
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+
+run_after=false
+for arg in "$@"; do
+    case "$arg" in
+        --run) run_after=true ;;
+        *) echo "Unknown flag: $arg"; exit 1 ;;
+    esac
+done
+
+echo "==> Building postprod-ide (release)..."
+cargo build --release -p postprod-ide --manifest-path "$REPO_ROOT/Cargo.toml"
+
+echo ""
+echo "==> Build complete."
+echo "    Binary: $REPO_ROOT/target/release/postprod-ide"
+
+if [[ "$run_after" == true ]]; then
+    echo ""
+    echo "==> Launching postprod-ide..."
+    exec "$REPO_ROOT/target/release/postprod-ide"
+else
+    echo ""
+    echo "    Run: ./script/dev-deploy --run"
+fi

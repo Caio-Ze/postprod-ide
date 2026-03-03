@@ -237,6 +237,10 @@ pub trait Item: Focusable + EventEmitter<Self::Event> + Render + Sized {
     }
     fn set_nav_history(&mut self, _: ItemNavHistory, _window: &mut Window, _: &mut Context<Self>) {}
 
+    fn prevent_close(&self, _cx: &App) -> bool {
+        false
+    }
+
     fn can_split(&self) -> bool {
         false
     }
@@ -483,6 +487,7 @@ pub trait ItemHandle: 'static + Send {
     );
     fn buffer_kind(&self, cx: &App) -> ItemBufferKind;
     fn boxed_clone(&self) -> Box<dyn ItemHandle>;
+    fn prevent_close(&self, cx: &App) -> bool;
     fn can_split(&self, cx: &App) -> bool;
     fn clone_on_split(
         &self,
@@ -710,6 +715,10 @@ impl<T: Item> ItemHandle for Entity<T> {
 
     fn boxed_clone(&self) -> Box<dyn ItemHandle> {
         Box::new(self.clone())
+    }
+
+    fn prevent_close(&self, cx: &App) -> bool {
+        self.read(cx).prevent_close(cx)
     }
 
     fn can_split(&self, cx: &App) -> bool {
