@@ -2432,6 +2432,27 @@ impl AgentPanel {
         );
     }
 
+    pub fn new_external_thread_with_auto_submit(
+        &mut self,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.external_thread(
+            None,    // agent_choice
+            None,    // resume_session_id
+            None,    // work_dirs
+            None,    // title
+            Some(AgentInitialContent::ContentBlock {
+                blocks: vec![acp::ContentBlock::Text(acp::TextContent::new(text))],
+                auto_submit: true,
+            }),
+            true,    // focus
+            window,
+            cx,
+        );
+    }
+
     pub fn new_agent_thread(&mut self, agent: Agent, window: &mut Window, cx: &mut Context<Self>) {
         self.reset_start_thread_in_to_default(cx);
         self.new_agent_thread_inner(agent, true, window, cx);
