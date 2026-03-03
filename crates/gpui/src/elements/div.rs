@@ -2362,6 +2362,11 @@ impl Interactivity {
                                     listener(drag.value.as_ref(), window, cx);
                                     window.refresh();
                                     cx.stop_propagation();
+                                } else {
+                                    // Restore the drag so the next listener in the
+                                    // bubble phase can handle it. Matches the rendering
+                                    // path (line ~2774) which always restores.
+                                    cx.active_drag = Some(drag);
                                 }
                             }
                         }

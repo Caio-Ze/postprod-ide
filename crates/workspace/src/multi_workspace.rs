@@ -487,6 +487,12 @@ impl MultiWorkspace {
         if changed {
             cx.emit(MultiWorkspaceEvent::ActiveWorkspaceChanged);
             self.serialize(cx);
+            // Emit Activate on the new workspace so ensure_dashboard() in zed.rs runs.
+            // Conditional on `changed` to prevent infinite recursion: the subscription
+            // handler in subscribe_to_workspace() calls activate() when a workspace
+            // emits Activate — if we emitted unconditionally, it would loop.
+            let ws = self.workspaces[self.active_workspace_index].clone();
+            ws.update(cx, |_, cx| cx.emit(WorkspaceEvent::Activate));
         }
         self.focus_active_workspace(window, cx);
         cx.notify();
