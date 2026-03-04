@@ -20,6 +20,7 @@ use ui::{
     ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip, WithScrollbar as _,
     prelude::*,
 };
+use project::WorktreeId;
 use workspace::{
     DraggedSelection, ModalView, MultiWorkspace, OpenOptions, Pane, ProToolsSessionName, Toast,
     Workspace,
@@ -125,7 +126,7 @@ pub fn init(cx: &mut App) {
                     if let Some(existing) = existing {
                         workspace.activate_item(&existing, true, true, window, cx);
                     } else {
-                        let dashboard = Dashboard::new(workspace, cx);
+                        let dashboard = Dashboard::new(workspace, suite_root(), cx);
                         workspace.add_item_to_active_pane(
                             Box::new(dashboard),
                             Some(0),
@@ -144,27 +145,41 @@ pub fn init(cx: &mut App) {
     });
 }
 
-/// Ensure a Dashboard tab exists in the workspace. Idempotent — scans all
-/// panes before creating a new one.
+/// Check whether a folder has dashboard config (tools/ or automations/ with content).
+fn folder_has_dashboard_config(folder: &Path) -> bool {
+    let config = folder.join("config");
+    dir_has_content(&config.join("tools")) || dir_has_content(&config.join("automations"))
+}
+
+/// Ensure a Dashboard tab exists in the workspace, and switch config_root
+/// if the active workspace folder has its own dashboard config.
 pub fn ensure_dashboard(
     workspace: &mut Workspace,
     window: &mut Window,
     cx: &mut Context<Workspace>,
 ) {
-    // Check all panes for an existing Dashboard
-    for pane in workspace.panes() {
-        let found = pane
-            .read(cx)
-            .items()
-            .any(|item| item.downcast::<Dashboard>().is_some());
-        if found {
-            return;
-        }
+    // If a dashboard already exists in any pane, nothing to do.
+    // Folder switching is handled by the Dashboard's workspace observation.
+    let has_dashboard = workspace
+        .panes()
+        .iter()
+        .flat_map(|pane| pane.read(cx).items())
+        .any(|item| item.downcast::<Dashboard>().is_some());
+
+    if has_dashboard {
+        return;
     }
 
-    let dashboard = Dashboard::new(workspace, cx);
+    // Initial creation: use the first root folder that has dashboard config
+    let config_root = workspace
+        .root_paths(cx)
+        .into_iter()
+        .find(|path| folder_has_dashboard_config(path))
+        .map(|arc_path| arc_path.to_path_buf())
+        .unwrap_or_else(suite_root);
+
+    let dashboard = Dashboard::new(workspace, config_root, cx);
     workspace.add_item_to_center(Box::new(dashboard), window, cx);
-    // Pin the dashboard so it stays as the first tab
     workspace.active_pane().update(cx, |pane, _cx| {
         pane.set_pinned_count(pane.pinned_count() + 1);
     });
@@ -292,8 +307,8 @@ fn load_single_tool(path: &Path) -> Result<ToolEntry, String> {
     Ok(file.tool)
 }
 
-fn load_tools_registry() -> (Vec<ToolEntry>, Option<String>) {
-    let dir = tools_config_dir();
+fn load_tools_registry(config_root: &Path) -> (Vec<ToolEntry>, Option<String>) {
+    let dir = tools_config_dir_for(config_root);
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return (Vec::new(), None);
     };
@@ -355,8 +370,8 @@ fn load_single_automation(path: &Path) -> Result<AutomationEntry, String> {
     })
 }
 
-fn load_automations_registry() -> (Vec<AutomationEntry>, Option<String>) {
-    let dir = automations_dir();
+fn load_automations_registry(config_root: &Path) -> (Vec<AutomationEntry>, Option<String>) {
+    let dir = automations_dir_for(config_root);
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return (Vec::new(), Some(format!("cannot read {}", dir.display())));
     };
@@ -474,8 +489,8 @@ fn load_toml_agents(path: &Path) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<
     }
 }
 
-fn load_agents_config() -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>) {
-    load_toml_agents(&agents_toml_path())
+fn load_agents_config(config_root: &Path) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>) {
+    load_toml_agents(&agents_toml_path_for(config_root))
 }
 
 fn ensure_config_extracted(_cx: &App) {
@@ -1122,12 +1137,25 @@ fn runtime_tools_dir() -> PathBuf {
     tools_dir().join("runtime")
 }
 
-fn tools_config_dir() -> PathBuf {
-    config_dir().join("tools")
+// Per-folder config path helpers — derive from an arbitrary config_root
+fn config_dir_for(config_root: &Path) -> PathBuf {
+    config_root.join("config")
 }
 
-fn agents_toml_path() -> PathBuf {
-    config_dir().join("AGENTS.toml")
+fn state_dir_for(config_root: &Path) -> PathBuf {
+    config_dir_for(config_root).join(".state")
+}
+
+fn tools_config_dir_for(config_root: &Path) -> PathBuf {
+    config_dir_for(config_root).join("tools")
+}
+
+fn automations_dir_for(config_root: &Path) -> PathBuf {
+    config_dir_for(config_root).join("automations")
+}
+
+fn agents_toml_path_for(config_root: &Path) -> PathBuf {
+    config_dir_for(config_root).join("AGENTS.toml")
 }
 
 fn ensure_workspace_dirs() {
@@ -1237,42 +1265,41 @@ fn scan_delivery_folder() -> DeliveryStatus {
 // Active folder helpers
 // ---------------------------------------------------------------------------
 
-fn active_folder_file() -> PathBuf {
-    state_dir().join("active_folder")
+fn active_folder_file(config_root: &Path) -> PathBuf {
+    state_dir_for(config_root).join("active_folder")
 }
 
-fn read_active_folder() -> Option<PathBuf> {
-    std::fs::read_to_string(active_folder_file())
+fn read_active_folder(config_root: &Path) -> Option<PathBuf> {
+    std::fs::read_to_string(active_folder_file(config_root))
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .map(PathBuf::from)
         .filter(|p| p.is_dir())
         .or_else(|| {
-            let default = suite_root();
-            if default.is_dir() {
-                Some(default)
+            if config_root.is_dir() {
+                Some(config_root.to_path_buf())
             } else {
                 None
             }
         })
 }
 
-fn write_active_folder(path: &Path) {
-    std::fs::write(active_folder_file(), path.to_string_lossy().as_bytes()).log_err();
-    add_to_recent_folders(path);
+fn write_active_folder(config_root: &Path, path: &Path) {
+    std::fs::write(active_folder_file(config_root), path.to_string_lossy().as_bytes()).log_err();
+    add_to_recent_folders(config_root, path);
 }
 
 // ---------------------------------------------------------------------------
 // Recent folders helpers
 // ---------------------------------------------------------------------------
 
-fn recent_folders_file() -> PathBuf {
-    state_dir().join("recent_folders")
+fn recent_folders_file(config_root: &Path) -> PathBuf {
+    state_dir_for(config_root).join("recent_folders")
 }
 
-fn read_recent_folders() -> Vec<PathBuf> {
-    let Ok(content) = std::fs::read_to_string(recent_folders_file()) else {
+fn read_recent_folders(config_root: &Path) -> Vec<PathBuf> {
+    let Ok(content) = std::fs::read_to_string(recent_folders_file(config_root)) else {
         return Vec::new();
     };
     content
@@ -1284,8 +1311,8 @@ fn read_recent_folders() -> Vec<PathBuf> {
         .collect()
 }
 
-fn add_to_recent_folders(path: &Path) {
-    let mut recent = read_recent_folders();
+fn add_to_recent_folders(config_root: &Path, path: &Path) {
+    let mut recent = read_recent_folders(config_root);
     recent.retain(|p| p != path);
     recent.insert(0, path.to_path_buf());
     recent.truncate(10);
@@ -1294,23 +1321,23 @@ fn add_to_recent_folders(path: &Path) {
         .map(|p| p.to_string_lossy())
         .collect::<Vec<_>>()
         .join("\n");
-    std::fs::write(recent_folders_file(), content).log_err();
+    std::fs::write(recent_folders_file(config_root), content).log_err();
 }
 
 // ---------------------------------------------------------------------------
 // Destination folder helpers
 // ---------------------------------------------------------------------------
 
-fn destination_folder_file() -> PathBuf {
-    state_dir().join("destination_folder")
+fn destination_folder_file(config_root: &Path) -> PathBuf {
+    state_dir_for(config_root).join("destination_folder")
 }
 
-fn recent_destinations_file() -> PathBuf {
-    state_dir().join("recent_destinations")
+fn recent_destinations_file(config_root: &Path) -> PathBuf {
+    state_dir_for(config_root).join("recent_destinations")
 }
 
-fn read_destination_folder() -> Option<PathBuf> {
-    std::fs::read_to_string(destination_folder_file())
+fn read_destination_folder(config_root: &Path) -> Option<PathBuf> {
+    std::fs::read_to_string(destination_folder_file(config_root))
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -1318,8 +1345,8 @@ fn read_destination_folder() -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
-fn read_recent_destinations() -> Vec<PathBuf> {
-    let Ok(content) = std::fs::read_to_string(recent_destinations_file()) else {
+fn read_recent_destinations(config_root: &Path) -> Vec<PathBuf> {
+    let Ok(content) = std::fs::read_to_string(recent_destinations_file(config_root)) else {
         return Vec::new();
     };
     content
@@ -1331,13 +1358,13 @@ fn read_recent_destinations() -> Vec<PathBuf> {
         .collect()
 }
 
-fn write_destination_folder(path: &Path) {
-    std::fs::write(destination_folder_file(), path.to_string_lossy().as_bytes()).log_err();
-    add_to_destination_recent(path);
+fn write_destination_folder(config_root: &Path, path: &Path) {
+    std::fs::write(destination_folder_file(config_root), path.to_string_lossy().as_bytes()).log_err();
+    add_to_destination_recent(config_root, path);
 }
 
-fn add_to_destination_recent(path: &Path) {
-    let mut recent = read_recent_destinations();
+fn add_to_destination_recent(config_root: &Path, path: &Path) {
+    let mut recent = read_recent_destinations(config_root);
     recent.retain(|p| p != path);
     recent.insert(0, path.to_path_buf());
     recent.truncate(10);
@@ -1346,19 +1373,19 @@ fn add_to_destination_recent(path: &Path) {
         .map(|p| p.to_string_lossy())
         .collect::<Vec<_>>()
         .join("\n");
-    std::fs::write(recent_destinations_file(), content).log_err();
+    std::fs::write(recent_destinations_file(config_root), content).log_err();
 }
 
 // ---------------------------------------------------------------------------
 // Background tools persistence
 // ---------------------------------------------------------------------------
 
-fn background_tools_file() -> PathBuf {
-    state_dir().join("background_tools")
+fn background_tools_file(config_root: &Path) -> PathBuf {
+    state_dir_for(config_root).join("background_tools")
 }
 
-fn read_background_tools() -> HashSet<String> {
-    let Ok(content) = std::fs::read_to_string(background_tools_file()) else {
+fn read_background_tools(config_root: &Path) -> HashSet<String> {
+    let Ok(content) = std::fs::read_to_string(background_tools_file(config_root)) else {
         return HashSet::new();
     };
     content
@@ -1368,23 +1395,23 @@ fn read_background_tools() -> HashSet<String> {
         .collect()
 }
 
-fn write_background_tools(set: &HashSet<String>) {
+fn write_background_tools(config_root: &Path, set: &HashSet<String>) {
     let mut entries: Vec<_> = set.iter().cloned().collect();
     entries.sort();
     let content = entries.join("\n");
-    std::fs::write(background_tools_file(), content).log_err();
+    std::fs::write(background_tools_file(config_root), content).log_err();
 }
 
 // ---------------------------------------------------------------------------
 // Collapsed sections persistence
 // ---------------------------------------------------------------------------
 
-fn collapsed_sections_file() -> PathBuf {
-    state_dir().join("collapsed_sections")
+fn collapsed_sections_file(config_root: &Path) -> PathBuf {
+    state_dir_for(config_root).join("collapsed_sections")
 }
 
-fn read_collapsed_sections() -> HashSet<String> {
-    let Ok(content) = std::fs::read_to_string(collapsed_sections_file()) else {
+fn read_collapsed_sections(config_root: &Path) -> HashSet<String> {
+    let Ok(content) = std::fs::read_to_string(collapsed_sections_file(config_root)) else {
         return HashSet::new();
     };
     content
@@ -1394,31 +1421,31 @@ fn read_collapsed_sections() -> HashSet<String> {
         .collect()
 }
 
-fn write_collapsed_sections(set: &HashSet<String>) {
+fn write_collapsed_sections(config_root: &Path, set: &HashSet<String>) {
     let mut entries: Vec<_> = set.iter().cloned().collect();
     entries.sort();
     let content = entries.join("\n");
-    std::fs::write(collapsed_sections_file(), content).log_err();
+    std::fs::write(collapsed_sections_file(config_root), content).log_err();
 }
 
 // ---------------------------------------------------------------------------
 // Param values persistence
 // ---------------------------------------------------------------------------
 
-fn param_values_file() -> PathBuf {
-    state_dir().join("param_values.toml")
+fn param_values_file(config_root: &Path) -> PathBuf {
+    state_dir_for(config_root).join("param_values.toml")
 }
 
-fn read_param_values() -> HashMap<String, HashMap<String, String>> {
-    let Ok(content) = std::fs::read_to_string(param_values_file()) else {
+fn read_param_values(config_root: &Path) -> HashMap<String, HashMap<String, String>> {
+    let Ok(content) = std::fs::read_to_string(param_values_file(config_root)) else {
         return HashMap::new();
     };
     toml::from_str(&content).unwrap_or_default()
 }
 
-fn write_param_values(values: &HashMap<String, HashMap<String, String>>) {
+fn write_param_values(config_root: &Path, values: &HashMap<String, HashMap<String, String>>) {
     if let Ok(content) = toml::to_string(values) {
-        std::fs::write(param_values_file(), content).log_err();
+        std::fs::write(param_values_file(config_root), content).log_err();
     }
 }
 
@@ -1572,7 +1599,10 @@ impl AgentBackend {
 
 pub struct Dashboard {
     workspace: WeakEntity<Workspace>,
+    last_worktree_override: Option<WorktreeId>,
+    _workspace_observation: Option<Subscription>,
     focus_handle: FocusHandle,
+    config_root: PathBuf,
     runtime_path: PathBuf,
     agent_tools_path: PathBuf,
     // TOML-driven tool registry
@@ -1617,7 +1647,7 @@ pub struct Dashboard {
 }
 
 impl Dashboard {
-    pub fn new(workspace: &Workspace, cx: &mut App) -> Entity<Self> {
+    pub fn new(workspace: &Workspace, config_root: PathBuf, cx: &mut App) -> Entity<Self> {
         let runtime_path = resolve_runtime_path();
 
         let agent_tools_path = resolve_agent_tools_path();
@@ -1625,16 +1655,16 @@ impl Dashboard {
         ensure_workspace_dirs();
         ensure_config_extracted(cx);
 
-        let active_folder = read_active_folder();
-        let recent_folders = read_recent_folders();
-        let destination_folder = read_destination_folder();
-        let recent_destinations = read_recent_destinations();
-        let (automations, automations_error) = load_automations_registry();
-        let (tools, tools_error) = load_tools_registry();
-        let (backends, agent_launchers, _agents_error) = load_agents_config();
-        let background_tools = read_background_tools();
-        let collapsed_sections = read_collapsed_sections();
-        let mut param_values = read_param_values();
+        let active_folder = read_active_folder(&config_root);
+        let recent_folders = read_recent_folders(&config_root);
+        let destination_folder = read_destination_folder(&config_root);
+        let recent_destinations = read_recent_destinations(&config_root);
+        let (automations, automations_error) = load_automations_registry(&config_root);
+        let (tools, tools_error) = load_tools_registry(&config_root);
+        let (backends, agent_launchers, _agents_error) = load_agents_config(&config_root);
+        let background_tools = read_background_tools(&config_root);
+        let collapsed_sections = read_collapsed_sections(&config_root);
+        let mut param_values = read_param_values(&config_root);
 
         // Seed defaults for any params not yet persisted
         for entry in &automations {
@@ -1746,21 +1776,28 @@ impl Dashboard {
                 }
             });
 
-            // Spawn automations reload task (every 30 seconds)
+            // Spawn automations reload task (every 10 seconds)
             let automations_reload_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
                 loop {
                     cx.background_executor()
-                        .timer(Duration::from_secs(30))
+                        .timer(Duration::from_secs(10))
                         .await;
+
+                    let config_root = this.update(cx, |dashboard, _| {
+                        dashboard.config_root.clone()
+                    });
+                    let Ok(config_root) = config_root else { break };
+                    let loaded_from = config_root.clone();
 
                     let (merged, error) = cx
                         .background_executor()
-                        .spawn(async { load_automations_registry() })
+                        .spawn(async move { load_automations_registry(&config_root) })
                         .await;
 
                     this.update(
                         cx,
                         |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                            if dashboard.config_root != loaded_from { return; }
                             dashboard.automations = merged;
                             dashboard.automations_error = error;
                             // Seed defaults for new params and clean stale editors
@@ -1793,21 +1830,28 @@ impl Dashboard {
                 }
             });
 
-            // Spawn tools reload task (every 30 seconds)
+            // Spawn tools reload task (every 10 seconds)
             let tools_reload_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
                 loop {
                     cx.background_executor()
-                        .timer(Duration::from_secs(30))
+                        .timer(Duration::from_secs(10))
                         .await;
+
+                    let config_root = this.update(cx, |dashboard, _| {
+                        dashboard.config_root.clone()
+                    });
+                    let Ok(config_root) = config_root else { break };
+                    let loaded_from = config_root.clone();
 
                     let (merged, error) = cx
                         .background_executor()
-                        .spawn(async { load_tools_registry() })
+                        .spawn(async move { load_tools_registry(&config_root) })
                         .await;
 
                     this.update(
                         cx,
                         |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                            if dashboard.config_root != loaded_from { return; }
                             dashboard.tools = merged;
                             dashboard.tools_error = error;
                             // Seed defaults for new tool params
@@ -1827,21 +1871,28 @@ impl Dashboard {
                 }
             });
 
-            // Spawn agents config reload task (every 30 seconds)
+            // Spawn agents config reload task (every 10 seconds)
             let agents_reload_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
                 loop {
                     cx.background_executor()
-                        .timer(Duration::from_secs(30))
+                        .timer(Duration::from_secs(10))
                         .await;
+
+                    let config_root = this.update(cx, |dashboard, _| {
+                        dashboard.config_root.clone()
+                    });
+                    let Ok(config_root) = config_root else { break };
+                    let loaded_from = config_root.clone();
 
                     let (backends, agent_launchers, _err) = cx
                         .background_executor()
-                        .spawn(async { load_agents_config() })
+                        .spawn(async move { load_agents_config(&config_root) })
                         .await;
 
                     this.update(
                         cx,
                         |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                            if dashboard.config_root != loaded_from { return; }
                             dashboard.backends = backends;
                             dashboard.agent_launchers = agent_launchers;
                             cx.notify();
@@ -1850,9 +1901,41 @@ impl Dashboard {
                 }
             });
 
+            // Observe the workspace for active worktree override changes
+            // (fires when user switches folders via the title bar dropdown)
+            let workspace_observation = workspace.weak_handle().upgrade().map(|ws_entity| {
+                cx.observe(&ws_entity, |dashboard: &mut Dashboard, workspace_entity, cx| {
+                    let workspace = workspace_entity.read(cx);
+                    let current = workspace.active_worktree_override();
+                    if current == dashboard.last_worktree_override {
+                        return;
+                    }
+                    dashboard.last_worktree_override = current;
+                    if let Some(worktree_id) = current {
+                        let folder = {
+                            let project = workspace.project().read(cx);
+                            project
+                                .visible_worktrees(cx)
+                                .find(|wt| wt.read(cx).id() == worktree_id)
+                                .map(|wt| wt.read(cx).abs_path().to_path_buf())
+                        };
+                        if let Some(folder) = folder {
+                            if folder_has_dashboard_config(&folder)
+                                && folder != dashboard.config_root
+                            {
+                                dashboard.switch_config_root(folder, cx);
+                            }
+                        }
+                    }
+                })
+            });
+
             Self {
                 workspace: workspace.weak_handle(),
+                last_worktree_override: None,
+                _workspace_observation: workspace_observation,
                 focus_handle: cx.focus_handle(),
+                config_root,
                 runtime_path,
                 agent_tools_path,
                 tools,
@@ -2072,7 +2155,71 @@ impl Dashboard {
                 }
             }
         }
-        suite_root()
+        self.config_root.clone()
+    }
+
+    fn switch_config_root(&mut self, new_root: PathBuf, cx: &mut Context<Self>) {
+        log::info!(
+            "dashboard: switching config_root from {} to {}",
+            self.config_root.display(),
+            new_root.display()
+        );
+        self.config_root = new_root;
+
+        // Ensure state dir exists for the new config_root
+        let state = state_dir_for(&self.config_root);
+        if !state.exists() {
+            std::fs::create_dir_all(&state).log_err();
+        }
+
+        // Immediate reload of all config
+        let (tools, tools_error) = load_tools_registry(&self.config_root);
+        let (automations, automations_error) = load_automations_registry(&self.config_root);
+        let (backends, agent_launchers, _) = load_agents_config(&self.config_root);
+
+        self.tools = tools;
+        self.tools_error = tools_error;
+        self.automations = automations;
+        self.automations_error = automations_error;
+        self.backends = backends;
+        self.agent_launchers = agent_launchers;
+
+        // Reload per-folder state
+        self.active_folder = read_active_folder(&self.config_root);
+        self.recent_folders = read_recent_folders(&self.config_root);
+        self.destination_folder = read_destination_folder(&self.config_root);
+        self.recent_destinations = read_recent_destinations(&self.config_root);
+        self.background_tools = read_background_tools(&self.config_root);
+        self.collapsed_sections = read_collapsed_sections(&self.config_root);
+        self.param_values = read_param_values(&self.config_root);
+
+        // Seed defaults for params not yet persisted
+        for entry in &self.automations {
+            for param in &entry.params {
+                self.param_values
+                    .entry(entry.id.clone())
+                    .or_default()
+                    .entry(param.key.clone())
+                    .or_insert_with(|| param.default.clone());
+            }
+        }
+        for entry in &self.tools {
+            for param in &entry.params {
+                self.param_values
+                    .entry(entry.id.clone())
+                    .or_default()
+                    .entry(param.key.clone())
+                    .or_insert_with(|| param.default.clone());
+            }
+        }
+
+        // Clear cached param editors (they hold old state)
+        self.param_editors.clear();
+        self._param_editor_subscriptions.clear();
+        self._param_write_task = None;
+        self.expanded_automations.clear();
+
+        cx.notify();
     }
 
     /// Find the context-launcher binary using the runtime path resolution.
@@ -2347,14 +2494,14 @@ impl Dashboard {
     fn set_folder(&mut self, target: FolderTarget, path: PathBuf, cx: &mut Context<Self>) {
         match target {
             FolderTarget::Active => {
-                write_active_folder(&path);
+                write_active_folder(&self.config_root, &path);
                 self.active_folder = Some(path);
-                self.recent_folders = read_recent_folders();
+                self.recent_folders = read_recent_folders(&self.config_root);
             }
             FolderTarget::Destination => {
-                write_destination_folder(&path);
+                write_destination_folder(&self.config_root, &path);
                 self.destination_folder = Some(path);
-                self.recent_destinations = read_recent_destinations();
+                self.recent_destinations = read_recent_destinations(&self.config_root);
             }
         }
         cx.notify();
@@ -2383,13 +2530,14 @@ impl Dashboard {
             prompt: None,
         });
 
+        let config_root = self.config_root.clone();
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = receiver.await {
                 if let Some(path) = paths.into_iter().next() {
-                    write_active_folder(&path);
+                    write_active_folder(&config_root, &path);
                     this.update(cx, |this, cx| {
                         this.active_folder = Some(path);
-                        this.recent_folders = read_recent_folders();
+                        this.recent_folders = read_recent_folders(&this.config_root);
                         cx.notify();
                     }).log_err();
                 }
@@ -2406,13 +2554,14 @@ impl Dashboard {
             prompt: None,
         });
 
+        let config_root = self.config_root.clone();
         cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(paths))) = receiver.await {
                 if let Some(path) = paths.into_iter().next() {
-                    write_destination_folder(&path);
+                    write_destination_folder(&config_root, &path);
                     this.update(cx, |this, cx| {
                         this.destination_folder = Some(path);
-                        this.recent_destinations = read_recent_destinations();
+                        this.recent_destinations = read_recent_destinations(&this.config_root);
                         cx.notify();
                     }).log_err();
                 }
@@ -2494,7 +2643,7 @@ impl Dashboard {
                 .timer(Duration::from_millis(500))
                 .await;
             this.update(cx, |this, _cx| {
-                write_param_values(&this.param_values);
+                write_param_values(&this.config_root, &this.param_values);
             }).log_err();
         }));
     }
@@ -2507,7 +2656,7 @@ impl Dashboard {
         } else {
             self.collapsed_sections.insert(section_id.to_string());
         }
-        write_collapsed_sections(&self.collapsed_sections);
+        write_collapsed_sections(&self.config_root, &self.collapsed_sections);
         cx.notify();
     }
 
@@ -2544,6 +2693,7 @@ impl Dashboard {
         let active_recent = self.recent_folders.clone();
         let dest_current = self.destination_folder.clone();
         let dest_recent = self.recent_destinations.clone();
+        let config_root = self.config_root.clone();
 
         let active_dropdown = Self::build_folder_dropdown(
             "active-folder",
@@ -2554,11 +2704,12 @@ impl Dashboard {
             Color::Accent,
             {
                 let entity = entity.clone();
+                let config_root = config_root.clone();
                 move |path, _window, cx: &mut App| {
-                    write_active_folder(&path);
+                    write_active_folder(&config_root, &path);
                     entity.update(cx, |this, cx| {
                         this.active_folder = Some(path);
-                        this.recent_folders = read_recent_folders();
+                        this.recent_folders = read_recent_folders(&this.config_root);
                         cx.notify();
                     });
                 }
@@ -2584,11 +2735,12 @@ impl Dashboard {
             Color::Success,
             {
                 let entity = entity.clone();
+                let config_root = config_root.clone();
                 move |path, _window, cx: &mut App| {
-                    write_destination_folder(&path);
+                    write_destination_folder(&config_root, &path);
                     entity.update(cx, |this, cx| {
                         this.destination_folder = Some(path);
-                        this.recent_destinations = read_recent_destinations();
+                        this.recent_destinations = read_recent_destinations(&this.config_root);
                         cx.notify();
                     });
                 }
@@ -2972,7 +3124,7 @@ impl Dashboard {
                         } else {
                             this.background_tools.insert(tool_id);
                         }
-                        write_background_tools(&this.background_tools);
+                        write_background_tools(&this.config_root, &this.background_tools);
                         cx.notify();
                     }).log_err();
                 })
@@ -3163,7 +3315,7 @@ impl Dashboard {
                                             param_key.clone(),
                                             path.to_string_lossy().to_string(),
                                         );
-                                    write_param_values(&this.param_values);
+                                    write_param_values(&this.config_root, &this.param_values);
                                     cx.notify();
                                 }
                             },
@@ -3378,7 +3530,7 @@ impl Dashboard {
                     ),
             )
             .on_click(cx.listener(|this, _, window, cx| {
-                let path = tools_config_dir();
+                let path = tools_config_dir_for(&this.config_root);
                 let workspace = this.workspace.clone();
                 cx.spawn_in(window, async move |_this, cx| {
                     workspace.update_in(cx, |workspace, window, cx| {
@@ -3535,7 +3687,7 @@ impl Dashboard {
                                                                     param_key.clone(),
                                                                     path_str,
                                                                 );
-                                                            write_param_values(&this.param_values);
+                                                            write_param_values(&this.config_root, &this.param_values);
                                                             cx.notify();
                                                         },
                                                     ).log_err();
@@ -3585,7 +3737,7 @@ impl Dashboard {
                                                     .entry(entry_id.clone())
                                                     .or_default()
                                                     .insert(param_key.clone(), value.clone());
-                                                write_param_values(&this.param_values);
+                                                write_param_values(&this.config_root, &this.param_values);
                                                 cx.notify();
                                             }).log_err();
                                         },
@@ -3756,7 +3908,7 @@ impl Dashboard {
                                                     move |_, window, cx| {
                                                         edit_entity
                                                             .update(cx, |this, cx| {
-                                                                let path = automations_dir()
+                                                                let path = automations_dir_for(&this.config_root)
                                                                     .join(format!(
                                                                         "{}.toml",
                                                                         edit_id
