@@ -352,6 +352,8 @@ impl MultiWorkspace {
         self.serialize(cx);
         self.focus_active_workspace(window, cx);
         cx.notify();
+        let workspace = self.workspaces[index].clone();
+        workspace.update(cx, |_, cx| cx.emit(WorkspaceEvent::Activate));
     }
 
     pub fn activate_next_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
