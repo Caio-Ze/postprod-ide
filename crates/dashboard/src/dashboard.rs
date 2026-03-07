@@ -305,21 +305,29 @@ fn load_single_tool(path: &Path) -> Result<ToolEntry, String> {
     Ok(file.tool)
 }
 
+fn collect_toml_files(dir: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return result;
+    };
+    let mut children: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+    children.sort();
+    for child in children {
+        if child.is_dir() {
+            result.extend(collect_toml_files(&child));
+        } else if child.extension().is_some_and(|ext| ext == "toml") {
+            result.push(child);
+        }
+    }
+    result
+}
+
 fn load_tools_registry(config_root: &Path) -> (Vec<ToolEntry>, Option<String>) {
     let dir = tools_config_dir_for(config_root);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return (Vec::new(), None);
-    };
+    let paths = collect_toml_files(&dir);
 
     let mut tools = Vec::new();
     let mut errors = Vec::new();
-
-    let mut paths: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "toml"))
-        .collect();
-    paths.sort();
 
     for path in paths {
         match load_single_tool(&path) {
@@ -374,19 +382,13 @@ fn load_single_automation(path: &Path) -> Result<AutomationEntry, String> {
 
 fn load_automations_registry(config_root: &Path) -> (Vec<AutomationEntry>, Option<String>) {
     let dir = automations_dir_for(config_root);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    if !dir.exists() {
         return (Vec::new(), Some(format!("cannot read {}", dir.display())));
-    };
+    }
+    let paths = collect_toml_files(&dir);
 
     let mut automations = Vec::new();
     let mut errors = Vec::new();
-
-    let mut paths: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|ext| ext == "toml"))
-        .collect();
-    paths.sort();
 
     for path in paths {
         match load_single_automation(&path) {
