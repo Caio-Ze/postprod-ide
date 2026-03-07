@@ -32,11 +32,13 @@ use gpui::{
 };
 use onboarding_banner::OnboardingBanner;
 use project::{
-    DisableAiSettings, Project, git_store::GitStoreEvent, trusted_worktrees::TrustedWorktrees,
+    DisableAiSettings, Project, WorktreeSettings, git_store::GitStoreEvent,
+    trusted_worktrees::TrustedWorktrees,
 };
 use remote::RemoteConnectionOptions;
-use settings::Settings;
+use settings::{Settings, SettingsLocation};
 use settings::WorktreeId;
+use util::rel_path::RelPath;
 use std::sync::Arc;
 use theme::ActiveTheme;
 use title_bar_settings::TitleBarSettings;
@@ -723,7 +725,15 @@ impl TitleBar {
 
         let name = self.effective_active_worktree(cx).map(|worktree| {
             let worktree = worktree.read(cx);
-            SharedString::from(worktree.root_name().as_unix_str().to_string())
+            let settings_location = SettingsLocation {
+                worktree_id: worktree.id(),
+                path: RelPath::empty(),
+            };
+            let settings = WorktreeSettings::get(Some(settings_location), cx);
+            match &settings.project_name {
+                Some(name) => SharedString::from(name.clone()),
+                None => SharedString::from(worktree.root_name().as_unix_str().to_string()),
+            }
         });
 
         let is_project_selected = name.is_some();
