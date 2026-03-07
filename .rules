@@ -1,3 +1,67 @@
+# PostProd IDE — Fork Rules
+
+This is a Zed fork. These rules override upstream conventions where they conflict.
+
+## Branch model
+- `main` = upstream Zed mirror (read-only, fast-forward only)
+- `postprod` = production branch (all work happens here, default on GitHub)
+- Never commit to `main`. Feature branches go off `postprod`.
+
+## Where code goes
+- **New features → new crate** in `crates/`. Do not add features inside upstream crates.
+- **Upstream modifications → absolute minimum.** If you can do it in 2 lines, don't write 20.
+- **Our scripts → `script/postprod/`.** Upstream scripts in `script/` stay untouched.
+
+## FORK_OUR_CHANGES.md — mandatory on every upstream crate modification
+**Every time you modify, add, or delete a file in an upstream crate**, you MUST update `private/fork/FORK_OUR_CHANGES.md` in the same commit. No exceptions. Include:
+- File path and approximate line number
+- What was changed and why
+- Upstream anchor (what upstream code it depends on, so we know what to watch during rebases)
+- Add the file to the Quick Lookup table at the top of the file
+
+This is not optional documentation — it is the conflict resolution guide for monthly rebases. Undocumented upstream modifications cause silent merge conflicts that break the build.
+
+## Design First
+No implementation without an approved plan:
+1. Markdown spec (data structures, signatures, file locations)
+2. Human review and approval
+3. Implementation following the spec
+4. `./script/clippy` clean pass
+
+## Upstream Respect
+- Do not "improve" upstream code. Do not add docstrings to files you didn't write.
+- Do not remove upstream features — disable through configuration, not deletion.
+- When rebase conflicts arise, adapt our code to theirs.
+- Read upstream code before writing anything in the same area. Match their patterns.
+
+## Destructive actions
+Before any destructive action (rewrite, delete module, force-push):
+1. Commit and push current state
+2. Tag: `git tag pre-<action>-YYYY-MM-DD postprod`
+3. Push the tag
+4. Then proceed — only with explicit human approval
+
+## Privacy — public repository
+- `private/` is gitignored — all internal docs live here
+- Never commit: hardcoded paths (`/Users/...`), API keys, client names, PROTOOLS_SDK_PTSL source
+- `git diff --cached` before every commit — read every line
+- Full rules: `private/GITHUB_INSTRUCTIONS.md`
+
+## Reference docs (read before working in these areas)
+| Area | File |
+|------|------|
+| Full project rules | `private/PROJECT_RULES.md` |
+| Fork maintenance | `private/fork/FORK_GUIDE.md` |
+| What we changed upstream | `private/fork/FORK_OUR_CHANGES.md` |
+| Dashboard internals | `private/DASHBOARD_ARCHITECTURE.md` |
+| GPUI framework | `private/GPUI_REFERENCE.md` |
+| Architectural principles | `private/DESIGN_CHOICES.md` |
+| Skill/automation/agent system | `private/SKILL_SYSTEM.md` |
+| Current improvement roadmap | `private/IMPROVEMENT_PLAN.md` |
+| GitHub safety | `private/GITHUB_INSTRUCTIONS.md` |
+
+---
+
 # Rust coding guidelines
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.
