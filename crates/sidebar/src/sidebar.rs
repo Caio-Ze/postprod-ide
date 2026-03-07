@@ -10,6 +10,9 @@ use gpui::{
 };
 use picker::{Picker, PickerDelegate};
 use project::Event as ProjectEvent;
+use settings::{Settings, SettingsLocation};
+use util::rel_path::RelPath;
+use worktree::WorktreeSettings;
 use recent_projects::{RecentProjectEntry, get_recent_projects};
 use std::fmt::Display;
 
@@ -54,17 +57,29 @@ impl WorkspaceThreadEntry {
     fn new(index: usize, workspace: &Entity<Workspace>, cx: &App) -> Self {
         let workspace_ref = workspace.read(cx);
 
-        let worktrees: Vec<_> = workspace_ref
+        let visible_worktrees: Vec<_> = workspace_ref
             .worktrees(cx)
             .filter(|worktree| worktree.read(cx).is_visible())
+            .collect();
+
+        let worktrees: Vec<_> = visible_worktrees
+            .iter()
             .map(|worktree| worktree.read(cx).abs_path())
             .collect();
 
-        let worktree_names: Vec<String> = worktrees
+        let worktree_names: Vec<String> = visible_worktrees
             .iter()
-            .filter_map(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().to_string())
+            .map(|worktree| {
+                let worktree_ref = worktree.read(cx);
+                let settings_location = SettingsLocation {
+                    worktree_id: worktree_ref.id(),
+                    path: RelPath::empty(),
+                };
+                let settings = WorktreeSettings::get(Some(settings_location), cx);
+                match &settings.project_name {
+                    Some(name) => name.clone(),
+                    None => worktree_ref.root_name_str().to_string(),
+                }
             })
             .collect();
 

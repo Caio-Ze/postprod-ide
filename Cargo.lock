@@ -16002,6 +16002,7 @@ dependencies = [
  "ui_input",
  "util",
  "workspace",
+ "worktree",
 ]
 
 [[package]]
