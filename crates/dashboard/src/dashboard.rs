@@ -32,7 +32,7 @@ use workspace::{
 use util::ResultExt as _;
 
 use std::any::Any;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -247,6 +247,10 @@ fn default_param_type() -> ParamType {
     ParamType::Text
 }
 
+fn default_order() -> u32 {
+    100
+}
+
 #[derive(Deserialize, Clone)]
 struct ToolEntry {
     id: String,
@@ -264,6 +268,10 @@ struct ToolEntry {
     extra_args: Vec<String>,
     #[serde(default)]
     hidden: bool,
+    #[serde(default)]
+    section: Option<String>,
+    #[serde(default = "default_order")]
+    order: u32,
     #[serde(default, rename = "param")]
     params: Vec<ParamEntry>,
 }
@@ -354,6 +362,10 @@ struct AutomationEntry {
     prompt: String,
     #[serde(default)]
     hidden: bool,
+    #[serde(default)]
+    section: Option<String>,
+    #[serde(default = "default_order")]
+    order: u32,
     #[serde(default, rename = "param")]
     params: Vec<ParamEntry>,
 }
@@ -1429,6 +1441,73 @@ fn write_collapsed_sections(config_root: &Path, set: &HashSet<String>) {
 }
 
 // ---------------------------------------------------------------------------
+// Section order (optional user-managed file)
+// ---------------------------------------------------------------------------
+
+fn section_order_file(config_root: &Path) -> PathBuf {
+    state_dir_for(config_root).join("section_order")
+}
+
+fn read_section_order(config_root: &Path) -> Vec<String> {
+    let Ok(content) = std::fs::read_to_string(section_order_file(config_root)) else {
+        return Vec::new();
+    };
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| l.trim().to_string())
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Section grouping
+// ---------------------------------------------------------------------------
+
+fn group_by_section<T, F, G, H>(
+    entries: &[T],
+    get_section: F,
+    get_order: G,
+    get_label: H,
+    section_order: &[String],
+) -> Vec<(String, Vec<T>)>
+where
+    T: Clone,
+    F: Fn(&T) -> Option<&str>,
+    G: Fn(&T) -> u32,
+    H: Fn(&T) -> &str,
+{
+    let mut groups: BTreeMap<String, Vec<T>> = BTreeMap::new();
+    for entry in entries {
+        let key = get_section(entry)
+            .unwrap_or("General")
+            .to_string();
+        groups.entry(key).or_default().push(entry.clone());
+    }
+
+    for items in groups.values_mut() {
+        items.sort_by(|a, b| {
+            get_order(a)
+                .cmp(&get_order(b))
+                .then_with(|| get_label(a).cmp(get_label(b)))
+        });
+    }
+
+    let mut result: Vec<(String, Vec<T>)> = Vec::with_capacity(groups.len());
+
+    for name in section_order {
+        if let Some(items) = groups.remove(name) {
+            result.push((name.clone(), items));
+        }
+    }
+
+    for (name, items) in groups {
+        result.push((name, items));
+    }
+
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Param values persistence
 // ---------------------------------------------------------------------------
 
@@ -1632,6 +1711,8 @@ pub struct Dashboard {
     background_tools: HashSet<String>,
     // Collapsed section state (persisted)
     collapsed_sections: HashSet<String>,
+    // Section display order (optional, from config/.state/section_order)
+    section_order: Vec<String>,
     // Expanded automation prompt previews (ephemeral)
     expanded_automations: HashSet<String>,
     // Config parse errors
@@ -1664,6 +1745,7 @@ impl Dashboard {
         let (backends, agent_launchers, _agents_error) = load_agents_config(&config_root);
         let background_tools = read_background_tools(&config_root);
         let collapsed_sections = read_collapsed_sections(&config_root);
+        let section_order = read_section_order(&config_root);
         let mut param_values = read_param_values(&config_root);
 
         // Seed defaults for any params not yet persisted
@@ -1800,6 +1882,7 @@ impl Dashboard {
                             if dashboard.config_root != loaded_from { return; }
                             dashboard.automations = merged;
                             dashboard.automations_error = error;
+                            dashboard.section_order = read_section_order(&dashboard.config_root);
                             // Seed defaults for new params and clean stale editors
                             for entry in &dashboard.automations {
                                 for param in &entry.params {
@@ -1957,6 +2040,7 @@ impl Dashboard {
                 _agents_reload_task: agents_reload_task,
                 background_tools,
                 collapsed_sections,
+                section_order,
                 expanded_automations: HashSet::new(),
                 tools_error,
                 automations_error,
@@ -2191,6 +2275,7 @@ impl Dashboard {
         self.recent_destinations = read_recent_destinations(&self.config_root);
         self.background_tools = read_background_tools(&self.config_root);
         self.collapsed_sections = read_collapsed_sections(&self.config_root);
+        self.section_order = read_section_order(&self.config_root);
         self.param_values = read_param_values(&self.config_root);
 
         // Seed defaults for params not yet persisted
@@ -3024,6 +3109,37 @@ impl Dashboard {
                     .size(LabelSize::XSmall),
             )
             .child(Divider::horizontal().color(DividerColor::BorderVariant))
+    }
+
+    fn sub_section_header(
+        &self,
+        title: &str,
+        section_id: &str,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let is_open = !self.collapsed_sections.contains(section_id);
+        let entity = cx.entity().downgrade();
+        let id_for_toggle = section_id.to_string();
+
+        h_flex()
+            .pl_2()
+            .mt_1()
+            .mb_1()
+            .gap_1p5()
+            .items_center()
+            .child(
+                Disclosure::new(SharedString::from(format!("disc-{}", section_id)), is_open)
+                    .on_click(move |_, _, cx| {
+                        entity.update(cx, |this, cx| {
+                            this.toggle_section(&id_for_toggle, cx);
+                        }).log_err();
+                    }),
+            )
+            .child(
+                Label::new(title.to_string())
+                    .color(Color::Muted)
+                    .size(LabelSize::XSmall),
+            )
     }
 
     /// Build a click handler closure for running a tool (background or terminal).
