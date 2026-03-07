@@ -198,16 +198,6 @@ enum ToolTier {
     Compact,
 }
 
-impl ToolTier {
-    fn label(self) -> &'static str {
-        match self {
-            Self::Featured => "FEATURED TOOLS",
-            Self::Standard => "TOOLS",
-            Self::Compact => "AGENT TOOLS",
-        }
-    }
-}
-
 #[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum ToolSource {
@@ -2820,7 +2810,6 @@ impl Dashboard {
             Color::Success,
             {
                 let entity = entity.clone();
-                let config_root = config_root.clone();
                 move |path, _window, cx: &mut App| {
                     write_destination_folder(&config_root, &path);
                     entity.update(cx, |this, cx| {
@@ -4240,22 +4229,43 @@ impl Dashboard {
             })
             .collect();
 
-        let regular_cards: Vec<_> = regular
-            .iter()
-            .enumerate()
-            .map(|(idx, entry)| {
-                self.render_automation_card(
-                    entry,
-                    idx + meta.len(),
-                    Color::Accent,
-                    &badge_label,
-                    badge_color,
-                    window,
-                    cx,
-                )
-                .into_any_element()
-            })
-            .collect();
+        let grouped = group_by_section(
+            &regular,
+            |a| a.section.as_deref(),
+            |a| a.order,
+            |a| &a.label,
+            &self.section_order,
+        );
+
+        let mut regular_elements: Vec<gpui::AnyElement> = Vec::new();
+        let mut card_idx = meta.len();
+        for (section_name, section_automations) in &grouped {
+            let collapse_key = format!("section-auto-{}", section_name);
+            regular_elements.push(
+                self.sub_section_header(section_name, &collapse_key, cx)
+                    .into_any_element(),
+            );
+
+            if !self.collapsed_sections.contains(&collapse_key) {
+                for entry in section_automations {
+                    regular_elements.push(
+                        self.render_automation_card(
+                            entry,
+                            card_idx,
+                            Color::Accent,
+                            &badge_label,
+                            badge_color,
+                            window,
+                            cx,
+                        )
+                        .into_any_element(),
+                    );
+                    card_idx += 1;
+                }
+            } else {
+                card_idx += section_automations.len();
+            }
+        }
 
         v_flex()
             .w_full()
@@ -4291,7 +4301,7 @@ impl Dashboard {
                                 ),
                             )
                         })
-                        .children(regular_cards),
+                        .children(regular_elements),
                 )
             })
     }
