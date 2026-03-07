@@ -3269,22 +3269,17 @@ impl Dashboard {
     /// 40px tinted icon, hover-reveal actions.
     fn build_featured_cards(
         &mut self,
+        tools: &[ToolEntry],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        let tools: Vec<ToolEntry> = self
-            .tools
-            .iter()
-            .filter(|t| t.tier == ToolTier::Featured && !t.hidden)
-            .cloned()
-            .collect();
-
         let hover_bg = cx.theme().colors().ghost_element_hover;
         let accent_color = cx.theme().colors().text_accent;
         let card_bg = cx.theme().colors().elevated_surface_background;
         let icon_tint_bg = cx.theme().status().info_background.opacity(0.15);
 
-        tools
+        let tools_owned: Vec<ToolEntry> = tools.to_vec();
+        tools_owned
             .into_iter()
             .map(|tool| {
                 let group_name = SharedString::from(format!("tool-{}", tool.id));
@@ -3382,22 +3377,17 @@ impl Dashboard {
     /// Build Standard tool cards: neutral border, 28px icon, params inline below.
     fn build_standard_cards(
         &mut self,
+        tools: &[ToolEntry],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        let tools: Vec<ToolEntry> = self
-            .tools
-            .iter()
-            .filter(|t| t.tier == ToolTier::Standard && !t.hidden)
-            .cloned()
-            .collect();
-
         let hover_border = cx.theme().colors().text_accent;
         let card_bg = cx.theme().colors().elevated_surface_background;
         let border_color = cx.theme().colors().border_variant;
         let icon_bg = cx.theme().colors().element_background;
 
-        tools
+        let tools_owned: Vec<ToolEntry> = tools.to_vec();
+        tools_owned
             .into_iter()
             .map(|tool| {
                 let group_name = SharedString::from(format!("tool-{}", tool.id));
@@ -3511,18 +3501,12 @@ impl Dashboard {
     }
 
     /// Build Compact tool cards: minimal icon + label, 3-column grid items.
-    fn build_compact_cards(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        let tools: Vec<ToolEntry> = self
-            .tools
-            .iter()
-            .filter(|t| t.tier == ToolTier::Compact && !t.hidden)
-            .cloned()
-            .collect();
-
+    fn build_compact_cards(&self, tools: &[ToolEntry], cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         let hover_border = cx.theme().colors().text_accent;
         let border_color = cx.theme().colors().border_variant;
 
-        tools
+        let tools_owned: Vec<ToolEntry> = tools.to_vec();
+        tools_owned
             .into_iter()
             .map(|tool| {
                 let group_name = SharedString::from(format!("tool-{}", tool.id));
@@ -3566,68 +3550,14 @@ impl Dashboard {
             .collect()
     }
 
-    fn render_featured_section(
+    fn render_tools_section(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let is_open = !self.collapsed_sections.contains("featured");
-        let cards = if is_open {
-            self.build_featured_cards(window, cx)
-        } else {
-            Vec::new()
-        };
-        v_flex()
-            .w_full()
-            .gap_2()
-            .child(self.section_header(ToolTier::Featured.label(), "featured", cx))
-            .when(is_open, |el| {
-                el.when_some(self.tools_error.as_ref(), |el, err| {
-                    el.child(
-                        Label::new(format!("Parse error: {}", err))
-                            .color(Color::Error)
-                            .size(LabelSize::XSmall),
-                    )
-                })
-            })
-            .when(is_open && !cards.is_empty(), |el| {
-                el.child(
-                    v_flex()
-                        .id("featured-content-anim")
-                        .w_full()
-                        .gap_2()
-                        .children(cards),
-                )
-            })
-    }
-
-    fn render_standard_section(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let is_open = !self.collapsed_sections.contains("standard");
-        v_flex()
-            .w_full()
-            .gap_2()
-            .child(self.section_header(ToolTier::Standard.label(), "standard", cx))
-            .when(is_open, |el| {
-                let cards = self.build_standard_cards(window, cx);
-                el.child(
-                    h_flex()
-                        .id("standard-content-anim")
-                        .w_full()
-                        .flex_wrap()
-                        .gap(px(8.))
-                        .children(cards),
-                )
-            })
-    }
-
-    fn render_compact_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_open = !self.collapsed_sections.contains("compact");
+        let is_open = !self.collapsed_sections.contains("tools");
         let entity = cx.entity().downgrade();
-        let id_for_toggle = "compact".to_string();
+        let id_for_toggle = "tools".to_string();
 
         let edit_btn = ButtonLike::new("edit-tools-btn")
             .size(ButtonSize::Compact)
@@ -3649,11 +3579,13 @@ impl Dashboard {
                 let path = tools_config_dir_for(&this.config_root);
                 let workspace = this.workspace.clone();
                 cx.spawn_in(window, async move |_this, cx| {
-                    workspace.update_in(cx, |workspace, window, cx| {
-                        workspace
-                            .open_abs_path(path, OpenOptions::default(), window, cx)
-                            .detach();
-                    }).log_err();
+                    workspace
+                        .update_in(cx, |workspace, window, cx| {
+                            workspace
+                                .open_abs_path(path, OpenOptions::default(), window, cx)
+                                .detach();
+                        })
+                        .log_err();
                 })
                 .detach();
             }));
@@ -3664,16 +3596,18 @@ impl Dashboard {
             .gap_2()
             .items_center()
             .child(
-                Disclosure::new(SharedString::from("disc-compact"), is_open).on_click(
+                Disclosure::new(SharedString::from("disc-tools"), is_open).on_click(
                     move |_, _, cx| {
-                        entity.update(cx, |this, cx| {
-                            this.toggle_section(&id_for_toggle, cx);
-                        }).log_err();
+                        entity
+                            .update(cx, |this, cx| {
+                                this.toggle_section(&id_for_toggle, cx);
+                            })
+                            .log_err();
                     },
                 ),
             )
             .child(
-                Label::new(ToolTier::Compact.label())
+                Label::new("TOOLS")
                     .color(Color::Muted)
                     .size(LabelSize::XSmall),
             )
@@ -3681,19 +3615,113 @@ impl Dashboard {
             .child(edit_btn);
 
         if !is_open {
-            return v_flex().w_full().gap_2().child(header);
+            return v_flex().w_full().gap_1().child(header);
         }
 
-        let cards = self.build_compact_cards(cx);
+        let all_tools: Vec<ToolEntry> = self
+            .tools
+            .iter()
+            .filter(|t| !t.hidden)
+            .cloned()
+            .collect();
 
-        v_flex().w_full().gap_2().child(header).child(
-            h_flex()
-                .id("compact-content-anim")
-                .w_full()
-                .flex_wrap()
-                .gap(px(8.))
-                .children(cards),
-        )
+        let grouped = group_by_section(
+            &all_tools,
+            |t| t.section.as_deref(),
+            |t| t.order,
+            |t| &t.label,
+            &self.section_order,
+        );
+
+        let tools_error = self.tools_error.clone();
+        let is_empty = all_tools.is_empty();
+
+        let mut section_elements: Vec<gpui::AnyElement> = Vec::new();
+
+        for (section_name, section_tools) in &grouped {
+            let collapse_key = format!("section-tools-{}", section_name);
+            let sub_header = self
+                .sub_section_header(section_name, &collapse_key, cx)
+                .into_any_element();
+            section_elements.push(sub_header);
+
+            if !self.collapsed_sections.contains(&collapse_key) {
+                let featured: Vec<ToolEntry> = section_tools
+                    .iter()
+                    .filter(|t| t.tier == ToolTier::Featured)
+                    .cloned()
+                    .collect();
+                let standard: Vec<ToolEntry> = section_tools
+                    .iter()
+                    .filter(|t| t.tier == ToolTier::Standard)
+                    .cloned()
+                    .collect();
+                let compact: Vec<ToolEntry> = section_tools
+                    .iter()
+                    .filter(|t| t.tier == ToolTier::Compact)
+                    .cloned()
+                    .collect();
+
+                if !featured.is_empty() {
+                    let cards = self.build_featured_cards(&featured, window, cx);
+                    section_elements.push(
+                        v_flex().w_full().gap_2().children(cards).into_any_element(),
+                    );
+                }
+                if !standard.is_empty() {
+                    let cards = self.build_standard_cards(&standard, window, cx);
+                    section_elements.push(
+                        h_flex()
+                            .w_full()
+                            .flex_wrap()
+                            .gap(px(8.))
+                            .children(cards)
+                            .into_any_element(),
+                    );
+                }
+                if !compact.is_empty() {
+                    let cards = self.build_compact_cards(&compact, cx);
+                    section_elements.push(
+                        h_flex()
+                            .w_full()
+                            .flex_wrap()
+                            .gap(px(8.))
+                            .children(cards)
+                            .into_any_element(),
+                    );
+                }
+            }
+        }
+
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(header)
+            .when_some(tools_error, |el, err| {
+                el.child(
+                    Label::new(format!("Parse error: {}", err))
+                        .color(Color::Error)
+                        .size(LabelSize::XSmall),
+                )
+            })
+            .when(is_empty, |el| {
+                el.child(
+                    h_flex().px_2().child(
+                        Label::new("No tools found (config/tools/)")
+                            .color(Color::Muted)
+                            .size(LabelSize::Small),
+                    ),
+                )
+            })
+            .when(!is_empty, |el| {
+                el.child(
+                    v_flex()
+                        .id("tools-content-anim")
+                        .w_full()
+                        .gap_1()
+                        .children(section_elements),
+                )
+            })
     }
 
     /// Render param fields (Text/Path/Select) for a tool or automation entry.
@@ -4455,9 +4483,7 @@ impl Render for Dashboard {
                             // Folder selectors
                             .child(self.render_folder_row(window, cx))
                             // Three-tier tool layout
-                            .child(self.render_featured_section(window, cx))
-                            .child(self.render_standard_section(window, cx))
-                            .child(self.render_compact_section(cx))
+                            .child(self.render_tools_section(window, cx))
                             // AI Agents
                             .child(self.render_ai_agents_section(cx))
                             // Automations
