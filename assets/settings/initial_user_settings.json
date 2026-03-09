@@ -1,17 +1,60 @@
-// Zed settings
+// PostProd IDE settings
 //
-// For information on how to configure Zed, see the Zed
-// documentation: https://zed.dev/docs/configuring-zed
-//
-// To see all of Zed's default settings without changing your
-// custom settings, run `zed: open default settings` from the
-// command palette (cmd-shift-p / ctrl-shift-p)
+// To see all available settings, run `zed: open default settings`
+// from the command palette (cmd-shift-p)
 {
+  "restore_on_startup": "last_workspace",
+  "git_panel": {
+    "dock": "left",
+    "tree_view": true
+  },
+  "icon_theme": "Catppuccin Frappé",
+  "terminal": {
+    "dock": "right"
+  },
+  "file_finder": {
+    "modal_max_width": "medium"
+  },
+  "max_tabs": 3,
+  "use_system_window_tabs": true,
+  "bottom_dock_layout": "contained",
+  "preview_tabs": {
+    "enable_preview_from_file_finder": true,
+    "enable_keep_preview_on_code_navigation": true
+  },
+  "tabs": {
+    "show_close_button": "always",
+    "git_status": true
+  },
+  "tab_bar": {
+    "show_pinned_tabs_in_separate_row": false,
+    "show": true
+  },
+  "title_bar": {
+    "show_menus": true,
+    "show_onboarding_banner": true,
+    "show_branch_name": true,
+    "show_project_items": true
+  },
+  "debugger": {
+    "button": false
+  },
+  "diagnostics": {
+    "button": false
+  },
+  "status_bar": {
+    "cursor_position_button": true,
+    "active_language_button": true
+  },
+  "project_panel": {
+    "entry_spacing": "comfortable",
+    "button": true
+  },
   "ui_font_size": 16,
   "buffer_font_size": 15,
   "theme": {
     "mode": "system",
     "light": "One Light",
-    "dark": "One Dark",
-  },
+    "dark": "One Dark"
+  }
 }
