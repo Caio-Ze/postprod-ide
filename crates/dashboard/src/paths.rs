@@ -86,10 +86,13 @@ pub(crate) fn ensure_workspace_dirs() {
 }
 
 pub(crate) fn scan_delivery_folder() -> DeliveryStatus {
-    let dir = suite_root().join("deliveries");
+    scan_delivery_in(&suite_root().join("deliveries"))
+}
+
+fn scan_delivery_in(dir: &Path) -> DeliveryStatus {
     let mut status = DeliveryStatus::default();
 
-    let Ok(entries) = std::fs::read_dir(&dir) else {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return status;
     };
 
@@ -241,4 +244,141 @@ pub(crate) fn folder_has_dashboard_config(folder: &Path) -> bool {
 
 pub(crate) fn ensure_config_extracted(_cx: &App) {
     ensure_workspace_dirs();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_dir_for() {
+        let root = PathBuf::from("/tmp/fake");
+        assert_eq!(config_dir_for(&root), PathBuf::from("/tmp/fake/config"));
+    }
+
+    #[test]
+    fn test_state_dir_for() {
+        let root = PathBuf::from("/tmp/fake");
+        assert_eq!(state_dir_for(&root), PathBuf::from("/tmp/fake/config/.state"));
+    }
+
+    #[test]
+    fn test_tools_config_dir_for() {
+        let root = PathBuf::from("/tmp/fake");
+        assert_eq!(tools_config_dir_for(&root), PathBuf::from("/tmp/fake/config/tools"));
+    }
+
+    #[test]
+    fn test_automations_dir_for() {
+        let root = PathBuf::from("/tmp/fake");
+        assert_eq!(automations_dir_for(&root), PathBuf::from("/tmp/fake/config/automations"));
+    }
+
+    #[test]
+    fn test_agents_toml_path_for() {
+        let root = PathBuf::from("/tmp/fake");
+        assert_eq!(
+            agents_toml_path_for(&root),
+            PathBuf::from("/tmp/fake/config/AGENTS.toml")
+        );
+    }
+
+    #[test]
+    fn test_dir_has_content_empty_dir() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        assert!(!dir_has_content(tmp.path()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_dir_has_content_with_file() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        std::fs::write(tmp.path().join("file.txt"), "hello")?;
+        assert!(dir_has_content(tmp.path()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_dir_has_content_nonexistent() {
+        assert!(!dir_has_content(Path::new("/nonexistent/path/that/does/not/exist")));
+    }
+
+    #[test]
+    fn test_scan_delivery_empty() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let status = scan_delivery_in(tmp.path());
+        assert_eq!(status.tv_count, 0);
+        assert_eq!(status.net_count, 0);
+        assert_eq!(status.spot_count, 0);
+        assert_eq!(status.mp3_count, 0);
+        assert!(status.warnings.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_scan_delivery_subdirs() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path();
+
+        std::fs::create_dir(dir.join("TV"))?;
+        std::fs::write(dir.join("TV/mix1.wav"), "")?;
+        std::fs::write(dir.join("TV/mix2.wav"), "")?;
+
+        std::fs::create_dir(dir.join("net"))?;
+        std::fs::write(dir.join("net/mix1.wav"), "")?;
+        std::fs::write(dir.join("net/mix2.wav"), "")?;
+
+        std::fs::create_dir(dir.join("SPOT"))?;
+        std::fs::write(dir.join("SPOT/spot1.wav"), "")?;
+
+        let status = scan_delivery_in(dir);
+        assert_eq!(status.tv_count, 2);
+        assert_eq!(status.net_count, 2);
+        assert_eq!(status.spot_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_scan_delivery_file_patterns() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path();
+
+        std::fs::write(dir.join("mix_tv.wav"), "")?;
+        std::fs::write(dir.join("mix_net.wav"), "")?;
+        std::fs::write(dir.join("mix_spot.wav"), "")?;
+        std::fs::write(dir.join("reference.mp3"), "")?;
+
+        let status = scan_delivery_in(dir);
+        assert_eq!(status.tv_count, 1);
+        assert_eq!(status.net_count, 1);
+        assert_eq!(status.spot_count, 1);
+        assert_eq!(status.mp3_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_scan_delivery_warnings() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path();
+
+        // Only TV files — should warn about missing NET and SPOT
+        std::fs::create_dir(dir.join("tv"))?;
+        std::fs::write(dir.join("tv/mix1.wav"), "")?;
+        std::fs::write(dir.join("tv/mix2.wav"), "")?;
+
+        let status = scan_delivery_in(dir);
+        assert_eq!(status.tv_count, 2);
+        assert!(status.warnings.iter().any(|w| w.contains("NET")));
+        assert!(status.warnings.iter().any(|w| w.contains("SPOT")));
+
+        // TV + NET with mismatched counts — should warn about mismatch
+        std::fs::create_dir(dir.join("net"))?;
+        std::fs::write(dir.join("net/mix1.wav"), "")?;
+
+        let status = scan_delivery_in(dir);
+        assert_eq!(status.tv_count, 2);
+        assert_eq!(status.net_count, 1);
+        assert!(status.warnings.iter().any(|w| w.contains("TV (2) != NET (1)")));
+        Ok(())
+    }
 }
