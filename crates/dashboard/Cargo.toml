@@ -27,3 +27,6 @@ toml.workspace = true
 ui.workspace = true
 util.workspace = true
 workspace.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
