@@ -810,7 +810,6 @@ mod tests {
             cx.set_global(settings_store);
             theme::init(theme::LoadThemes::JustBase, cx);
             DisableAiSettings::register(cx);
-            cx.update_flags(false, vec!["agent-v2".into()]);
         });
     }
 
