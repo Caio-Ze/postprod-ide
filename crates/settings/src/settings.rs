@@ -156,7 +156,7 @@ pub fn vim_keymap() -> Cow<'static, str> {
 }
 
 pub fn initial_user_settings_content() -> Cow<'static, str> {
-    asset_str::<SettingsAssets>("settings/initial_user_settings.json")
+    asset_str::<SettingsAssets>("settings/initial_postprod_settings.json")
 }
 
 pub fn initial_server_settings_content() -> Cow<'static, str> {
