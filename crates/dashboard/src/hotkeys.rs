@@ -495,3 +495,75 @@ impl Render for GlobalShortcutModal {
             )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use global_hotkey::hotkey::Code;
+
+    #[test]
+    fn test_gpui_key_to_code_letters() {
+        assert_eq!(gpui_key_to_code("a"), Some(Code::KeyA));
+        assert_eq!(gpui_key_to_code("m"), Some(Code::KeyM));
+        assert_eq!(gpui_key_to_code("z"), Some(Code::KeyZ));
+    }
+
+    #[test]
+    fn test_gpui_key_to_code_digits() {
+        assert_eq!(gpui_key_to_code("0"), Some(Code::Digit0));
+        assert_eq!(gpui_key_to_code("5"), Some(Code::Digit5));
+        assert_eq!(gpui_key_to_code("9"), Some(Code::Digit9));
+    }
+
+    #[test]
+    fn test_gpui_key_to_code_function_keys() {
+        assert_eq!(gpui_key_to_code("f1"), Some(Code::F1));
+        assert_eq!(gpui_key_to_code("f12"), Some(Code::F12));
+    }
+
+    #[test]
+    fn test_gpui_key_to_code_special_keys() {
+        assert_eq!(gpui_key_to_code("space"), Some(Code::Space));
+        assert_eq!(gpui_key_to_code("enter"), Some(Code::Enter));
+        assert_eq!(gpui_key_to_code("escape"), Some(Code::Escape));
+        assert_eq!(gpui_key_to_code("up"), Some(Code::ArrowUp));
+        assert_eq!(gpui_key_to_code("down"), Some(Code::ArrowDown));
+        assert_eq!(gpui_key_to_code("left"), Some(Code::ArrowLeft));
+        assert_eq!(gpui_key_to_code("right"), Some(Code::ArrowRight));
+        assert_eq!(gpui_key_to_code("-"), Some(Code::Minus));
+        assert_eq!(gpui_key_to_code("/"), Some(Code::Slash));
+        assert_eq!(gpui_key_to_code("`"), Some(Code::Backquote));
+    }
+
+    #[test]
+    fn test_gpui_key_to_code_unknown_returns_none() {
+        assert_eq!(gpui_key_to_code("capslock"), None);
+        assert_eq!(gpui_key_to_code(""), None);
+        assert_eq!(gpui_key_to_code("nonexistent"), None);
+    }
+
+    #[test]
+    fn test_parse_global_hotkey_with_modifiers() {
+        let hotkey = parse_global_hotkey("ctrl-alt-a");
+        assert!(hotkey.is_some());
+        let hotkey = hotkey.unwrap();
+        let mods = hotkey.mods;
+        assert!(mods.contains(GHModifiers::CONTROL));
+        assert!(mods.contains(GHModifiers::ALT));
+        assert!(!mods.contains(GHModifiers::SHIFT));
+    }
+
+    #[test]
+    fn test_parse_global_hotkey_invalid_returns_none() {
+        assert!(parse_global_hotkey("ctrl-nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_keystroke_to_display_symbols() {
+        let display = keystroke_to_display("ctrl-shift-cmd-a");
+        assert!(display.contains('\u{2303}')); // ⌃ Control
+        assert!(display.contains('\u{21E7}')); // ⇧ Shift
+        assert!(display.contains('\u{2318}')); // ⌘ Command
+        assert!(display.contains('a'));
+    }
+}

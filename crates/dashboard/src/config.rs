@@ -10,7 +10,7 @@ use crate::paths::{agents_toml_path_for, automations_dir_for, tools_config_dir_f
 // TOML-driven tool registry
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ToolTier {
     Featured,
@@ -18,7 +18,7 @@ pub(crate) enum ToolTier {
     Compact,
 }
 
-#[derive(Deserialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ToolSource {
     Runtime,
@@ -45,7 +45,7 @@ pub(crate) struct ParamEntry {
     pub(crate) options: Vec<String>,
 }
 
-#[derive(Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ParamType {
     Text,
@@ -364,5 +364,202 @@ pub(crate) fn load_global_hotkeys_config() -> Vec<GlobalHotkeyEntry> {
             log::warn!("global-hotkeys.toml: parse error: {e}");
             Vec::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_icon_for_tool_known() {
+        assert_eq!(icon_for_tool("play_filled"), IconName::PlayFilled);
+        assert_eq!(icon_for_tool("mic"), IconName::Mic);
+        assert_eq!(icon_for_tool("trash"), IconName::Trash);
+        assert_eq!(icon_for_tool("folder"), IconName::Folder);
+    }
+
+    #[test]
+    fn test_icon_for_tool_unknown_fallback() {
+        assert_eq!(icon_for_tool("nonexistent"), IconName::Sparkle);
+        assert_eq!(icon_for_tool(""), IconName::Sparkle);
+    }
+
+    #[test]
+    fn test_load_single_tool_valid() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("test-tool.toml");
+        std::fs::write(
+            &path,
+            r#"
+[tool]
+id = "bounce"
+label = "Bounce All"
+description = "Bounces all tracks"
+icon = "play_filled"
+binary = "bounce-all"
+source = "runtime"
+tier = "featured"
+"#,
+        )?;
+        let tool = load_single_tool(&path)?;
+        assert_eq!(tool.id, "bounce");
+        assert_eq!(tool.label, "Bounce All");
+        assert_eq!(tool.tier, ToolTier::Featured);
+        assert_eq!(tool.source, ToolSource::Runtime);
+        // defaults
+        assert_eq!(tool.order, 100);
+        assert!(!tool.hidden);
+        assert!(tool.params.is_empty());
+        assert!(tool.extra_args.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_single_tool_with_params() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("tool-with-params.toml");
+        std::fs::write(
+            &path,
+            r#"
+[tool]
+id = "export"
+label = "Export"
+description = "Export stems"
+icon = "sparkle"
+binary = "export-stems"
+source = "agent"
+tier = "standard"
+order = 10
+
+[[tool.param]]
+key = "format"
+label = "Format"
+placeholder = "wav"
+default = "wav"
+
+[[tool.param]]
+key = "depth"
+label = "Bit Depth"
+param_type = "select"
+options = ["16", "24", "32"]
+"#,
+        )?;
+        let tool = load_single_tool(&path)?;
+        assert_eq!(tool.params.len(), 2);
+        assert_eq!(tool.params[0].key, "format");
+        assert_eq!(tool.params[0].param_type, ParamType::Text);
+        assert_eq!(tool.params[1].param_type, ParamType::Select);
+        assert_eq!(tool.params[1].options, vec!["16", "24", "32"]);
+        assert_eq!(tool.order, 10);
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_single_tool_invalid_toml() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("bad.toml");
+        std::fs::write(&path, "this is not valid toml {{{")?;
+        match load_single_tool(&path) {
+            Err(err) => assert!(err.contains("bad.toml"), "error should mention filename: {err}"),
+            Ok(_) => panic!("should fail on invalid TOML"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_single_automation_valid() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("auto.toml");
+        std::fs::write(
+            &path,
+            r#"
+id = "full-delivery"
+label = "Full Delivery"
+description = "Run full delivery pipeline"
+icon = "play"
+prompt = "Run delivery for {session_path}"
+"#,
+        )?;
+        let auto = load_single_automation(&path)?;
+        assert_eq!(auto.id, "full-delivery");
+        assert_eq!(auto.prompt, "Run delivery for {session_path}");
+        assert!(!auto.hidden);
+        assert_eq!(auto.order, 100);
+        Ok(())
+    }
+
+    #[test]
+    fn test_collect_toml_files_recursive() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path();
+        std::fs::write(dir.join("a.toml"), "")?;
+        std::fs::write(dir.join("b.txt"), "")?;
+        std::fs::create_dir(dir.join("sub"))?;
+        std::fs::write(dir.join("sub/c.toml"), "")?;
+        std::fs::write(dir.join("sub/d.json"), "")?;
+
+        let files = collect_toml_files(dir);
+        let names: Vec<String> = files
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(names, vec!["a.toml", "c.toml"]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_collect_toml_files_empty_dir() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let files = collect_toml_files(tmp.path());
+        assert!(files.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_tools_registry_mixed() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let config_root = tmp.path();
+        let tools_dir = config_root.join("config").join("tools");
+        std::fs::create_dir_all(&tools_dir)?;
+
+        // Valid tool
+        std::fs::write(
+            tools_dir.join("good1.toml"),
+            r#"
+[tool]
+id = "t1"
+label = "Tool 1"
+description = "d"
+icon = "sparkle"
+binary = "t1"
+source = "runtime"
+tier = "standard"
+"#,
+        )?;
+
+        // Another valid tool
+        std::fs::write(
+            tools_dir.join("good2.toml"),
+            r#"
+[tool]
+id = "t2"
+label = "Tool 2"
+description = "d"
+icon = "sparkle"
+binary = "t2"
+source = "agent"
+tier = "compact"
+"#,
+        )?;
+
+        // Invalid TOML
+        std::fs::write(tools_dir.join("bad.toml"), "not valid {{")?;
+
+        let (tools, error) = load_tools_registry(config_root);
+        assert_eq!(tools.len(), 2);
+        assert!(error.is_some());
+        assert!(error.unwrap().contains("bad.toml"));
+        Ok(())
     }
 }
