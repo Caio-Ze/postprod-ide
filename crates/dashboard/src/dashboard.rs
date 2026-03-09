@@ -368,9 +368,6 @@ struct AutomationEntry {
     params: Vec<ParamEntry>,
 }
 
-fn automations_dir() -> PathBuf {
-    config_dir().join("automations")
-}
 
 fn load_single_automation(path: &Path) -> Result<AutomationEntry, String> {
     let content = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -1163,14 +1160,8 @@ fn agents_toml_path_for(config_root: &Path) -> PathBuf {
 }
 
 fn ensure_workspace_dirs() {
-    for dir in [
-        config_dir().join("tools"),
-        automations_dir(),
-        agent_tools_dir(),
-        runtime_tools_dir(),
-        suite_root().join("deliveries"),
-        state_dir(),
-    ] {
+    // Only create dirs the app owns — everything else comes from user-cloned repos
+    for dir in [state_dir(), suite_root().join("deliveries")] {
         if !dir.exists() {
             std::fs::create_dir_all(&dir).log_err();
         }
