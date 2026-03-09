@@ -259,3 +259,185 @@ pub(crate) fn write_param_values(config_root: &Path, values: &HashMap<String, Ha
         std::fs::write(param_values_file(config_root), content).log_err();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // group_by_section — pure logic tests
+    // -----------------------------------------------------------------------
+
+    #[derive(Clone)]
+    struct FakeEntry {
+        label: String,
+        section: Option<String>,
+        order: u32,
+    }
+
+    fn fake(label: &str, section: Option<&str>, order: u32) -> FakeEntry {
+        FakeEntry {
+            label: label.to_string(),
+            section: section.map(|s| s.to_string()),
+            order,
+        }
+    }
+
+    fn run_group(entries: &[FakeEntry], section_order: &[String]) -> Vec<(String, Vec<FakeEntry>)> {
+        group_by_section(
+            entries,
+            |e| e.section.as_deref(),
+            |e| e.order,
+            |e| &e.label,
+            section_order,
+        )
+    }
+
+    #[test]
+    fn test_group_by_section_single_section() {
+        let entries = vec![fake("A", Some("Tools"), 1), fake("B", Some("Tools"), 2)];
+        let groups = run_group(&entries, &[]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, "Tools");
+        assert_eq!(groups[0].1.len(), 2);
+    }
+
+    #[test]
+    fn test_group_by_section_multiple_sections() {
+        let entries = vec![
+            fake("A", Some("Tools"), 1),
+            fake("B", Some("Audio"), 1),
+            fake("C", Some("Tools"), 2),
+        ];
+        let groups = run_group(&entries, &[]);
+        assert_eq!(groups.len(), 2);
+        // BTreeMap order: "Audio" before "Tools"
+        assert_eq!(groups[0].0, "Audio");
+        assert_eq!(groups[1].0, "Tools");
+        assert_eq!(groups[1].1.len(), 2);
+    }
+
+    #[test]
+    fn test_group_by_section_none_falls_back_to_general() {
+        let entries = vec![fake("A", None, 1), fake("B", None, 2)];
+        let groups = run_group(&entries, &[]);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0, "General");
+    }
+
+    #[test]
+    fn test_group_by_section_order_within_section() {
+        let entries = vec![
+            fake("Z-item", Some("S"), 1),
+            fake("A-item", Some("S"), 2),
+            fake("M-item", Some("S"), 1),
+        ];
+        let groups = run_group(&entries, &[]);
+        let labels: Vec<&str> = groups[0].1.iter().map(|e| e.label.as_str()).collect();
+        // order=1 first (M, Z alphabetically), then order=2 (A)
+        assert_eq!(labels, vec!["M-item", "Z-item", "A-item"]);
+    }
+
+    #[test]
+    fn test_group_by_section_section_order_priority() {
+        let entries = vec![
+            fake("A", Some("Alpha"), 1),
+            fake("B", Some("Beta"), 1),
+            fake("C", Some("Charlie"), 1),
+        ];
+        let section_order = vec!["Charlie".to_string(), "Alpha".to_string()];
+        let groups = run_group(&entries, &section_order);
+
+        let section_names: Vec<&str> = groups.iter().map(|(n, _)| n.as_str()).collect();
+        // Charlie first (from section_order), Alpha second, Beta last (BTreeMap remainder)
+        assert_eq!(section_names, vec!["Charlie", "Alpha", "Beta"]);
+    }
+
+    #[test]
+    fn test_group_by_section_empty() {
+        let entries: Vec<FakeEntry> = vec![];
+        let groups = run_group(&entries, &[]);
+        assert!(groups.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Filesystem round-trip tests
+    // -----------------------------------------------------------------------
+
+    fn setup_root() -> Result<(tempfile::TempDir, PathBuf), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let root = tmp.path().to_path_buf();
+        std::fs::create_dir_all(state_dir_for(&root))?;
+        Ok((tmp, root))
+    }
+
+    #[test]
+    fn test_active_folder_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let (_tmp, root) = setup_root()?;
+        // The folder written must actually exist as a dir for read to return it
+        let folder = root.join("my_project");
+        std::fs::create_dir(&folder)?;
+        write_active_folder(&root, &folder);
+        let result = read_active_folder(&root);
+        assert_eq!(result, Some(folder));
+        Ok(())
+    }
+
+    #[test]
+    fn test_active_folder_missing_returns_config_root() -> Result<(), Box<dyn std::error::Error>> {
+        let (_tmp, root) = setup_root()?;
+        // No active_folder file written, config_root is a valid dir
+        let result = read_active_folder(&root);
+        assert_eq!(result, Some(root));
+        Ok(())
+    }
+
+    #[test]
+    fn test_recent_folders_ordering_and_limit() -> Result<(), Box<dyn std::error::Error>> {
+        let (_tmp, root) = setup_root()?;
+        // Create 12 real directories
+        let mut dirs = Vec::new();
+        for i in 0..12 {
+            let dir = root.join(format!("folder_{i:02}"));
+            std::fs::create_dir(&dir)?;
+            dirs.push(dir);
+        }
+        // Add all 12
+        for dir in &dirs {
+            add_to_recent_folders(&root, dir);
+        }
+        let recent = read_recent_folders(&root);
+        // Capped at 10
+        assert_eq!(recent.len(), 10);
+        // Most recent first (folder_11)
+        assert_eq!(recent[0], dirs[11]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_background_tools_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let (_tmp, root) = setup_root()?;
+        let mut tools = HashSet::new();
+        tools.insert("bounceAll".to_string());
+        tools.insert("exportStem".to_string());
+        tools.insert("normalize".to_string());
+        write_background_tools(&root, &tools);
+        let read_back = read_background_tools(&root);
+        assert_eq!(read_back, tools);
+        Ok(())
+    }
+
+    #[test]
+    fn test_param_values_round_trip() -> Result<(), Box<dyn std::error::Error>> {
+        let (_tmp, root) = setup_root()?;
+        let mut values = HashMap::new();
+        let mut inner = HashMap::new();
+        inner.insert("format".to_string(), "wav".to_string());
+        inner.insert("depth".to_string(), "24".to_string());
+        values.insert("bounceAll".to_string(), inner);
+        write_param_values(&root, &values);
+        let read_back = read_param_values(&root);
+        assert_eq!(read_back, values);
+        Ok(())
+    }
+}
