@@ -1029,6 +1029,11 @@ impl Dashboard {
             resolved
         };
 
+        let use_context_launcher = self.automations.iter()
+            .find(|a| a.id == entry_id)
+            .map(|a| a.use_context_launcher)
+            .unwrap_or(true);
+
         // Capture values needed by the async block
         let launcher_path = self.resolve_context_launcher();
         let workspace = self.workspace.clone();
@@ -1052,7 +1057,9 @@ impl Dashboard {
         cx.spawn_in(window, async move |_this, cx| {
             // Phase 1: Run context-launcher → Result<String, String>.
             // Ok = enriched prompt (stdout), Err = human-readable reason.
-            let result: Result<String, String> = if let Some(launcher) = launcher_path {
+            let result: Result<String, String> = if !use_context_launcher {
+                Ok(fallback_prompt.clone())
+            } else if let Some(launcher) = launcher_path {
                 let args = launcher_args;
                 let output_result = cx
                     .background_executor()
@@ -2725,11 +2732,11 @@ impl Dashboard {
                                                     move |_, window, cx| {
                                                         edit_entity
                                                             .update(cx, |this, cx| {
-                                                                let path = automations_dir_for(&this.config_root)
-                                                                    .join(format!(
-                                                                        "{}.toml",
-                                                                        edit_id
-                                                                    ));
+                                                                let path = this.automations.iter()
+                                                                    .find(|a| a.id == edit_id)
+                                                                    .and_then(|a| a.source_path.clone())
+                                                                    .unwrap_or_else(|| automations_dir_for(&this.config_root)
+                                                                        .join(format!("{}.toml", edit_id)));
                                                                 let workspace =
                                                                     this.workspace.clone();
                                                                 cx.spawn_in(
