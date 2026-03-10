@@ -186,6 +186,17 @@ pub(crate) struct AutomationEntry {
     pub(crate) order: u32,
     #[serde(default, rename = "param")]
     pub(crate) params: Vec<ParamEntry>,
+
+    #[serde(default = "default_true")]
+    pub(crate) use_context_launcher: bool,
+
+    /// Filesystem path this entry was loaded from (set after deserialization).
+    #[serde(skip)]
+    pub(crate) source_path: Option<PathBuf>,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 pub(crate) fn load_single_automation(path: &Path) -> Result<AutomationEntry, String> {
@@ -208,7 +219,10 @@ pub(crate) fn load_automations_registry(config_root: &Path) -> (Vec<AutomationEn
 
     for path in paths {
         match load_single_automation(&path) {
-            Ok(entry) => automations.push(entry),
+            Ok(mut entry) => {
+                entry.source_path = Some(path.clone());
+                automations.push(entry);
+            }
             Err(e) => {
                 log::error!("config: {e}");
                 errors.push(e);
