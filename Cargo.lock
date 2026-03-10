@@ -4226,6 +4226,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "croner"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aa42bcd3d846ebf66e15bd528d1087f75d1c6c1c66ebff626178a106353c576"
+dependencies = [
+ "chrono",
+ "derive_builder",
+ "strum 0.27.2",
+]
+
+[[package]]
 name = "crossbeam"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4564,11 +4575,13 @@ name = "dashboard"
 version = "0.1.0"
 dependencies = [
  "agent_ui",
+ "anyhow",
  "editor",
  "global-hotkey",
  "gpui",
  "log",
  "paths",
+ "postprod_scheduler",
  "project",
  "schemars",
  "serde",
@@ -4576,6 +4589,7 @@ dependencies = [
  "task",
  "tempfile",
  "toml 0.8.23",
+ "toml_edit 0.22.27",
  "ui",
  "util",
  "workspace",
@@ -4810,6 +4824,37 @@ checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
 dependencies = [
  "proc-macro2",
  "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
+name = "derive_builder"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "507dfb09ea8b7fa618fcf76e953f4f5e192547945816d5358edffe39f6f94947"
+dependencies = [
+ "derive_builder_macro",
+]
+
+[[package]]
+name = "derive_builder_core"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2d5bcf7b024d6835cfb3d473887cd966994907effbe9227e8c8219824d06c4e8"
+dependencies = [
+ "darling",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
+name = "derive_builder_macro"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab63b0e2bf4d5928aff72e83a7dace85d7bba5fe12dcc3c5a572d78caffd3f3c"
+dependencies = [
+ "derive_builder_core",
  "syn 2.0.106",
 ]
 
@@ -13078,6 +13123,20 @@ dependencies = [
  "zlog",
  "zlog_settings",
  "ztracing",
+]
+
+[[package]]
+name = "postprod_scheduler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "croner",
+ "gpui",
+ "gpui_util",
+ "log",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
