@@ -251,7 +251,13 @@ pub(crate) fn read_param_values(config_root: &Path) -> HashMap<String, HashMap<S
     let Ok(content) = std::fs::read_to_string(param_values_file(config_root)) else {
         return HashMap::new();
     };
-    toml::from_str(&content).unwrap_or_default()
+    match toml::from_str(&content) {
+        Ok(values) => values,
+        Err(e) => {
+            log::warn!("param_values.toml: parse error (values reset): {e}");
+            HashMap::new()
+        }
+    }
 }
 
 pub(crate) fn write_param_values(config_root: &Path, values: &HashMap<String, HashMap<String, String>>) {
@@ -438,6 +444,15 @@ mod tests {
         write_param_values(&root, &values);
         let read_back = read_param_values(&root);
         assert_eq!(read_back, values);
+        Ok(())
+    }
+
+    #[test]
+    fn test_param_values_corrupt_toml_returns_empty() -> Result<(), Box<dyn std::error::Error>> {
+        let (_tmp, root) = setup_root()?;
+        std::fs::write(param_values_file(&root), "this is {{ not valid toml")?;
+        let values = read_param_values(&root);
+        assert!(values.is_empty());
         Ok(())
     }
 }
