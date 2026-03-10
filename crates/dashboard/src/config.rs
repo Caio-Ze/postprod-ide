@@ -1,3 +1,4 @@
+use postprod_scheduler::CatchUpPolicy;
 use serde::{Deserialize, Serialize};
 use ui::IconName;
 use util::ResultExt as _;
@@ -193,10 +194,38 @@ pub(crate) struct AutomationEntry {
     /// Filesystem path this entry was loaded from (set after deserialization).
     #[serde(skip)]
     pub(crate) source_path: Option<PathBuf>,
+
+    #[serde(default)]
+    pub(crate) schedule: Option<ScheduleConfig>,
+
+    #[serde(default)]
+    pub(crate) chain: Option<ChainConfig>,
 }
 
 fn default_true() -> bool {
     true
+}
+
+fn default_timeout() -> u64 {
+    3600
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub(crate) struct ScheduleConfig {
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) cron: String,
+    #[serde(default)]
+    pub(crate) catch_up: CatchUpPolicy,
+    #[serde(default = "default_timeout")]
+    pub(crate) timeout: u64,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub(crate) struct ChainConfig {
+    #[serde(default)]
+    pub(crate) triggers: Vec<String>,
 }
 
 pub(crate) fn load_single_automation(path: &Path) -> Result<AutomationEntry, String> {
