@@ -3,12 +3,25 @@ mod hotkeys;
 mod paths;
 mod persistence;
 
-use config::*;
-use paths::*;
-use persistence::*;
+use config::{
+    AgentEntry, AutomationEntry, BackendEntry, FolderTarget, ParamEntry, ParamType, ToolEntry,
+    ToolSource, ToolTier, icon_for_automation, icon_for_tool, load_agents_config,
+    load_automations_registry, load_tools_registry,
+};
+use paths::{
+    DeliveryStatus, automations_dir_for, ensure_config_extracted, ensure_workspace_dirs,
+    folder_has_dashboard_config, resolve_agent_tools_path, resolve_bin, resolve_runtime_path,
+    scan_delivery_folder, state_dir_for, suite_root, tools_config_dir_for,
+};
+use persistence::{
+    group_by_section, read_active_folder, read_background_tools, read_collapsed_sections,
+    read_destination_folder, read_param_values, read_recent_destinations, read_recent_folders,
+    read_section_order, write_active_folder, write_background_tools, write_collapsed_sections,
+    write_destination_folder, write_param_values,
+};
 
 pub use hotkeys::init_global_hotkeys;
-use hotkeys::*;
+use hotkeys::GlobalShortcutModal;
 
 use agent_ui::AgentPanel;
 use editor::{Editor, EditorEvent};
