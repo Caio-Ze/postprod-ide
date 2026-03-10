@@ -145,6 +145,7 @@ members = [
     "crates/outline",
     "crates/outline_panel",
     "crates/panel",
+    "crates/postprod_scheduler",
     "crates/paths",
     "crates/picker",
     "crates/platform_title_bar",
@@ -403,6 +404,7 @@ panel = { path = "crates/panel" }
 paths = { path = "crates/paths" }
 perf = { path = "tooling/perf" }
 picker = { path = "crates/picker" }
+postprod_scheduler = { path = "crates/postprod_scheduler" }
 prettier = { path = "crates/prettier" }
 settings_profile_selector = { path = "crates/settings_profile_selector" }
 project = { path = "crates/project" }
@@ -536,6 +538,7 @@ brush-parser = "0.3"
 cfg-if = "1.0.3"
 chardetng = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
+croner = "3.0.1"
 ciborium = "0.2"
 circular-buffer = "1.0"
 clap = { version = "4.4", features = ["derive", "wrap_help"] }
