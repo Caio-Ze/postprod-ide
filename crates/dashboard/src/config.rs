@@ -24,6 +24,7 @@ pub(crate) enum ToolTier {
 pub(crate) enum ToolSource {
     Runtime,
     Agent,
+    Local,
 }
 
 #[derive(Clone, Copy)]
@@ -495,6 +496,32 @@ options = ["16", "24", "32"]
         assert_eq!(tool.params[1].param_type, ParamType::Select);
         assert_eq!(tool.params[1].options, vec!["16", "24", "32"]);
         assert_eq!(tool.order, 10);
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_single_tool_local_source() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("local-tool.toml");
+        std::fs::write(
+            &path,
+            r#"
+[tool]
+id = "my-script"
+label = "My Script"
+description = "A local config script"
+icon = "tool_terminal"
+binary = "run.sh"
+cwd = "scripts"
+source = "local"
+tier = "standard"
+"#,
+        )?;
+        let tool = load_single_tool(&path)?;
+        assert_eq!(tool.id, "my-script");
+        assert_eq!(tool.source, ToolSource::Local);
+        assert_eq!(tool.cwd, "scripts");
+        assert_eq!(tool.binary, "run.sh");
         Ok(())
     }
 
