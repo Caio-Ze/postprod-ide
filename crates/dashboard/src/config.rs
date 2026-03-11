@@ -189,7 +189,7 @@ pub(crate) struct AutomationEntry {
     #[serde(default, rename = "param")]
     pub(crate) params: Vec<ParamEntry>,
 
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub(crate) use_context_launcher: bool,
 
     /// Filesystem path this entry was loaded from (set after deserialization).
@@ -201,10 +201,6 @@ pub(crate) struct AutomationEntry {
 
     #[serde(default)]
     pub(crate) chain: Option<ChainConfig>,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_timeout() -> u64 {
