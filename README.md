@@ -1,46 +1,64 @@
-# Zed
+# PostProd IDE
 
-[![Zed](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/zed-industries/zed/main/assets/badge/v0.json)](https://zed.dev)
-[![CI](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml/badge.svg)](https://github.com/zed-industries/zed/actions/workflows/run_tests.yml)
+A professional automation platform built as a [Zed](https://github.com/zed-industries/zed) fork. Domain-agnostic — designed for audio post-production, video, financial analysis, software development, or any workflow that benefits from agent-driven automation.
 
-Welcome to Zed, a high-performance, multiplayer code editor from the creators of [Atom](https://github.com/atom/atom) and [Tree-sitter](https://github.com/tree-sitter/tree-sitter).
+![PostProd IDE Dashboard](assets/PostProd_ide/images/dashboard-overview.png)
 
----
+## What it does
 
-### Installation
+PostProd IDE adds a **TOML-driven dashboard** to Zed. Every `.toml` file in a config directory becomes a clickable button — a tool that runs a binary, or an automation that dispatches a prompt to an AI agent. No rebuilds needed. Edit a TOML, and the dashboard picks it up within seconds.
 
-On macOS, Linux, and Windows you can [download Zed directly](https://zed.dev/download) or install Zed via your local package manager ([macOS](https://zed.dev/docs/installation#macos)/[Linux](https://zed.dev/docs/linux#installing-via-a-package-manager)/[Windows](https://zed.dev/docs/windows#package-managers)).
+**Key capabilities:**
 
-Other platforms are not yet available:
+- **Agent dispatch** — route prompts to Claude, Gemini, or the built-in agent panel, configured per-workspace
+- **Tool execution** — run compiled binaries with session context, parameters, and background/terminal modes
+- **Global hotkeys** — system-wide keyboard shortcuts that fire tools even when the app is not in focus (macOS `CGEventTap`)
+- **Scheduler** — cron-based automation with completion tracking and chain triggers
+- **Per-folder configs** — open any folder with a `config/` directory and the dashboard loads that folder's automations and tools
+- **Parameter system** — user-editable fields (text, select, path) interpolated into prompts and persisted across sessions
+- **Zero-rebuild configuration** — everything from button labels to agent backends is plain text files
 
-- Web ([tracking issue](https://github.com/zed-industries/zed/issues/5396))
+## Architecture
 
-### Developing Zed
+The app ships clean — no tools, no automations baked in. Domain content comes from **product repos** that install TOML configs and tool binaries into a workspace directory. The platform discovers and runs them.
 
-- [Building Zed for macOS](./docs/src/development/macos.md)
-- [Building Zed for Linux](./docs/src/development/linux.md)
-- [Building Zed for Windows](./docs/src/development/windows.md)
+```
+~/PostProd_IDE/                  # workspace root
+  config/
+    AGENTS.toml                  # agent backend definitions
+    automations/                 # one .toml per automation button
+    tools/                       # one .toml per tool card
+    .state/                      # runtime state (auto-managed)
+  tools/
+    agent/                       # compiled tool binaries
+    runtime/                     # runtime services
+  plugin/
+    skills/                      # agent skill files
+```
 
-### Contributing
+The fork footprint is minimal — the entire feature set lives in `crates/dashboard/` and `crates/postprod_scheduler/`, with roughly twenty lines of glue across upstream Zed files. This keeps bi-weekly rebases manageable.
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for ways you can contribute to Zed.
+## Building
 
-Also... we're hiring! Check out our [jobs](https://zed.dev/jobs) page for open roles.
+macOS only (for now). Requires the same dependencies as Zed:
 
-### Licensing
+```bash
+# Build release binary
+./script/postprod/dev-deploy
 
-License information for third party dependencies must be correctly provided for CI to pass.
+# Build and launch
+./script/postprod/dev-deploy --run
 
-We use [`cargo-about`](https://github.com/EmbarkStudios/cargo-about) to automatically comply with open source licenses. If CI is failing, check the following:
+# Launch with clean sandbox workspace
+./script/postprod/dev-clean
+```
 
-- Is it showing a `no license specified` error for a crate you've created? If so, add `publish = false` under `[package]` in your crate's Cargo.toml.
-- Is the error `failed to satisfy license requirements` for a dependency? If so, first determine what license the project has and whether this system is sufficient to comply with this license's requirements. If you're unsure, ask a lawyer. Once you've verified that this system is acceptable add the license's SPDX identifier to the `accepted` array in `script/licenses/zed-licenses.toml`.
-- Is `cargo-about` unable to find the license for a dependency? If so, add a clarification field at the end of `script/licenses/zed-licenses.toml`, as specified in the [cargo-about book](https://embarkstudios.github.io/cargo-about/cli/generate/config.html#crate-configuration).
+See the [Zed macOS build docs](./docs/src/development/macos.md) for prerequisites.
 
-## Sponsorship
+## Upstream
 
-Zed is developed by **Zed Industries, Inc.**, a for-profit company.
+This is a fork of [Zed](https://github.com/zed-industries/zed). The `main` branch mirrors upstream. Development happens on `postprod`.
 
-If you’d like to financially support the project, you can do so via GitHub Sponsors.
-Sponsorships go directly to Zed Industries and are used as general company revenue.
-There are no perks or entitlements associated with sponsorship.
+## License
+
+PostProd IDE inherits Zed's licensing. See [LICENSE-GPL](LICENSE-GPL) and [LICENSE-AGPL](LICENSE-AGPL). Third-party license compliance is managed via `cargo-about` — see Zed's [licensing docs](https://github.com/zed-industries/zed#licensing) for details.
