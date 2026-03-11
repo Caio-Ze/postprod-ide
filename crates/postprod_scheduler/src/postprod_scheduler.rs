@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -59,6 +59,56 @@ pub enum RunResult {
     Failed { message: String },
     Timeout,
     Skipped { reason: String },
+}
+
+/// Structured completion report written by the agent as a JSON file.
+/// The scheduler polls for this file to detect when a scheduled run finishes.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct CompletionReport {
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub outputs: Vec<String>,
+    #[serde(default)]
+    pub skip_chain: bool,
+    #[serde(default)]
+    pub message: String,
+}
+
+impl CompletionReport {
+    /// Parse a marker file into a CompletionReport + RunResult.
+    /// If the file exists but JSON is malformed, treat as success with no metadata
+    /// (the file's existence is the real signal).
+    pub fn from_marker(path: &Path) -> Option<(Self, RunResult)> {
+        let content = std::fs::read_to_string(path).ok()?;
+        let report: CompletionReport = serde_json::from_str(content.trim())
+            .unwrap_or_else(|_| CompletionReport {
+                status: "success".to_string(),
+                summary: String::new(),
+                outputs: Vec::new(),
+                skip_chain: false,
+                message: String::new(),
+            });
+
+        let result = if report.status.to_lowercase().starts_with("failed") {
+            RunResult::Failed {
+                message: report.summary.clone(),
+            }
+        } else {
+            RunResult::Success
+        };
+
+        Some((report, result))
+    }
+}
+
+/// Build the completion marker path for a given automation run.
+pub fn completion_marker_path(state_dir: &Path, automation_id: &str, timestamp: i64) -> PathBuf {
+    state_dir
+        .join("completed")
+        .join(format!("{}-{}.json", automation_id, timestamp))
 }
 
 // ── Scheduler events (dashboard subscribes to these) ──
@@ -326,11 +376,12 @@ impl Scheduler {
     }
 
     /// Report completion of a scheduled automation run.
-    /// Called by dashboard after `spawn_in_terminal()` task finishes or times out.
+    /// Called by dashboard after the agent writes a completion marker or the run times out.
     pub fn report_completion(
         &mut self,
         automation_id: &str,
         result: &RunResult,
+        report: Option<&CompletionReport>,
         chain_depth: u32,
         cx: &mut Context<Self>,
     ) {
@@ -342,6 +393,15 @@ impl Scheduler {
             .or_insert_with(AutomationStatus::default);
 
         status.last_result = Some(result.clone());
+
+        if let Some(report) = report {
+            if !report.summary.is_empty() {
+                log::info!("Scheduler: {automation_id} — {}", report.summary);
+            }
+            if !report.message.is_empty() {
+                log::info!("Scheduler: {automation_id} message — {}", report.message);
+            }
+        }
 
         match result {
             RunResult::Success => {
@@ -360,8 +420,9 @@ impl Scheduler {
             RunResult::Skipped { .. } => {}
         }
 
-        // Trigger chains on success
-        if matches!(result, RunResult::Success) {
+        // Trigger chains on success (unless the agent requested skip)
+        let skip_chain = report.map(|r| r.skip_chain).unwrap_or(false);
+        if matches!(result, RunResult::Success) && !skip_chain {
             if let Some(chain) = self.chains.get(automation_id) {
                 let next_depth = chain_depth + 1;
                 if next_depth > MAX_CHAIN_DEPTH {
@@ -790,29 +851,405 @@ mod tests {
         assert!(cron.is_ok());
     }
 
-    // ── AutomationStatus auto-disable ──
+    // ── Auto-disable (GPUI integration) ──
 
-    #[test]
-    fn test_auto_disable_threshold() {
-        let mut status = AutomationStatus::default();
-        for _ in 0..AUTO_DISABLE_THRESHOLD {
-            status.consecutive_failures += 1;
+    #[gpui::test]
+    fn test_auto_disable_after_consecutive_failures(cx: &mut gpui::TestAppContext) {
+        let tmp = std::env::temp_dir().join("scheduler_test_auto_disable");
+        let _ = std::fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+
+        let scheduler = cx.new(|cx| Scheduler::new(state_path.clone(), cx));
+
+        // Sync an entry so report_completion has something to work with
+        scheduler.update(cx, |s, _cx| {
+            s.sync_entries(
+                vec![SyncEntry {
+                    automation_id: "flaky-job".to_string(),
+                    cron_expr: "0 3 * * *".to_string(),
+                    enabled: true,
+                    catch_up: CatchUpPolicy::Skip,
+                    timeout_secs: 3600,
+                    chain: None,
+                }],
+                PathBuf::from("/tmp"),
+            );
+        });
+
+        let failure = RunResult::Failed {
+            message: "exit code: 1".to_string(),
+        };
+
+        // Report 4 failures — should NOT auto-disable yet
+        for _ in 0..AUTO_DISABLE_THRESHOLD - 1 {
+            scheduler.update(cx, |s, cx| {
+                s.running_count += 1;
+                s.report_completion("flaky-job", &failure, None, 0, cx);
+            });
         }
-        assert_eq!(status.consecutive_failures, AUTO_DISABLE_THRESHOLD);
+
+        scheduler.read_with(cx, |s, _cx| {
+            let status = &s.status["flaky-job"];
+            assert_eq!(status.consecutive_failures, AUTO_DISABLE_THRESHOLD - 1);
+            assert!(!status.auto_disabled, "should not be disabled before threshold");
+        });
+
+        // 5th failure triggers auto-disable
+        scheduler.update(cx, |s, cx| {
+            s.running_count += 1;
+            s.report_completion("flaky-job", &failure, None, 0, cx);
+        });
+
+        scheduler.read_with(cx, |s, _cx| {
+            let status = &s.status["flaky-job"];
+            assert_eq!(status.consecutive_failures, AUTO_DISABLE_THRESHOLD);
+            assert!(status.auto_disabled, "should be auto-disabled after threshold");
+        });
+
+        // A success resets the counter
+        scheduler.update(cx, |s, cx| {
+            s.running_count += 1;
+            // Manually re-enable to test success reset
+            s.status.get_mut("flaky-job").unwrap().auto_disabled = false;
+            s.report_completion("flaky-job", &RunResult::Success, None, 0, cx);
+        });
+
+        scheduler.read_with(cx, |s, _cx| {
+            let status = &s.status["flaky-job"];
+            assert_eq!(status.consecutive_failures, 0, "success should reset counter");
+            assert!(!status.auto_disabled);
+        });
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
-    // ── ChainConfig ──
+    #[gpui::test]
+    fn test_re_enable_resets_state(cx: &mut gpui::TestAppContext) {
+        let tmp = std::env::temp_dir().join("scheduler_test_re_enable");
+        let _ = std::fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
 
-    #[test]
-    fn test_chain_config_default() {
-        let config: ChainConfig = Default::default();
-        assert!(config.triggers.is_empty());
+        let scheduler = cx.new(|cx| Scheduler::new(state_path.clone(), cx));
+
+        scheduler.update(cx, |s, _cx| {
+            s.sync_entries(
+                vec![SyncEntry {
+                    automation_id: "broken".to_string(),
+                    cron_expr: "0 * * * *".to_string(),
+                    enabled: true,
+                    catch_up: CatchUpPolicy::Skip,
+                    timeout_secs: 3600,
+                    chain: None,
+                }],
+                PathBuf::from("/tmp"),
+            );
+        });
+
+        // Drive to auto-disable
+        let failure = RunResult::Failed {
+            message: "broken".to_string(),
+        };
+        for _ in 0..AUTO_DISABLE_THRESHOLD {
+            scheduler.update(cx, |s, cx| {
+                s.running_count += 1;
+                s.report_completion("broken", &failure, None, 0, cx);
+            });
+        }
+
+        scheduler.read_with(cx, |s, _cx| {
+            assert!(s.status["broken"].auto_disabled);
+        });
+
+        // Re-enable clears both auto_disabled and consecutive_failures
+        scheduler.update(cx, |s, cx| {
+            s.re_enable("broken", cx);
+        });
+
+        scheduler.read_with(cx, |s, _cx| {
+            let status = &s.status["broken"];
+            assert!(!status.auto_disabled);
+            assert_eq!(status.consecutive_failures, 0);
+        });
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
+
+    // ── Chain dispatch (GPUI integration) ──
+
+    #[gpui::test]
+    fn test_chain_fires_on_success(cx: &mut gpui::TestAppContext) {
+        let tmp = std::env::temp_dir().join("scheduler_test_chain_fire");
+        let _ = std::fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+
+        let scheduler = cx.new(|cx| Scheduler::new(state_path.clone(), cx));
+
+        scheduler.update(cx, |s, _cx| {
+            s.sync_entries(
+                vec![
+                    SyncEntry {
+                        automation_id: "review".to_string(),
+                        cron_expr: "0 3 * * *".to_string(),
+                        enabled: true,
+                        catch_up: CatchUpPolicy::Skip,
+                        timeout_secs: 3600,
+                        chain: Some(ChainConfig {
+                            triggers: vec!["deploy".to_string()],
+                        }),
+                    },
+                    SyncEntry {
+                        automation_id: "deploy".to_string(),
+                        cron_expr: "0 6 * * *".to_string(),
+                        enabled: true,
+                        catch_up: CatchUpPolicy::Skip,
+                        timeout_secs: 3600,
+                        chain: None,
+                    },
+                ],
+                PathBuf::from("/tmp"),
+            );
+        });
+
+        // Collect emitted events
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        cx.update(|cx| {
+            cx.subscribe(&scheduler, move |_scheduler, event, _cx| {
+                events_clone.lock().unwrap().push(event.clone());
+            })
+            .detach();
+        });
+
+        // Success on "review" should trigger chain to "deploy"
+        scheduler.update(cx, |s, cx| {
+            s.running_count += 1;
+            s.report_completion("review", &RunResult::Success, None, 0, cx);
+        });
+
+        let fired = events.lock().unwrap();
+        assert_eq!(fired.len(), 1, "expected exactly one chain fire event");
+        match &fired[0] {
+            SchedulerEvent::Fire {
+                automation_id,
+                chain_depth,
+                ..
+            } => {
+                assert_eq!(automation_id, "deploy");
+                assert_eq!(*chain_depth, 1);
+            }
+            other => panic!("expected Fire event, got: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[gpui::test]
+    fn test_chain_skipped_on_failure(cx: &mut gpui::TestAppContext) {
+        let tmp = std::env::temp_dir().join("scheduler_test_chain_fail");
+        let _ = std::fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+
+        let scheduler = cx.new(|cx| Scheduler::new(state_path.clone(), cx));
+
+        scheduler.update(cx, |s, _cx| {
+            s.sync_entries(
+                vec![
+                    SyncEntry {
+                        automation_id: "review".to_string(),
+                        cron_expr: "0 3 * * *".to_string(),
+                        enabled: true,
+                        catch_up: CatchUpPolicy::Skip,
+                        timeout_secs: 3600,
+                        chain: Some(ChainConfig {
+                            triggers: vec!["deploy".to_string()],
+                        }),
+                    },
+                    SyncEntry {
+                        automation_id: "deploy".to_string(),
+                        cron_expr: "0 6 * * *".to_string(),
+                        enabled: true,
+                        catch_up: CatchUpPolicy::Skip,
+                        timeout_secs: 3600,
+                        chain: None,
+                    },
+                ],
+                PathBuf::from("/tmp"),
+            );
+        });
+
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        cx.update(|cx| {
+            cx.subscribe(&scheduler, move |_scheduler, event, _cx| {
+                events_clone.lock().unwrap().push(event.clone());
+            })
+            .detach();
+        });
+
+        // Failure on "review" should NOT trigger chain
+        scheduler.update(cx, |s, cx| {
+            s.running_count += 1;
+            s.report_completion(
+                "review",
+                &RunResult::Failed {
+                    message: "error".to_string(),
+                },
+                None,
+                0,
+                cx,
+            );
+        });
+
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "chain should not fire on failure"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[gpui::test]
+    fn test_chain_skipped_when_skip_chain_set(cx: &mut gpui::TestAppContext) {
+        let tmp = std::env::temp_dir().join("scheduler_test_chain_skip");
+        let _ = std::fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+
+        let scheduler = cx.new(|cx| Scheduler::new(state_path.clone(), cx));
+
+        scheduler.update(cx, |s, _cx| {
+            s.sync_entries(
+                vec![
+                    SyncEntry {
+                        automation_id: "review".to_string(),
+                        cron_expr: "0 3 * * *".to_string(),
+                        enabled: true,
+                        catch_up: CatchUpPolicy::Skip,
+                        timeout_secs: 3600,
+                        chain: Some(ChainConfig {
+                            triggers: vec!["deploy".to_string()],
+                        }),
+                    },
+                    SyncEntry {
+                        automation_id: "deploy".to_string(),
+                        cron_expr: "0 6 * * *".to_string(),
+                        enabled: true,
+                        catch_up: CatchUpPolicy::Skip,
+                        timeout_secs: 3600,
+                        chain: None,
+                    },
+                ],
+                PathBuf::from("/tmp"),
+            );
+        });
+
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        cx.update(|cx| {
+            cx.subscribe(&scheduler, move |_scheduler, event, _cx| {
+                events_clone.lock().unwrap().push(event.clone());
+            })
+            .detach();
+        });
+
+        // Success with skip_chain=true should NOT trigger chain
+        let report = CompletionReport {
+            status: "success".to_string(),
+            skip_chain: true,
+            ..Default::default()
+        };
+        scheduler.update(cx, |s, cx| {
+            s.running_count += 1;
+            s.report_completion("review", &RunResult::Success, Some(&report), 0, cx);
+        });
+
+        assert!(
+            events.lock().unwrap().is_empty(),
+            "chain should not fire when skip_chain is set"
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── ChainConfig serde ──
 
     #[test]
     fn test_chain_config_deserialize() {
         let json = r#"{"triggers": ["review", "deploy"]}"#;
         let config: ChainConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.triggers, vec!["review", "deploy"]);
+    }
+
+    // ── CompletionReport ──
+
+    #[test]
+    fn test_completion_report_valid_success() {
+        let tmp = std::env::temp_dir().join("test_marker_success.json");
+        let json = r#"{"status": "success", "summary": "Quality scan done. Score: 72.", "outputs": ["reports/quality/2026-03-10.md"], "skip_chain": false, "message": ""}"#;
+        std::fs::write(&tmp, json).unwrap();
+
+        let (report, result) = CompletionReport::from_marker(&tmp).unwrap();
+        assert_eq!(result, RunResult::Success);
+        assert_eq!(report.summary, "Quality scan done. Score: 72.");
+        assert_eq!(report.outputs, vec!["reports/quality/2026-03-10.md"]);
+        assert!(!report.skip_chain);
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn test_completion_report_valid_failed() {
+        let tmp = std::env::temp_dir().join("test_marker_failed.json");
+        let json = r#"{"status": "failed: could not read project", "summary": "Config directory missing", "outputs": [], "skip_chain": false, "message": "Check config path"}"#;
+        std::fs::write(&tmp, json).unwrap();
+
+        let (report, result) = CompletionReport::from_marker(&tmp).unwrap();
+        assert!(matches!(result, RunResult::Failed { .. }));
+        assert_eq!(report.message, "Check config path");
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn test_completion_report_malformed_json_is_success() {
+        let tmp = std::env::temp_dir().join("test_marker_malformed.json");
+        std::fs::write(&tmp, "this is not json at all").unwrap();
+
+        let (report, result) = CompletionReport::from_marker(&tmp).unwrap();
+        assert_eq!(result, RunResult::Success);
+        assert_eq!(report.status, "success");
+        assert!(report.summary.is_empty());
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn test_completion_report_nonexistent_file() {
+        let result = CompletionReport::from_marker(Path::new("/nonexistent/marker.json"));
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_completion_report_skip_chain() {
+        let tmp = std::env::temp_dir().join("test_marker_skip.json");
+        let json = r#"{"status": "success", "summary": "No changes since last scan", "outputs": [], "skip_chain": true, "message": ""}"#;
+        std::fs::write(&tmp, json).unwrap();
+
+        let (report, _result) = CompletionReport::from_marker(&tmp).unwrap();
+        assert!(report.skip_chain);
+
+        std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn test_completion_marker_path() {
+        let path = completion_marker_path(
+            Path::new("/state"),
+            "daily-scan",
+            1710104400,
+        );
+        assert_eq!(
+            path,
+            PathBuf::from("/state/completed/daily-scan-1710104400.json")
+        );
     }
 }
