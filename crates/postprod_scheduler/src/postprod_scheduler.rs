@@ -856,6 +856,7 @@ mod tests {
     #[gpui::test]
     fn test_auto_disable_after_consecutive_failures(cx: &mut gpui::TestAppContext) {
         let tmp = std::env::temp_dir().join("scheduler_test_auto_disable");
+        let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::create_dir_all(&tmp);
         let state_path = tmp.join("state.json");
 
@@ -926,6 +927,7 @@ mod tests {
     #[gpui::test]
     fn test_re_enable_resets_state(cx: &mut gpui::TestAppContext) {
         let tmp = std::env::temp_dir().join("scheduler_test_re_enable");
+        let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::create_dir_all(&tmp);
         let state_path = tmp.join("state.json");
 
@@ -979,6 +981,7 @@ mod tests {
     #[gpui::test]
     fn test_chain_fires_on_success(cx: &mut gpui::TestAppContext) {
         let tmp = std::env::temp_dir().join("scheduler_test_chain_fire");
+        let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::create_dir_all(&tmp);
         let state_path = tmp.join("state.json");
 
@@ -1046,6 +1049,7 @@ mod tests {
     #[gpui::test]
     fn test_chain_skipped_on_failure(cx: &mut gpui::TestAppContext) {
         let tmp = std::env::temp_dir().join("scheduler_test_chain_fail");
+        let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::create_dir_all(&tmp);
         let state_path = tmp.join("state.json");
 
@@ -1111,6 +1115,7 @@ mod tests {
     #[gpui::test]
     fn test_chain_skipped_when_skip_chain_set(cx: &mut gpui::TestAppContext) {
         let tmp = std::env::temp_dir().join("scheduler_test_chain_skip");
+        let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::create_dir_all(&tmp);
         let state_path = tmp.join("state.json");
 
