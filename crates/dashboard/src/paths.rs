@@ -56,6 +56,10 @@ pub(crate) fn automations_dir_for(config_root: &Path) -> PathBuf {
     config_dir_for(config_root).join("automations")
 }
 
+pub(crate) fn local_tools_dir_for(config_root: &Path) -> PathBuf {
+    config_root.join("tools")
+}
+
 pub(crate) fn agents_toml_path_for(config_root: &Path) -> PathBuf {
     config_dir_for(config_root).join("AGENTS.toml")
 }
