@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+
+# Interactive build cache cleaner for PostProd IDE.
+# Shows what's in target/ and lets the user pick what to remove.
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+TARGET="$REPO_ROOT/target"
+
+if [[ ! -d "$TARGET" ]]; then
+    echo "No target/ directory found at $REPO_ROOT"
+    exit 0
+fi
+
+human_size() {
+    du -sh "$1" 2>/dev/null | cut -f1
+}
+
+total_size=$(human_size "$TARGET")
+
+echo "═══════════════════════════════════════════════════"
+echo "  PostProd IDE — Build Cache Cleaner"
+echo "═══════════════════════════════════════════════════"
+echo ""
+echo "  target/ total size: $total_size"
+echo ""
+
+# Gather sizes
+debug_size="—"
+debug_exists=false
+if [[ -d "$TARGET/debug" ]]; then
+    debug_size=$(human_size "$TARGET/debug")
+    debug_exists=true
+fi
+
+release_cache_size="—"
+release_cache_exists=false
+release_cache_total=0
+for sub in deps build .fingerprint incremental examples old; do
+    if [[ -d "$TARGET/release/$sub" ]]; then
+        release_cache_exists=true
+    fi
+done
+if $release_cache_exists; then
+    # Sum up all removable release subdirs (excluding the binary and symlinks)
+    release_cache_size=$(
+        du -shc "$TARGET/release/deps" "$TARGET/release/build" \
+               "$TARGET/release/.fingerprint" "$TARGET/release/incremental" \
+               "$TARGET/release/examples" "$TARGET/release/old" 2>/dev/null \
+        | tail -1 | cut -f1
+    )
+fi
+
+release_full_size="—"
+if [[ -d "$TARGET/release" ]]; then
+    release_full_size=$(human_size "$TARGET/release")
+fi
+
+binary_size="—"
+binary_exists=false
+if [[ -f "$TARGET/release/postprod-ide" ]]; then
+    binary_size=$(human_size "$TARGET/release/postprod-ide")
+    binary_exists=true
+fi
+
+flycheck_size="—"
+flycheck_exists=false
+flycheck_dirs=()
+for dir in "$TARGET"/flycheck*; do
+    if [[ -d "$dir" ]]; then
+        flycheck_exists=true
+        flycheck_dirs+=("$dir")
+    fi
+done
+if $flycheck_exists; then
+    flycheck_size=$(du -shc "${flycheck_dirs[@]}" 2>/dev/null | tail -1 | cut -f1)
+fi
+
+echo "  What's inside:"
+echo ""
+if $debug_exists; then
+    echo "    debug/          $debug_size"
+    echo "      Full debug profile: debug builds, deps, incremental"
+    echo "      compile data, build scripts, fingerprints."
+    echo "      Removing this forces a full recompile for debug builds."
+    echo ""
+fi
+if [[ -d "$TARGET/release" ]]; then
+    echo "    release/        $release_full_size"
+    if $binary_exists; then
+        echo "      postprod-ide  $binary_size  (the app binary)"
+    fi
+    echo "      deps/         $(du -sh "$TARGET/release/deps" 2>/dev/null | cut -f1 || echo '—')  (compiled dependencies)"
+    echo "      build/        $(du -sh "$TARGET/release/build" 2>/dev/null | cut -f1 || echo '—')  (build script output)"
+    if [[ -d "$TARGET/release/incremental" ]]; then
+        echo "      incremental/  $(du -sh "$TARGET/release/incremental" 2>/dev/null | cut -f1)  (incremental compile data)"
+    fi
+    echo "      Removing cache keeps binary but next release build recompiles all deps."
+    echo ""
+fi
+if $flycheck_exists; then
+    echo "    flycheck*/      $flycheck_size  (rust-analyzer temp files)"
+    echo ""
+fi
+
+echo "═══════════════════════════════════════════════════"
+echo "  Options:"
+echo "═══════════════════════════════════════════════════"
+echo ""
+echo "  1) Clean debug only                          (~$debug_size freed)"
+echo "     Removes target/debug/ entirely."
+echo "     Next 'cargo build' (debug) will recompile from scratch."
+echo "     Release binary and release cache are untouched."
+echo ""
+echo "  2) Clean release cache (keep binary)         (~$release_cache_size freed)"
+echo "     Removes deps/, build/, .fingerprint/, incremental/, examples/, old/"
+echo "     Keeps the release binary and symlinks (agent/, runtime/)."
+echo "     Next 'cargo build --release' recompiles all dependencies."
+echo ""
+echo "  3) Clean release entirely                    (~$release_full_size freed)"
+echo "     Removes ALL of target/release/ including the binary."
+echo "     You will need to rebuild before running the app."
+echo ""
+echo "  4) Clean everything except release binary    (~saves $binary_size)"
+echo "     Removes debug/ + release cache + flycheck/."
+echo "     The app binary stays — you can still run the current build."
+echo "     Both debug and release builds will recompile from scratch."
+echo ""
+echo "  5) Nuclear — delete entire target/           (~$total_size freed)"
+echo "     Removes everything. Full recompile required for any build."
+echo "     Use this when target/ has grown unreasonably large."
+echo ""
+echo "  q) Quit"
+echo ""
+
+read -rp "  Choose [1-5, q]: " choice
+echo ""
+
+case "$choice" in
+    1)
+        if ! $debug_exists; then
+            echo "  No debug/ directory to clean."
+            exit 0
+        fi
+        echo "  Removing target/debug/..."
+        rm -rf "$TARGET/debug"
+        ;;
+    2)
+        if ! $release_cache_exists; then
+            echo "  No release cache to clean."
+            exit 0
+        fi
+        echo "  Removing release cache (keeping binary and symlinks)..."
+        for sub in deps build .fingerprint incremental examples old; do
+            if [[ -d "$TARGET/release/$sub" ]]; then
+                echo "    Removing release/$sub/..."
+                rm -rf "$TARGET/release/$sub"
+            fi
+        done
+        # Remove .d files in release root
+        find "$TARGET/release" -maxdepth 1 -name "*.d" -delete 2>/dev/null || true
+        echo "    Removed release/*.d files"
+        ;;
+    3)
+        echo "  ⚠  This will delete the release binary. You must rebuild before running."
+        read -rp "  Are you sure? [y/N]: " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo "  Cancelled."
+            exit 0
+        fi
+        echo "  Removing target/release/..."
+        rm -rf "$TARGET/release"
+        ;;
+    4)
+        echo "  Cleaning debug + release cache + flycheck (keeping release binary)..."
+        if $debug_exists; then
+            echo "    Removing debug/..."
+            rm -rf "$TARGET/debug"
+        fi
+        for sub in deps build .fingerprint incremental examples old; do
+            if [[ -d "$TARGET/release/$sub" ]]; then
+                echo "    Removing release/$sub/..."
+                rm -rf "$TARGET/release/$sub"
+            fi
+        done
+        find "$TARGET/release" -maxdepth 1 -name "*.d" -delete 2>/dev/null || true
+        for dir in "${flycheck_dirs[@]+"${flycheck_dirs[@]}"}"; do
+            if [[ -d "$dir" ]]; then
+                echo "    Removing $(basename "$dir")/..."
+                rm -rf "$dir"
+            fi
+        done
+        ;;
+    5)
+        echo "  ⚠  This will delete EVERYTHING in target/ ($total_size)."
+        echo "     Full recompile required (~8-10 minutes for release)."
+        read -rp "  Are you sure? [y/N]: " confirm
+        if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
+            echo "  Cancelled."
+            exit 0
+        fi
+        echo "  Removing entire target/..."
+        rm -rf "$TARGET"
+        echo ""
+        echo "  Done. target/ removed entirely."
+        exit 0
+        ;;
+    q|Q|"")
+        echo "  Cancelled."
+        exit 0
+        ;;
+    *)
+        echo "  Invalid option."
+        exit 1
+        ;;
+esac
+
+new_size=$(human_size "$TARGET")
+echo ""
+echo "  Done. target/ now: $new_size (was $total_size)"
