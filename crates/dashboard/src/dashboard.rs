@@ -11,8 +11,8 @@ use config::{
 };
 use paths::{
     DeliveryStatus, automations_dir_for, ensure_config_extracted, ensure_workspace_dirs,
-    folder_has_dashboard_config, resolve_agent_tools_path, resolve_bin, resolve_runtime_path,
-    scan_delivery_folder, state_dir_for, suite_root, tools_config_dir_for,
+    folder_has_dashboard_config, local_tools_dir_for, resolve_agent_tools_path, resolve_bin,
+    resolve_runtime_path, scan_delivery_folder, state_dir_for, suite_root, tools_config_dir_for,
 };
 use persistence::{
     group_by_section, read_active_folder, read_background_tools, read_collapsed_sections,
@@ -237,6 +237,7 @@ pub(crate) fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
                                 d.tools.iter().find(|t| t.id == tool_id).cloned(),
                                 d.runtime_path.clone(),
                                 d.agent_tools_path.clone(),
+                                d.config_root.clone(),
                                 d.session_path.clone(),
                                 d.active_folder.clone(),
                                 d.background_tools.contains(&tool_id),
@@ -248,6 +249,7 @@ pub(crate) fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
                         Some(tool),
                         runtime_path,
                         agent_tools_path,
+                        config_root,
                         session_path,
                         active_folder,
                         is_background,
@@ -259,6 +261,7 @@ pub(crate) fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
                                 &tool,
                                 &runtime_path,
                                 &agent_tools_path,
+                                &config_root,
                                 &session_path,
                                 &active_folder,
                                 &tool_param_values,
@@ -270,6 +273,7 @@ pub(crate) fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
                                 &tool,
                                 &runtime_path,
                                 &agent_tools_path,
+                                &config_root,
                                 &session_path,
                                 &active_folder,
                                 &tool_param_values,
@@ -782,42 +786,53 @@ impl Dashboard {
         tool: &ToolEntry,
         runtime_path: &Path,
         agent_tools_path: &Path,
+        config_root: &Path,
         session_path: &Option<String>,
         active_folder: &Option<PathBuf>,
         tool_param_values: &HashMap<String, String>,
     ) -> (String, Vec<String>, PathBuf, HashMap<String, String>) {
-        let is_agent_tool = tool.source == ToolSource::Agent;
-
-        let (command, cwd) = if is_agent_tool {
-            let cmd = agent_tools_path
-                .join(&tool.binary)
-                .to_string_lossy()
-                .to_string();
-            let work_dir = agent_tools_path.to_path_buf();
-            (cmd, work_dir)
-        } else {
-            let cmd = runtime_path
-                .join(&tool.cwd)
-                .join(&tool.binary)
-                .to_string_lossy()
-                .to_string();
-            let work_dir = if tool.tier == ToolTier::Standard && tool.source == ToolSource::Runtime
-            {
-                if let Some(pa) = active_folder {
-                    pa.clone()
+        let (command, cwd) = match tool.source {
+            ToolSource::Agent => {
+                let cmd = agent_tools_path
+                    .join(&tool.binary)
+                    .to_string_lossy()
+                    .to_string();
+                let work_dir = agent_tools_path.to_path_buf();
+                (cmd, work_dir)
+            }
+            ToolSource::Local => {
+                let local_tools = local_tools_dir_for(config_root);
+                let tool_dir = if tool.cwd.is_empty() {
+                    local_tools
+                } else {
+                    local_tools.join(&tool.cwd)
+                };
+                let cmd = tool_dir.join(&tool.binary).to_string_lossy().to_string();
+                let work_dir = tool_dir;
+                (cmd, work_dir)
+            }
+            ToolSource::Runtime => {
+                let cmd = runtime_path
+                    .join(&tool.cwd)
+                    .join(&tool.binary)
+                    .to_string_lossy()
+                    .to_string();
+                let work_dir = if tool.tier == ToolTier::Standard {
+                    if let Some(pa) = active_folder {
+                        pa.clone()
+                    } else {
+                        runtime_path.join(&tool.cwd)
+                    }
                 } else {
                     runtime_path.join(&tool.cwd)
-                }
-            } else {
-                runtime_path.join(&tool.cwd)
-            };
-            (cmd, work_dir)
+                };
+                (cmd, work_dir)
+            }
         };
 
-        let mut args = if is_agent_tool {
-            vec!["--output-json".to_string()]
-        } else {
-            vec![]
+        let mut args = match tool.source {
+            ToolSource::Agent => vec!["--output-json".to_string()],
+            ToolSource::Runtime | ToolSource::Local => vec![],
         };
 
         if tool.needs_session {
@@ -854,6 +869,7 @@ impl Dashboard {
         tool: &ToolEntry,
         runtime_path: &Path,
         agent_tools_path: &Path,
+        config_root: &Path,
         session_path: &Option<String>,
         active_folder: &Option<PathBuf>,
         tool_param_values: &HashMap<String, String>,
@@ -865,6 +881,7 @@ impl Dashboard {
             tool,
             runtime_path,
             agent_tools_path,
+            config_root,
             session_path,
             active_folder,
             tool_param_values,
@@ -897,6 +914,7 @@ impl Dashboard {
         tool: &ToolEntry,
         runtime_path: &Path,
         agent_tools_path: &Path,
+        config_root: &Path,
         session_path: &Option<String>,
         active_folder: &Option<PathBuf>,
         tool_param_values: &HashMap<String, String>,
@@ -906,6 +924,7 @@ impl Dashboard {
             tool,
             runtime_path,
             agent_tools_path,
+            config_root,
             session_path,
             active_folder,
             tool_param_values,
@@ -2196,6 +2215,7 @@ Rules for the completion report:
         let is_background = self.background_tools.contains(&tool.id);
         let runtime_path = self.runtime_path.clone();
         let agent_tools_path = self.agent_tools_path.clone();
+        let config_root = self.config_root.clone();
         let workspace = self.workspace.clone();
         let session_path = self.session_path.clone();
         let active_folder = self.active_folder.clone();
@@ -2205,6 +2225,7 @@ Rules for the completion report:
         move |_, window, cx| {
             let runtime_path = runtime_path.clone();
             let agent_tools_path = agent_tools_path.clone();
+            let config_root = config_root.clone();
             let active_folder = active_folder.clone();
             let session_path = session_path.clone();
             let tool_param_values = tool_param_values.clone();
@@ -2214,6 +2235,7 @@ Rules for the completion report:
                         &tool,
                         &runtime_path,
                         &agent_tools_path,
+                        &config_root,
                         &session_path,
                         &active_folder,
                         &tool_param_values,
@@ -2226,6 +2248,7 @@ Rules for the completion report:
                         &tool,
                         &runtime_path,
                         &agent_tools_path,
+                        &config_root,
                         &session_path,
                         &active_folder,
                         &tool_param_values,
@@ -3508,6 +3531,7 @@ impl Render for Dashboard {
                     let is_background = this.background_tools.contains(&action.tool_id);
                     let runtime_path = this.runtime_path.clone();
                     let agent_tools_path = this.agent_tools_path.clone();
+                    let config_root = this.config_root.clone();
                     let session_path = this.session_path.clone();
                     let active_folder = this.active_folder.clone();
                     let tool_param_values = this
@@ -3521,6 +3545,7 @@ impl Render for Dashboard {
                                 &tool,
                                 &runtime_path,
                                 &agent_tools_path,
+                                &config_root,
                                 &session_path,
                                 &active_folder,
                                 &tool_param_values,
@@ -3533,6 +3558,7 @@ impl Render for Dashboard {
                                 &tool,
                                 &runtime_path,
                                 &agent_tools_path,
+                                &config_root,
                                 &session_path,
                                 &active_folder,
                                 &tool_param_values,
