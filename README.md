@@ -38,6 +38,10 @@ The app ships clean — no tools, no automations baked in. Domain content comes 
 
 The fork footprint is minimal — the entire feature set lives in `crates/dashboard/` and `crates/postprod_scheduler/`, with roughly twenty lines of glue across upstream Zed files. This keeps bi-weekly rebases manageable.
 
+## PostProd Tools
+
+The first product built on this platform: **[PostProd Tools](https://github.com/Caio-Ze/postprod-tools)** — Pro Tools automation for audio post-production studios. 40+ tools for bouncing, batch processing, session monitoring, and AI-driven workflows, all controllable from the dashboard.
+
 ## Building
 
 macOS only (for now). Requires the same dependencies as Zed:
