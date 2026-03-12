@@ -62,9 +62,9 @@ Before any destructive action (rewrite, delete module, force-push):
 | Design philosophy | `private/principles/DESIGN_PHILOSOPHY.md` |
 | Engineering philosophy | `private/principles/ENGINEERING_PHILOSOPHY.md` |
 | Skill/automation/agent system | `private/reference/SKILL_SYSTEM.md` |
-| Current improvement roadmap | `private/IMPROVEMENT_PLAN.md` |
-| Task breakdown for agents | `private/IMPROVEMENT_TASKS.md` |
+| Known bugs and problems | `private/know_bugs_problems.md` |
 | Release and distribution | `private/release/DISTRIBUTION_PLAN.md` |
+| Deployment guide | `private/release/DEPLOYMENT_GUIDE.md` |
 | Project story and history | `private/PROJECT_STORY.md` |
 | GitHub safety | `private/GITHUB_INSTRUCTIONS.md` |
 
