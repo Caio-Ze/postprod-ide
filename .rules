@@ -22,7 +22,7 @@ This is a Zed fork. These rules override upstream conventions where they conflic
 - Upstream anchor (what upstream code it depends on, so we know what to watch during rebases)
 - Add the file to the Quick Lookup table at the top of the file
 
-This is not optional documentation — it is the conflict resolution guide for monthly rebases. Undocumented upstream modifications cause silent merge conflicts that break the build.
+This is not optional documentation — it is the conflict resolution guide for rebases. Undocumented upstream modifications cause silent merge conflicts that break the build.
 
 ## Design First
 No implementation without an approved plan:
@@ -66,6 +66,7 @@ Before any destructive action (rewrite, delete module, force-push):
 | Release and distribution | `private/release/DISTRIBUTION_PLAN.md` |
 | Deployment guide | `private/release/DEPLOYMENT_GUIDE.md` |
 | Project story and history | `private/PROJECT_STORY.md` |
+| Rebase knowledge base | `private/fork/Rebase/` |
 | GitHub safety | `private/GITHUB_INSTRUCTIONS.md` |
 
 ---
