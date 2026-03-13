@@ -1,7 +1,8 @@
+mod automation_picker;
 mod config;
 mod hotkeys;
 mod paths;
-mod persistence;
+pub(crate) mod persistence;
 mod scheduler_ui;
 
 use config::{
@@ -44,7 +45,7 @@ use ui::{
 };
 use project::WorktreeId;
 use workspace::{
-    DraggedSelection, MultiWorkspace, OpenOptions, Pane, ProToolsSessionName, Toast,
+    DraggedSelection, OpenOptions, Pane, ProToolsSessionName, Toast,
     Workspace,
     item::{Item, ItemEvent},
     notifications::NotificationId,
@@ -168,6 +169,25 @@ pub fn init(cx: &mut App) {
                 .detach();
         });
     });
+
+    cx.observe_new::<Workspace>(|workspace, _, _cx| {
+        workspace.register_action(
+            |workspace, _: &automation_picker::RunAutomationPicker, window, cx| {
+                let entries = automation_picker::build_picker_entries(workspace, cx);
+                let weak_workspace = workspace.weak_handle();
+                workspace.toggle_modal(window, cx, move |window, cx| {
+                    automation_picker::build_picker(entries, weak_workspace, window, cx)
+                });
+            },
+        );
+    })
+    .detach();
+
+    cx.bind_keys([gpui::KeyBinding::new(
+        "cmd-shift-d",
+        automation_picker::RunAutomationPicker,
+        None,
+    )]);
 }
 
 /// Ensure a Dashboard tab exists in the workspace, and switch config_root
@@ -203,90 +223,6 @@ pub fn ensure_dashboard(
         pane.set_pinned_count(pane.pinned_count() + 1);
     });
     set_pane_drop_predicate(workspace.active_pane(), workspace, cx);
-}
-
-
-pub(crate) fn dispatch_global_tool(tool_id: &str, cx: &mut App) {
-    let multi_workspace_handle = cx
-        .active_window()
-        .and_then(|w| w.downcast::<MultiWorkspace>())
-        .or_else(|| {
-            cx.windows()
-                .into_iter()
-                .find_map(|w| w.downcast::<MultiWorkspace>())
-        });
-
-    if let Some(multi_workspace) = multi_workspace_handle {
-        let tool_id = tool_id.to_string();
-        multi_workspace
-            .update(cx, |multi_workspace, window, cx| {
-                let workspace_entity = multi_workspace.workspace().clone();
-                workspace_entity.update(cx, |workspace, cx| {
-                    ensure_dashboard(workspace, window, cx);
-
-                    let dashboard_data = workspace
-                        .panes()
-                        .iter()
-                        .flat_map(|pane| pane.read(cx).items())
-                        .find_map(|item| item.downcast::<Dashboard>())
-                        .map(|d| {
-                            let d = d.read(cx);
-                            let tool_param_values =
-                                d.param_values.get(&tool_id).cloned().unwrap_or_default();
-                            (
-                                d.tools.iter().find(|t| t.id == tool_id).cloned(),
-                                d.runtime_path.clone(),
-                                d.agent_tools_path.clone(),
-                                d.config_root.clone(),
-                                d.session_path.clone(),
-                                d.active_folder.clone(),
-                                d.background_tools.contains(&tool_id),
-                                tool_param_values,
-                            )
-                        });
-
-                    if let Some((
-                        Some(tool),
-                        runtime_path,
-                        agent_tools_path,
-                        config_root,
-                        session_path,
-                        active_folder,
-                        is_background,
-                        tool_param_values,
-                    )) = dashboard_data
-                    {
-                        if is_background {
-                            Dashboard::spawn_tool_background(
-                                &tool,
-                                &runtime_path,
-                                &agent_tools_path,
-                                &config_root,
-                                &session_path,
-                                &active_folder,
-                                &tool_param_values,
-                                cx,
-                            );
-                        } else {
-                            cx.activate(true);
-                            Dashboard::spawn_tool_entry(
-                                &tool,
-                                &runtime_path,
-                                &agent_tools_path,
-                                &config_root,
-                                &session_path,
-                                &active_folder,
-                                &tool_param_values,
-                                workspace,
-                                window,
-                                cx,
-                            );
-                        }
-                    }
-                });
-            })
-            .log_err();
-    }
 }
 
 
@@ -363,11 +299,11 @@ pub struct Dashboard {
     last_worktree_override: Option<WorktreeId>,
     _workspace_observation: Option<Subscription>,
     focus_handle: FocusHandle,
-    config_root: PathBuf,
+    pub(crate) config_root: PathBuf,
     runtime_path: PathBuf,
     agent_tools_path: PathBuf,
     // TOML-driven tool registry
-    tools: Vec<ToolEntry>,
+    pub(crate) tools: Vec<ToolEntry>,
     // Session polling
     session_path: Option<String>,
     session_name: Option<String>,
@@ -382,7 +318,7 @@ pub struct Dashboard {
     delivery_status: DeliveryStatus,
     _delivery_scan_task: gpui::Task<()>,
     // Automations (loaded from TOML)
-    automations: Vec<AutomationEntry>,
+    pub(crate) automations: Vec<AutomationEntry>,
     agent_backend: AgentBackend,
     backends: Vec<BackendEntry>,
     agent_launchers: Vec<AgentEntry>,
@@ -411,6 +347,89 @@ pub struct Dashboard {
     scheduler: Entity<Scheduler>,
     window_handle: Option<AnyWindowHandle>,
     _scheduler_subscription: Subscription,
+}
+
+pub(crate) fn resolve_tool_command(
+    tool: &ToolEntry,
+    runtime_path: &Path,
+    agent_tools_path: &Path,
+    config_root: &Path,
+    session_path: &Option<String>,
+    active_folder: &Option<PathBuf>,
+    tool_param_values: &HashMap<String, String>,
+) -> (String, Vec<String>, PathBuf, HashMap<String, String>) {
+    let (command, cwd) = match tool.source {
+        ToolSource::Agent => {
+            let cmd = agent_tools_path
+                .join(&tool.binary)
+                .to_string_lossy()
+                .to_string();
+            let work_dir = agent_tools_path.to_path_buf();
+            (cmd, work_dir)
+        }
+        ToolSource::Local => {
+            let local_tools = local_tools_dir_for(config_root);
+            let tool_dir = if tool.cwd.is_empty() {
+                local_tools
+            } else {
+                local_tools.join(&tool.cwd)
+            };
+            let cmd = tool_dir.join(&tool.binary).to_string_lossy().to_string();
+            let work_dir = tool_dir;
+            (cmd, work_dir)
+        }
+        ToolSource::Runtime => {
+            let cmd = runtime_path
+                .join(&tool.cwd)
+                .join(&tool.binary)
+                .to_string_lossy()
+                .to_string();
+            let work_dir = if tool.tier == ToolTier::Standard {
+                if let Some(pa) = active_folder {
+                    pa.clone()
+                } else {
+                    runtime_path.join(&tool.cwd)
+                }
+            } else {
+                runtime_path.join(&tool.cwd)
+            };
+            (cmd, work_dir)
+        }
+    };
+
+    let mut args = match tool.source {
+        ToolSource::Agent => vec!["--output-json".to_string()],
+        ToolSource::Runtime | ToolSource::Local => vec![],
+    };
+
+    if tool.needs_session {
+        if let Some(session) = session_path {
+            args.insert(0, session.clone());
+            args.insert(0, "--session".to_string());
+        }
+    }
+
+    args.extend(tool.extra_args.iter().cloned());
+
+    for param in &tool.params {
+        if let Some(value) = tool_param_values.get(&param.key) {
+            if !value.is_empty() {
+                args.push(format!("--{}", param.key));
+                args.push(value.clone());
+            }
+        }
+    }
+
+    let mut env = HashMap::new();
+    let ffmpeg_candidate = runtime_path.join("tools/ffmpeg");
+    if ffmpeg_candidate.exists() {
+        env.insert(
+            "FFMPEG_PATH".to_string(),
+            ffmpeg_candidate.to_string_lossy().to_string(),
+        );
+    }
+
+    (command, args, cwd, env)
 }
 
 impl Dashboard {
@@ -782,89 +801,6 @@ impl Dashboard {
         })
     }
 
-    fn resolve_tool_command(
-        tool: &ToolEntry,
-        runtime_path: &Path,
-        agent_tools_path: &Path,
-        config_root: &Path,
-        session_path: &Option<String>,
-        active_folder: &Option<PathBuf>,
-        tool_param_values: &HashMap<String, String>,
-    ) -> (String, Vec<String>, PathBuf, HashMap<String, String>) {
-        let (command, cwd) = match tool.source {
-            ToolSource::Agent => {
-                let cmd = agent_tools_path
-                    .join(&tool.binary)
-                    .to_string_lossy()
-                    .to_string();
-                let work_dir = agent_tools_path.to_path_buf();
-                (cmd, work_dir)
-            }
-            ToolSource::Local => {
-                let local_tools = local_tools_dir_for(config_root);
-                let tool_dir = if tool.cwd.is_empty() {
-                    local_tools
-                } else {
-                    local_tools.join(&tool.cwd)
-                };
-                let cmd = tool_dir.join(&tool.binary).to_string_lossy().to_string();
-                let work_dir = tool_dir;
-                (cmd, work_dir)
-            }
-            ToolSource::Runtime => {
-                let cmd = runtime_path
-                    .join(&tool.cwd)
-                    .join(&tool.binary)
-                    .to_string_lossy()
-                    .to_string();
-                let work_dir = if tool.tier == ToolTier::Standard {
-                    if let Some(pa) = active_folder {
-                        pa.clone()
-                    } else {
-                        runtime_path.join(&tool.cwd)
-                    }
-                } else {
-                    runtime_path.join(&tool.cwd)
-                };
-                (cmd, work_dir)
-            }
-        };
-
-        let mut args = match tool.source {
-            ToolSource::Agent => vec!["--output-json".to_string()],
-            ToolSource::Runtime | ToolSource::Local => vec![],
-        };
-
-        if tool.needs_session {
-            if let Some(session) = session_path {
-                args.insert(0, session.clone());
-                args.insert(0, "--session".to_string());
-            }
-        }
-
-        args.extend(tool.extra_args.iter().cloned());
-
-        for param in &tool.params {
-            if let Some(value) = tool_param_values.get(&param.key) {
-                if !value.is_empty() {
-                    args.push(format!("--{}", param.key));
-                    args.push(value.clone());
-                }
-            }
-        }
-
-        let mut env = HashMap::new();
-        let ffmpeg_candidate = runtime_path.join("tools/ffmpeg");
-        if ffmpeg_candidate.exists() {
-            env.insert(
-                "FFMPEG_PATH".to_string(),
-                ffmpeg_candidate.to_string_lossy().to_string(),
-            );
-        }
-
-        (command, args, cwd, env)
-    }
-
     pub(crate) fn spawn_tool_entry(
         tool: &ToolEntry,
         runtime_path: &Path,
@@ -877,7 +813,7 @@ impl Dashboard {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
-        let (command, args, cwd, env) = Self::resolve_tool_command(
+        let (command, args, cwd, env) = resolve_tool_command(
             tool,
             runtime_path,
             agent_tools_path,
@@ -920,7 +856,7 @@ impl Dashboard {
         tool_param_values: &HashMap<String, String>,
         cx: &mut Context<Workspace>,
     ) {
-        let (command, args, cwd, env) = Self::resolve_tool_command(
+        let (command, args, cwd, env) = resolve_tool_command(
             tool,
             runtime_path,
             agent_tools_path,
@@ -1612,11 +1548,12 @@ Rules for the completion report:
         cx: &mut Context<Self>,
     ) {
         let workspace = self.workspace.clone();
+        let config_root = self.config_root.clone();
         workspace.update(cx, |workspace, cx| {
             workspace.toggle_modal(window, cx, {
                 let tool_id = tool_id.clone();
                 let tool_label = tool_label.clone();
-                move |window, cx| GlobalShortcutModal::new(tool_id, tool_label, window, cx)
+                move |window, cx| GlobalShortcutModal::new(tool_id, tool_label, config_root, window, cx)
             });
         }).log_err();
     }
