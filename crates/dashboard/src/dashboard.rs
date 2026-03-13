@@ -184,7 +184,7 @@ pub fn init(cx: &mut App) {
     .detach();
 
     cx.bind_keys([gpui::KeyBinding::new(
-        "cmd-shift-d",
+        "cmd-alt-d",
         automation_picker::RunAutomationPicker,
         None,
     )]);
