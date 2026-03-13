@@ -10,16 +10,28 @@ use ui::{
     Button, ButtonStyle, Label, LabelSize, Modal, ModalFooter, ModalHeader, Section,
     prelude::*,
 };
-use workspace::ModalView;
+use workspace::{
+    ModalView, MultiWorkspace,
+    notifications::{
+        NotificationId,
+        show_app_notification,
+        simple_message_notification::MessageNotification,
+    },
+};
+use task::{RevealStrategy, SpawnInTerminal, TaskId};
 use util::ResultExt as _;
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::config::{
-    ensure_global_hotkeys_config, global_hotkeys_toml_path, load_global_hotkeys_config,
+    ToolEntry, ensure_global_hotkeys_config, global_hotkeys_toml_path,
+    load_global_hotkeys_config, load_tools_registry,
 };
-use crate::dispatch_global_tool;
+use crate::paths::{resolve_agent_tools_path, resolve_runtime_path, state_dir_for, suite_root};
+use crate::persistence::read_background_tools;
+use crate::resolve_tool_command;
 
 // ---------------------------------------------------------------------------
 // Key mapping
@@ -152,6 +164,215 @@ pub(crate) fn keystroke_to_display(keystroke_str: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Resolved hotkey entry — per-shortcut data including its own config_root
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub(crate) struct ResolvedHotkeyEntry {
+    pub(crate) tool_id: String,
+    pub(crate) config_root: PathBuf,
+    pub(crate) tool: Option<ToolEntry>,
+    pub(crate) keystroke_display: String,
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions for reading volatile state from disk
+// ---------------------------------------------------------------------------
+
+fn expand_tilde(path_str: &str) -> PathBuf {
+    if let Some(rest) = path_str.strip_prefix("~/") {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path_str)
+}
+
+pub(crate) fn read_state_string_pub(path: &Path) -> Option<String> {
+    read_state_string(path)
+}
+
+pub(crate) fn read_param_values_pub(path: &Path, tool_id: &str) -> HashMap<String, String> {
+    read_param_values(path, tool_id)
+}
+
+fn read_state_string(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn read_param_values(path: &Path, tool_id: &str) -> HashMap<String, String> {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
+    let Ok(table) = content.parse::<toml::Table>() else {
+        return HashMap::new();
+    };
+    table
+        .get(tool_id)
+        .and_then(|v| v.as_table())
+        .map(|t| {
+            t.iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
+// Notification helper
+// ---------------------------------------------------------------------------
+
+struct GlobalHotkeyNotification;
+
+fn show_hotkey_error(cx: &mut App, message: String) {
+    show_app_notification(
+        NotificationId::unique::<GlobalHotkeyNotification>(),
+        cx,
+        move |cx| {
+            cx.new(|cx| MessageNotification::new(message.clone(), cx))
+        },
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Self-contained hotkey dispatch — no Dashboard traversal
+// ---------------------------------------------------------------------------
+
+fn dispatch_hotkey_tool(
+    tool_id: &str,
+    hotkey_entries: &[ResolvedHotkeyEntry],
+    cx: &mut App,
+) {
+    let Some(entry) = hotkey_entries.iter().find(|e| e.tool_id == tool_id) else {
+        log::warn!("global hotkey: tool '{}' not found in resolved entries", tool_id);
+        show_hotkey_error(
+            cx,
+            format!("Hotkey failed: tool '{}' not found in dashboard config", tool_id),
+        );
+        return;
+    };
+
+    let Some(tool) = &entry.tool else {
+        log::warn!("global hotkey: tool config for '{}' not loaded", tool_id);
+        show_hotkey_error(
+            cx,
+            format!("Hotkey failed: tool '{}' not found in config at {}", tool_id, entry.config_root.display()),
+        );
+        return;
+    };
+
+    let runtime_path = resolve_runtime_path();
+    let agent_tools_path = resolve_agent_tools_path();
+
+    let state_dir = state_dir_for(&entry.config_root);
+    let active_folder = read_state_string(&state_dir.join("active_folder"))
+        .map(PathBuf::from);
+    let session_path = if tool.needs_session {
+        read_state_string(&state_dir.join("session_path"))
+    } else {
+        None
+    };
+    let param_values = read_param_values(&state_dir.join("param_values.toml"), tool_id);
+
+    let (command, args, cwd, env) = resolve_tool_command(
+        tool,
+        &runtime_path,
+        &agent_tools_path,
+        &entry.config_root,
+        &session_path,
+        &active_folder,
+        &param_values,
+    );
+
+    let background_tools = read_background_tools(&entry.config_root);
+    let is_background = background_tools.contains(tool_id);
+
+    if is_background {
+        let tool_label = tool.label.clone();
+        cx.background_executor()
+            .spawn(async move {
+                let mut cmd = smol::process::Command::new(&command);
+                cmd.args(&args).current_dir(&cwd);
+                for (key, value) in &env {
+                    cmd.env(key, value);
+                }
+                match cmd.output().await {
+                    Ok(output) if output.status.success() => {
+                        log::info!("background hotkey tool '{}': success", tool_label);
+                    }
+                    Ok(output) => {
+                        log::warn!(
+                            "background hotkey tool '{}': exit {}: {}",
+                            tool_label,
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    Err(e) => {
+                        log::error!("background hotkey tool '{}': {}", tool_label, e);
+                    }
+                }
+            })
+            .detach();
+        return;
+    }
+
+    let multi_workspace_handle = cx
+        .active_window()
+        .and_then(|w| w.downcast::<MultiWorkspace>())
+        .or_else(|| {
+            cx.windows()
+                .into_iter()
+                .find_map(|w| w.downcast::<MultiWorkspace>())
+        });
+
+    let Some(multi_workspace) = multi_workspace_handle else {
+        log::warn!("global hotkey: no workspace open for tool '{}'", tool_id);
+        show_hotkey_error(
+            cx,
+            format!("Hotkey '{}': no workspace open", tool.label),
+        );
+        return;
+    };
+
+    let tool_label = tool.label.clone();
+    let tool_id_owned = tool.id.clone();
+
+    multi_workspace
+        .update(cx, |multi_workspace, window, cx| {
+            let workspace_entity = multi_workspace.workspace().clone();
+            workspace_entity.update(cx, |workspace, cx| {
+                cx.activate(true);
+                let mut spawn = SpawnInTerminal {
+                    id: TaskId(format!("dashboard-{}", tool_id_owned)),
+                    label: tool_label.clone(),
+                    full_label: tool_label.clone(),
+                    command: Some(command),
+                    args,
+                    command_label: tool_label.clone(),
+                    cwd: Some(cwd),
+                    use_new_terminal: true,
+                    allow_concurrent_runs: false,
+                    reveal: RevealStrategy::Always,
+                    show_command: true,
+                    show_rerun: true,
+                    ..Default::default()
+                };
+
+                for (key, value) in env {
+                    spawn.env.insert(key, value);
+                }
+
+                workspace.spawn_in_terminal(spawn, window, cx).detach();
+            });
+        })
+        .log_err();
+}
+
+// ---------------------------------------------------------------------------
 // GlobalHotkeyManager — system-wide shortcuts via CGEventTap
 // ---------------------------------------------------------------------------
 
@@ -160,22 +381,26 @@ pub(crate) struct GlobalHotkeyManager {
     hotkey_map: HashMap<u32, String>,
     registered_hotkeys: Vec<HotKey>,
     last_config_content: String,
+    hotkey_entries: Vec<ResolvedHotkeyEntry>,
+    keystroke_map: HashMap<String, String>,
     _poll_task: gpui::Task<()>,
+    _bridge_task: gpui::Task<()>,
     _watch_task: gpui::Task<()>,
 }
 
-struct GlobalHotkeyManagerHandle(Entity<GlobalHotkeyManager>);
+pub(crate) struct GlobalHotkeyManagerHandle(pub(crate) Entity<GlobalHotkeyManager>);
 
 impl gpui::Global for GlobalHotkeyManagerHandle {}
 
 impl GlobalHotkeyManager {
     fn register_hotkeys_from_config(&mut self) {
-        // Unregister old hotkeys
         for hotkey in &self.registered_hotkeys {
             self.native_manager.unregister(*hotkey).log_err();
         }
         self.registered_hotkeys.clear();
         self.hotkey_map.clear();
+        self.hotkey_entries.clear();
+        self.keystroke_map.clear();
 
         let entries = load_global_hotkeys_config();
         for entry in entries {
@@ -195,6 +420,25 @@ impl GlobalHotkeyManager {
                     );
                     self.hotkey_map.insert(hotkey.id(), entry.tool_id.clone());
                     self.registered_hotkeys.push(hotkey);
+
+                    let config_root = entry
+                        .config_root
+                        .map(|s| expand_tilde(&s))
+                        .unwrap_or_else(suite_root);
+
+                    let (tools, _) = load_tools_registry(&config_root);
+                    let tool = tools.into_iter().find(|t| t.id == entry.tool_id);
+
+                    let keystroke_display = keystroke_to_display(&entry.keystroke);
+                    self.keystroke_map
+                        .insert(entry.tool_id.clone(), keystroke_display.clone());
+
+                    self.hotkey_entries.push(ResolvedHotkeyEntry {
+                        tool_id: entry.tool_id.clone(),
+                        config_root,
+                        tool,
+                        keystroke_display,
+                    });
                 }
                 Err(e) => {
                     log::warn!(
@@ -204,6 +448,14 @@ impl GlobalHotkeyManager {
                 }
             }
         }
+    }
+
+    pub(crate) fn hotkey_display_for(&self, tool_id: &str) -> Option<String> {
+        self.keystroke_map.get(tool_id).cloned()
+    }
+
+    pub(crate) fn all_hotkey_entries(&self) -> &[ResolvedHotkeyEntry] {
+        &self.hotkey_entries
     }
 }
 
@@ -223,32 +475,53 @@ pub fn init_global_hotkeys(cx: &mut App) {
     let receiver = GlobalHotKeyEvent::receiver().clone();
 
     let entity: Entity<GlobalHotkeyManager> = cx.new(|cx| {
-        let poll_task = cx.spawn({
+        let (async_tx, async_rx) = smol::channel::unbounded();
+
+        let bridge_task = cx.spawn({
             let receiver = receiver.clone();
-            async move |this, cx: &mut AsyncApp| {
+            async move |_this, cx: &mut AsyncApp| {
                 loop {
-                    cx.background_executor()
-                        .timer(Duration::from_millis(100))
+                    let event = cx
+                        .background_executor()
+                        .spawn({
+                            let receiver = receiver.clone();
+                            async move { smol::unblock(move || receiver.recv()).await }
+                        })
                         .await;
 
-                    while let Ok(event) = receiver.try_recv() {
-                        if event.state() == global_hotkey::HotKeyState::Released {
-                            continue;
+                    match event {
+                        Ok(e) => {
+                            if async_tx.send(e).await.is_err() {
+                                break;
+                            }
                         }
-                        let hotkey_id = event.id();
-                        let tool_id = this
-                            .update(cx, |manager: &mut GlobalHotkeyManager, _cx| {
-                                manager.hotkey_map.get(&hotkey_id).cloned()
-                            })
-                            .ok()
-                            .flatten();
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
 
-                        if let Some(tool_id) = tool_id {
-                            log::info!("global hotkey: triggered tool '{tool_id}'");
-                            cx.update(|cx| {
-                                dispatch_global_tool(&tool_id, cx);
-                            });
-                        }
+        let poll_task = cx.spawn({
+            async move |this, cx: &mut AsyncApp| {
+                while let Ok(event) = async_rx.recv().await {
+                    if event.state() == global_hotkey::HotKeyState::Released {
+                        continue;
+                    }
+                    let hotkey_id = event.id();
+                    let dispatch_data = this
+                        .update(cx, |manager: &mut GlobalHotkeyManager, _cx| {
+                            manager.hotkey_map.get(&hotkey_id).map(|tool_id| {
+                                (tool_id.clone(), manager.hotkey_entries.clone())
+                            })
+                        })
+                        .ok()
+                        .flatten();
+
+                    if let Some((tool_id, entries)) = dispatch_data {
+                        log::info!("global hotkey: triggered tool '{tool_id}'");
+                        cx.update(|cx| {
+                            dispatch_hotkey_tool(&tool_id, &entries, cx);
+                        });
                     }
                 }
             }
@@ -269,7 +542,8 @@ pub fn init_global_hotkeys(cx: &mut App) {
                         manager.last_config_content = new_content;
                         manager.register_hotkeys_from_config();
                     }
-                }).log_err();
+                })
+                .log_err();
             }
         });
 
@@ -278,7 +552,10 @@ pub fn init_global_hotkeys(cx: &mut App) {
             hotkey_map: HashMap::new(),
             registered_hotkeys: Vec::new(),
             last_config_content: String::new(),
+            hotkey_entries: Vec::new(),
+            keystroke_map: HashMap::new(),
             _poll_task: poll_task,
+            _bridge_task: bridge_task,
             _watch_task: watch_task,
         };
         manager.register_hotkeys_from_config();
@@ -288,48 +565,41 @@ pub fn init_global_hotkeys(cx: &mut App) {
     cx.set_global(GlobalHotkeyManagerHandle(entity));
 }
 
-pub(crate) fn save_global_hotkey(keystroke_str: &str, tool_id: &str) {
+pub(crate) fn save_global_hotkey(keystroke_str: &str, tool_id: &str, config_root: &Path) {
     let path = global_hotkeys_toml_path();
     let existing = std::fs::read_to_string(&path).unwrap_or_default();
 
-    // Remove any existing entry for this tool_id to avoid duplicates
-    let lines: Vec<&str> = existing.lines().collect();
-    let mut filtered = Vec::new();
-    let mut skip_next_lines = false;
-    for (i, line) in lines.iter().enumerate() {
-        if line.trim() == "[[hotkey]]" {
-            // Check if the next 2 lines contain this tool_id
-            let next_lines: String = lines
-                .get(i + 1..std::cmp::min(i + 3, lines.len()))
-                .unwrap_or_default()
-                .join("\n");
-            if next_lines.contains(&format!("tool_id = \"{tool_id}\"")) {
-                skip_next_lines = true;
-                continue;
-            }
-        }
-        if skip_next_lines {
-            if line.trim().starts_with("keystroke") || line.trim().starts_with("tool_id") {
-                continue;
-            }
-            if line.trim().is_empty() {
-                skip_next_lines = false;
-                continue;
-            }
-            skip_next_lines = false;
-        }
-        filtered.push(*line);
+    // Remove any existing entry for this tool_id to avoid duplicates.
+    // Use toml_edit for reliable round-trip editing.
+    let mut doc = existing.parse::<toml_edit::DocumentMut>().unwrap_or_default();
+
+    if let Some(hotkeys) = doc.get_mut("hotkey").and_then(|v| v.as_array_of_tables_mut()) {
+        hotkeys.retain(|table| {
+            table
+                .get("tool_id")
+                .and_then(|v| v.as_str())
+                .map(|id| id != tool_id)
+                .unwrap_or(true)
+        });
     }
 
-    let mut content = filtered.join("\n");
-    if !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push_str(&format!(
-        "\n[[hotkey]]\nkeystroke = \"{keystroke_str}\"\ntool_id = \"{tool_id}\"\n"
-    ));
+    // Append the new entry
+    let mut new_table = toml_edit::Table::new();
+    new_table.insert("keystroke", toml_edit::value(keystroke_str));
+    new_table.insert("tool_id", toml_edit::value(tool_id));
 
-    std::fs::write(&path, content).log_err();
+    let config_root_str = config_root.to_string_lossy().to_string();
+    new_table.insert("config_root", toml_edit::value(&config_root_str));
+
+    if let Some(hotkeys) = doc.get_mut("hotkey").and_then(|v| v.as_array_of_tables_mut()) {
+        hotkeys.push(new_table);
+    } else {
+        let mut array = toml_edit::ArrayOfTables::new();
+        array.push(new_table);
+        doc.insert("hotkey", toml_edit::Item::ArrayOfTables(array));
+    }
+
+    std::fs::write(&path, doc.to_string()).log_err();
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +609,7 @@ pub(crate) fn save_global_hotkey(keystroke_str: &str, tool_id: &str) {
 pub(crate) struct GlobalShortcutModal {
     tool_id: String,
     tool_label: String,
+    config_root: PathBuf,
     captured_keystroke: Option<String>,
     focus_handle: FocusHandle,
     _intercept_subscription: Option<Subscription>,
@@ -348,6 +619,7 @@ impl GlobalShortcutModal {
     pub(crate) fn new(
         tool_id: String,
         tool_label: String,
+        config_root: PathBuf,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -356,7 +628,6 @@ impl GlobalShortcutModal {
 
         let listener = cx.listener(|this, event: &KeystrokeEvent, _window, cx| {
             let keystroke = &event.keystroke;
-            // Only capture if at least one modifier is pressed (ignore bare modifiers)
             if (keystroke.modifiers.control
                 || keystroke.modifiers.alt
                 || keystroke.modifiers.shift
@@ -390,6 +661,7 @@ impl GlobalShortcutModal {
         Self {
             tool_id,
             tool_label,
+            config_root,
             captured_keystroke: None,
             focus_handle,
             _intercept_subscription: Some(intercept_sub),
@@ -398,10 +670,9 @@ impl GlobalShortcutModal {
 
     pub(crate) fn save_and_dismiss(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         if let Some(keystroke_str) = &self.captured_keystroke {
-            save_global_hotkey(keystroke_str, &self.tool_id);
+            save_global_hotkey(keystroke_str, &self.tool_id, &self.config_root);
             log::info!("global hotkey: saved {} -> {}", keystroke_str, self.tool_id);
 
-            // Trigger immediate re-registration
             if let Some(handle) = cx.try_global::<GlobalHotkeyManagerHandle>() {
                 let manager = handle.0.clone();
                 manager.update(cx, |m, _cx| m.register_hotkeys_from_config());
@@ -565,5 +836,41 @@ mod tests {
         assert!(display.contains('\u{21E7}')); // ⇧ Shift
         assert!(display.contains('\u{2318}')); // ⌘ Command
         assert!(display.contains('a'));
+    }
+
+    #[test]
+    fn test_read_state_string_missing_file() {
+        assert!(read_state_string(Path::new("/nonexistent/path")).is_none());
+    }
+
+    #[test]
+    fn test_read_param_values_missing_file() {
+        let result = read_param_values(Path::new("/nonexistent/path"), "tool");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_read_param_values_with_data() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("param_values.toml");
+        std::fs::write(
+            &path,
+            r#"
+[bounceAll]
+format = "wav"
+depth = "24"
+
+[other]
+key = "val"
+"#,
+        )?;
+        let result = read_param_values(&path, "bounceAll");
+        assert_eq!(result.get("format").map(|s| s.as_str()), Some("wav"));
+        assert_eq!(result.get("depth").map(|s| s.as_str()), Some("24"));
+        assert_eq!(result.len(), 2);
+
+        let empty = read_param_values(&path, "nonexistent");
+        assert!(empty.is_empty());
+        Ok(())
     }
 }
