@@ -357,10 +357,12 @@ pub(crate) fn load_agents_config(config_root: &Path) -> (Vec<BackendEntry>, Vec<
 // Global hotkey config types (loaded from ~/.config/postprod-ide/global-hotkeys.toml)
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 pub(crate) struct GlobalHotkeyEntry {
     pub(crate) keystroke: String,
     pub(crate) tool_id: String,
+    #[serde(default)]
+    pub(crate) config_root: Option<String>,
 }
 
 #[derive(Deserialize)]
