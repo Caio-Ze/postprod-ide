@@ -173,17 +173,35 @@ pub(crate) fn dir_has_content(dir: &Path) -> bool {
 }
 
 pub(crate) fn resolve_bin(name: &str) -> String {
+    #[cfg(unix)]
     let candidates = [
         util::paths::home_dir().join(".local/bin").join(name),
         PathBuf::from("/opt/homebrew/bin").join(name),
         PathBuf::from("/usr/local/bin").join(name),
     ];
+
+    #[cfg(windows)]
+    let bin_name = format!("{name}.exe");
+    #[cfg(windows)]
+    let candidates = [
+        util::paths::home_dir().join(".local/bin").join(&bin_name),
+        PathBuf::from(r"C:\Program Files").join(name).join(&bin_name),
+    ];
+
     for candidate in &candidates {
         if candidate.exists() {
             return candidate.to_string_lossy().to_string();
         }
     }
     name.to_string()
+}
+
+pub(crate) fn tool_binary_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
 }
 
 /// Resolve the runtime path with priority:

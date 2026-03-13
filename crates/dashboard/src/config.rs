@@ -381,7 +381,8 @@ pub(crate) fn ensure_global_hotkeys_config() {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).log_err();
     }
-    let header = "\
+    let header = if cfg!(target_os = "macos") {
+        "\
 # PostProd Tools — Global Hotkeys
 # These shortcuts work even when PostProd Tools is not focused.
 # Requires \"Input Monitoring\" permission in System Settings.
@@ -389,7 +390,17 @@ pub(crate) fn ensure_global_hotkeys_config() {
 # [[hotkey]]
 # keystroke = \"ctrl-alt-0\"
 # tool_id = \"bounceAll\"
-";
+"
+    } else {
+        "\
+# PostProd Tools — Global Hotkeys
+# These shortcuts work even when PostProd Tools is not focused.
+#
+# [[hotkey]]
+# keystroke = \"ctrl-alt-0\"
+# tool_id = \"bounceAll\"
+"
+    };
     std::fs::write(&path, header).log_err();
 }
 

@@ -41,6 +41,35 @@ fn main() {
         }
     }
 
+    #[cfg(target_os = "windows")]
+    {
+        let out_dir = std::env::var("OUT_DIR").unwrap_or_default();
+        let target_profile_dir = std::path::Path::new(&out_dir)
+            .ancestors()
+            .nth(3)
+            .expect("could not find target profile dir");
+
+        let runtime_src = std::path::Path::new("../../../PROTOOLS_SDK_PTSL/target/runtime");
+        let runtime_dst = target_profile_dir.join("runtime");
+        if runtime_src.exists() {
+            println!("cargo:rerun-if-changed=../../../PROTOOLS_SDK_PTSL/target/runtime");
+            if !runtime_dst.exists() {
+                std::os::windows::fs::symlink_dir(runtime_src, &runtime_dst).ok();
+                println!("cargo::warning=Linked runtime → {}", runtime_dst.display());
+            }
+        }
+
+        let agent_src = std::path::Path::new("../../../PROTOOLS_SDK_PTSL/target/agent");
+        let agent_dst = target_profile_dir.join("agent");
+        if agent_src.exists() {
+            println!("cargo:rerun-if-changed=../../../PROTOOLS_SDK_PTSL/target/agent");
+            if !agent_dst.exists() {
+                std::os::windows::fs::symlink_dir(agent_src, &agent_dst).ok();
+                println!("cargo::warning=Linked agent tools → {}", agent_dst.display());
+            }
+        }
+    }
+
     // ── PostProd IDE: version from git tags ──────────────────────────
     println!("cargo:rerun-if-changed=../../.git/refs/tags");
     let protools_version = if let Ok(output) = Command::new("git")

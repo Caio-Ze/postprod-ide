@@ -12,7 +12,8 @@ use config::{
 use paths::{
     DeliveryStatus, automations_dir_for, ensure_config_extracted, ensure_workspace_dirs,
     folder_has_dashboard_config, local_tools_dir_for, resolve_agent_tools_path, resolve_bin,
-    resolve_runtime_path, scan_delivery_folder, state_dir_for, suite_root, tools_config_dir_for,
+    resolve_runtime_path, scan_delivery_folder, state_dir_for, suite_root, tool_binary_name,
+    tools_config_dir_for,
 };
 use persistence::{
     group_by_section, read_active_folder, read_background_tools, read_collapsed_sections,
@@ -456,7 +457,7 @@ impl Dashboard {
 
         cx.new(|cx| {
             // Spawn session polling task (every 5 seconds)
-            let poll_binary = runtime_path.join("tools/get_session_path");
+            let poll_binary = runtime_path.join("tools").join(tool_binary_name("get_session_path"));
             let session_poll_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
                 loop {
                     let binary = poll_binary.clone();
@@ -791,10 +792,11 @@ impl Dashboard {
         active_folder: &Option<PathBuf>,
         tool_param_values: &HashMap<String, String>,
     ) -> (String, Vec<String>, PathBuf, HashMap<String, String>) {
+        let binary = tool_binary_name(&tool.binary);
         let (command, cwd) = match tool.source {
             ToolSource::Agent => {
                 let cmd = agent_tools_path
-                    .join(&tool.binary)
+                    .join(&binary)
                     .to_string_lossy()
                     .to_string();
                 let work_dir = agent_tools_path.to_path_buf();
@@ -807,14 +809,14 @@ impl Dashboard {
                 } else {
                     local_tools.join(&tool.cwd)
                 };
-                let cmd = tool_dir.join(&tool.binary).to_string_lossy().to_string();
+                let cmd = tool_dir.join(&binary).to_string_lossy().to_string();
                 let work_dir = tool_dir;
                 (cmd, work_dir)
             }
             ToolSource::Runtime => {
                 let cmd = runtime_path
                     .join(&tool.cwd)
-                    .join(&tool.binary)
+                    .join(&binary)
                     .to_string_lossy()
                     .to_string();
                 let work_dir = if tool.tier == ToolTier::Standard {
@@ -854,7 +856,7 @@ impl Dashboard {
         }
 
         let mut env = HashMap::new();
-        let ffmpeg_candidate = runtime_path.join("tools/ffmpeg");
+        let ffmpeg_candidate = runtime_path.join("tools").join(tool_binary_name("ffmpeg"));
         if ffmpeg_candidate.exists() {
             env.insert(
                 "FFMPEG_PATH".to_string(),
@@ -1054,7 +1056,7 @@ impl Dashboard {
     /// Find the context-launcher binary using the runtime path resolution.
     /// Returns None if the binary is not deployed (fallback to dashboard substitution).
     fn resolve_context_launcher(&self) -> Option<PathBuf> {
-        let candidate = self.runtime_path.join("tools/context-launcher");
+        let candidate = self.runtime_path.join("tools").join(tool_binary_name("context-launcher"));
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -1205,10 +1207,19 @@ impl Dashboard {
                     };
 
                     let command = resolve_bin(&config.command);
-                    let escaped = resolved_prompt.replace("'", "'\\''");
                     let flags = &config.flags;
                     let prompt_flag = &config.prompt_flag;
-                    let full_command = format!("{command} {flags} {prompt_flag} '{escaped}'");
+
+                    #[cfg(unix)]
+                    let full_command = {
+                        let escaped = resolved_prompt.replace("'", "'\\''");
+                        format!("{command} {flags} {prompt_flag} '{escaped}'")
+                    };
+                    #[cfg(windows)]
+                    let full_command = {
+                        let escaped = resolved_prompt.replace("\"", "\\\"");
+                        format!("{command} {flags} {prompt_flag} \"{escaped}\"")
+                    };
 
                     let spawn = SpawnInTerminal {
                         id: TaskId(format!("automation-{}", entry_id)),
@@ -1291,11 +1302,23 @@ impl Dashboard {
                                         return;
                                     };
                                     let command = resolve_bin(&config.command);
-                                    let escaped = resolved.replace("'", "'\\''");
-                                    let full_command = format!(
-                                        "{command} {} {} '{escaped}'",
-                                        config.flags, config.prompt_flag
-                                    );
+
+                                    #[cfg(unix)]
+                                    let full_command = {
+                                        let escaped = resolved.replace("'", "'\\''");
+                                        format!(
+                                            "{command} {} {} '{escaped}'",
+                                            config.flags, config.prompt_flag
+                                        )
+                                    };
+                                    #[cfg(windows)]
+                                    let full_command = {
+                                        let escaped = resolved.replace("\"", "\\\"");
+                                        format!(
+                                            "{command} {} {} \"{escaped}\"",
+                                            config.flags, config.prompt_flag
+                                        )
+                                    };
 
                                     let spawn = SpawnInTerminal {
                                         id: TaskId(format!("automation-{}", id_for_toast)),
@@ -1427,10 +1450,19 @@ Rules for the completion report:
 
         // Build CLI command using backend config
         let command = resolve_bin(&backend_config.command);
-        let escaped = resolved_prompt.replace('\'', "'\\''");
         let flags = &backend_config.flags;
         let prompt_flag = &backend_config.prompt_flag;
-        let full_command = format!("{command} {flags} {prompt_flag} '{escaped}'");
+
+        #[cfg(unix)]
+        let full_command = {
+            let escaped = resolved_prompt.replace('\'', "'\\''");
+            format!("{command} {flags} {prompt_flag} '{escaped}'")
+        };
+        #[cfg(windows)]
+        let full_command = {
+            let escaped = resolved_prompt.replace('"', "\\\"");
+            format!("{command} {flags} {prompt_flag} \"{escaped}\"")
+        };
         let agent_cwd = self.agent_cwd();
 
         let spawn = SpawnInTerminal {
