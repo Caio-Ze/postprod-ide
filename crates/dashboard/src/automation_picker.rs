@@ -33,6 +33,7 @@ actions!(dashboard, [RunAutomationPicker]);
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
+#[allow(dead_code)]
 enum PickerEntryKind {
     Tool(ToolEntry),
     Automation(AutomationEntry),
