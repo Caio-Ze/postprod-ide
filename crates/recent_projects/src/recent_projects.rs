@@ -32,11 +32,10 @@ use picker::{
     Picker, PickerDelegate,
     highlighted_match_with_paths::{HighlightedMatch, HighlightedMatchWithPaths},
 };
-use project::{ProjectGroupKey, Worktree, WorktreeSettings, git_store::Repository};
+use project::{ProjectGroupKey, Worktree, git_store::Repository};
 pub use remote_connections::RemoteSettings;
 pub use remote_servers::RemoteServerProjects;
-use settings::{Settings, SettingsLocation, WorktreeId};
-use util::rel_path::RelPath;
+use settings::{Settings, WorktreeId};
 use ui_input::ErasedEditor;
 
 use dev_container::{DevContainerContext, find_devcontainer_configs};
@@ -181,15 +180,7 @@ fn get_open_folders(workspace: &Workspace, cx: &App) -> Vec<OpenFolderEntry> {
         .map(|worktree| {
             let worktree_ref = worktree.read(cx);
             let worktree_id = worktree_ref.id();
-            let settings_location = SettingsLocation {
-                worktree_id,
-                path: RelPath::empty(),
-            };
-            let settings = WorktreeSettings::get(Some(settings_location), cx);
-            let name = match &settings.project_name {
-                Some(project_name) => SharedString::from(project_name.clone()),
-                None => SharedString::from(worktree_ref.root_name().as_unix_str().to_string()),
-            };
+            let name = SharedString::from(worktree_ref.root_name().as_unix_str().to_string());
             let path = worktree_ref.abs_path().to_path_buf();
             let branch = get_branch_for_worktree(worktree_ref, &repositories, cx);
             let is_active = active_worktree_id == Some(worktree_id);
