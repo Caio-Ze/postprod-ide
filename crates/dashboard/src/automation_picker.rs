@@ -1,14 +1,14 @@
 use fuzzy::{StringMatch, StringMatchCandidate};
 use gpui::{
-    actions, App, AnyElement, Context, DismissEvent,
-    IntoElement, Task, WeakEntity, Window,
+    actions, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, Render, Subscription, Task, WeakEntity, Window,
 };
 use picker::{Picker, PickerDelegate};
 use ui::{
-    HighlightedLabel, KeyBinding, Label, LabelSize, ListItem, ListItemSpacing,
-    prelude::*,
+    Color, HighlightedLabel, Icon, IconName, IconSize, KeyBinding, Label, LabelSize, ListItem,
+    ListItemSpacing, ToggleButtonGroup, ToggleButtonSimple, prelude::*,
 };
-use workspace::Workspace;
+use workspace::{ModalView, Workspace, pane};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,6 +27,16 @@ use util::ResultExt as _;
 // ---------------------------------------------------------------------------
 
 actions!(dashboard, [RunAutomationPicker]);
+
+// ---------------------------------------------------------------------------
+// Tab enum
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, PartialEq)]
+enum PickerTab {
+    Tools,
+    Automations,
+}
 
 // ---------------------------------------------------------------------------
 // Entry types for the picker
@@ -90,7 +100,7 @@ pub(crate) fn build_picker_entries(workspace: &Workspace, cx: &App) -> Vec<Picke
         }
     }
 
-    // GlobalShortcutOnly entries first
+    // GlobalShortcutOnly entries first (cross-project tools with hotkeys)
     for hotkey_entry in &global_only_entries {
         if let Some(tool) = &hotkey_entry.tool {
             entries.push(PickerEntry {
@@ -135,26 +145,140 @@ pub(crate) fn build_picker_entries(workspace: &Workspace, cx: &App) -> Vec<Picke
 }
 
 // ---------------------------------------------------------------------------
-// Build picker from entries (called inside toggle_modal closure)
+// AutomationModal — wraps picker with tab bar and footer
 // ---------------------------------------------------------------------------
 
-pub(crate) fn build_picker(
-    entries: Vec<PickerEntry>,
-    workspace: WeakEntity<Workspace>,
-    window: &mut Window,
-    cx: &mut Context<Picker<AutomationPickerDelegate>>,
-) -> Picker<AutomationPickerDelegate> {
-    let delegate = AutomationPickerDelegate {
-        workspace,
-        all_entries: entries,
-        matches: Vec::new(),
-        selected_index: 0,
-        separator_indices: Vec::new(),
-    };
+pub(crate) struct AutomationModal {
+    picker: Entity<Picker<AutomationPickerDelegate>>,
+    active_tab: PickerTab,
+    _subscription: Subscription,
+}
 
-    let picker = Picker::uniform_list(delegate, window, cx);
-    picker.set_query("", window, cx);
-    picker
+impl AutomationModal {
+    pub(crate) fn new(
+        entries: Vec<PickerEntry>,
+        workspace: WeakEntity<Workspace>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let picker = cx.new(|cx| {
+            let delegate = AutomationPickerDelegate {
+                workspace,
+                all_entries: entries,
+                matches: Vec::new(),
+                selected_index: 0,
+                active_tab: PickerTab::Tools,
+            };
+            let picker = Picker::uniform_list(delegate, window, cx);
+            picker.set_query("", window, cx);
+            picker
+        });
+
+        let subscription = cx.subscribe(&picker, |_this, _picker, _: &DismissEvent, cx| {
+            cx.emit(DismissEvent);
+        });
+
+        Self {
+            picker,
+            active_tab: PickerTab::Tools,
+            _subscription: subscription,
+        }
+    }
+
+    fn set_tab(&mut self, tab: PickerTab, window: &mut Window, cx: &mut Context<Self>) {
+        self.active_tab = tab;
+        self.picker.update(cx, |picker, cx| {
+            picker.delegate.active_tab = tab;
+            let query = picker.query(cx);
+            picker.update_matches(query, window, cx);
+        });
+        cx.notify();
+    }
+
+    fn switch_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let next = match self.active_tab {
+            PickerTab::Tools => PickerTab::Automations,
+            PickerTab::Automations => PickerTab::Tools,
+        };
+        self.set_tab(next, window, cx);
+    }
+}
+
+impl Focusable for AutomationModal {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.picker.focus_handle(cx)
+    }
+}
+
+impl EventEmitter<DismissEvent> for AutomationModal {}
+impl ModalView for AutomationModal {}
+
+impl Render for AutomationModal {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex()
+            .key_context("AutomationModal")
+            .w(rems(34.))
+            .elevation_3(cx)
+            .overflow_hidden()
+            .on_action(cx.listener(|_, _: &menu::Cancel, _, cx| {
+                cx.emit(DismissEvent);
+            }))
+            .on_action(cx.listener(|this, _: &pane::ActivateNextItem, window, cx| {
+                this.switch_tab(window, cx);
+            }))
+            .on_action(
+                cx.listener(|this, _: &pane::ActivatePreviousItem, window, cx| {
+                    this.switch_tab(window, cx);
+                }),
+            )
+            // Tab bar
+            .child(
+                h_flex().p_2().pb_0p5().w_full().child(
+                    ToggleButtonGroup::<ToggleButtonSimple, 2>::single_row(
+                        "automation-tabs",
+                        [
+                            ToggleButtonSimple::new(
+                                "Tools",
+                                cx.listener(|this, _, window, cx| {
+                                    this.set_tab(PickerTab::Tools, window, cx);
+                                }),
+                            ),
+                            ToggleButtonSimple::new(
+                                "Automations",
+                                cx.listener(|this, _, window, cx| {
+                                    this.set_tab(PickerTab::Automations, window, cx);
+                                }),
+                            ),
+                        ],
+                    )
+                    .style(ui::ToggleButtonGroupStyle::Outlined)
+                    .label_size(LabelSize::Default)
+                    .auto_width()
+                    .selected_index(match self.active_tab {
+                        PickerTab::Tools => 0,
+                        PickerTab::Automations => 1,
+                    }),
+                ),
+            )
+            // Picker content
+            .child(v_flex().child(self.picker.clone()))
+            // Footer
+            .child(
+                h_flex()
+                    .w_full()
+                    .p_1p5()
+                    .gap_2()
+                    .justify_end()
+                    .border_t_1()
+                    .border_color(cx.theme().colors().border_variant)
+                    .child(
+                        Label::new("Spawn")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(KeyBinding::for_action(&menu::Confirm, cx)),
+            )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +290,7 @@ pub(crate) struct AutomationPickerDelegate {
     all_entries: Vec<PickerEntry>,
     matches: Vec<StringMatch>,
     selected_index: usize,
-    separator_indices: Vec<usize>,
+    active_tab: PickerTab,
 }
 
 impl AutomationPickerDelegate {
@@ -178,7 +302,7 @@ impl AutomationPickerDelegate {
 }
 
 impl PickerDelegate for AutomationPickerDelegate {
-    type ListItem = AnyElement;
+    type ListItem = ListItem;
 
     fn match_count(&self) -> usize {
         self.matches.len()
@@ -199,11 +323,10 @@ impl PickerDelegate for AutomationPickerDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Run automation or tool...".into()
-    }
-
-    fn separators_after_indices(&self) -> Vec<usize> {
-        self.separator_indices.clone()
+        match self.active_tab {
+            PickerTab::Tools => "Find a tool...".into(),
+            PickerTab::Automations => "Find an automation...".into(),
+        }
     }
 
     fn update_matches(
@@ -212,10 +335,18 @@ impl PickerDelegate for AutomationPickerDelegate {
         _window: &mut Window,
         cx: &mut Context<Picker<Self>>,
     ) -> Task<()> {
+        let tab = self.active_tab;
         let candidates: Vec<StringMatchCandidate> = self
             .all_entries
             .iter()
             .enumerate()
+            .filter(|(_, entry)| match tab {
+                PickerTab::Tools => matches!(
+                    entry.kind,
+                    PickerEntryKind::Tool(_) | PickerEntryKind::GlobalShortcutOnly(_)
+                ),
+                PickerTab::Automations => matches!(entry.kind, PickerEntryKind::Automation(_)),
+            })
             .map(|(ix, entry)| StringMatchCandidate::new(ix, &entry.label))
             .collect();
 
@@ -226,8 +357,8 @@ impl PickerDelegate for AutomationPickerDelegate {
                 candidates
                     .iter()
                     .enumerate()
-                    .map(|(ix, c)| StringMatch {
-                        candidate_id: ix,
+                    .map(|(_, c)| StringMatch {
+                        candidate_id: c.id,
                         string: c.string.clone(),
                         positions: Vec::new(),
                         score: 0.0,
@@ -250,7 +381,6 @@ impl PickerDelegate for AutomationPickerDelegate {
                 let delegate = &mut picker.delegate;
                 delegate.matches = matches;
                 delegate.selected_index = 0;
-                delegate.recompute_separators();
             })
             .log_err();
         })
@@ -292,28 +422,29 @@ impl PickerDelegate for AutomationPickerDelegate {
         let string_match = self.matches.get(ix)?;
         let entry = self.all_entries.get(string_match.candidate_id)?;
 
-        let item = ListItem::new(ix)
-            .inset(true)
-            .spacing(ListItemSpacing::Sparse)
-            .toggle_state(selected);
+        let icon = match &entry.kind {
+            PickerEntryKind::Tool(_) | PickerEntryKind::GlobalShortcutOnly(_) => {
+                Icon::new(IconName::Settings)
+                    .color(Color::Muted)
+                    .size(IconSize::Small)
+            }
+            PickerEntryKind::Automation(_) => Icon::new(IconName::PlayOutlined)
+                .color(Color::Muted)
+                .size(IconSize::Small),
+        };
 
-        let label_element = HighlightedLabel::new(
-            entry.label.clone(),
-            string_match.positions.clone(),
-        );
+        let label = HighlightedLabel::new(entry.label.clone(), string_match.positions.clone());
 
-        let is_global_only = matches!(entry.kind, PickerEntryKind::GlobalShortcutOnly(_));
-        let is_automation = matches!(entry.kind, PickerEntryKind::Automation(_));
+        let mut end = h_flex().gap_1();
 
-        let mut row = h_flex().gap_2().child(label_element);
-
-        if is_global_only {
+        // Cross-project indicator
+        if let PickerEntryKind::GlobalShortcutOnly(_) = &entry.kind {
             if let Some(config_root) = &entry.config_root {
                 let project_name = config_root
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
-                row = row.child(
+                end = end.child(
                     Label::new(project_name)
                         .size(LabelSize::XSmall)
                         .color(Color::Muted),
@@ -321,59 +452,32 @@ impl PickerDelegate for AutomationPickerDelegate {
             }
         }
 
-        if is_automation {
-            row = row.child(
-                Label::new("automation")
+        // Global hotkey badge
+        if let Some(hotkey) = &entry.global_hotkey {
+            end = end.child(
+                Label::new(hotkey.clone())
                     .size(LabelSize::XSmall)
                     .color(Color::Muted),
             );
         }
 
-        let mut right = h_flex().gap_2();
-
-        if let Some(hotkey_display) = &entry.global_hotkey {
-            right = right.child(
-                Label::new(hotkey_display.clone())
-                    .size(LabelSize::XSmall)
-                    .color(Color::Muted),
-            );
-        }
-
+        // Zed keybinding for tools
         if let PickerEntryKind::Tool(_) = &entry.kind {
             let action = RunDashboardTool {
                 tool_id: entry.id.clone(),
             };
-            right = right.child(KeyBinding::for_action(&action as &dyn gpui::Action, cx));
+            end = end.child(KeyBinding::for_action(&action as &dyn gpui::Action, cx));
         }
 
         Some(
-            item.child(h_flex().w_full().justify_between().child(row).child(right))
-                .into_any_element(),
+            ListItem::new(ix)
+                .inset(true)
+                .spacing(ListItemSpacing::Sparse)
+                .toggle_state(selected)
+                .start_slot(icon)
+                .child(label)
+                .end_slot(end),
         )
-    }
-}
-
-impl AutomationPickerDelegate {
-    fn recompute_separators(&mut self) {
-        self.separator_indices.clear();
-        let mut last_section = None;
-
-        for (ix, string_match) in self.matches.iter().enumerate() {
-            let Some(entry) = self.all_entries.get(string_match.candidate_id) else {
-                continue;
-            };
-            let section = match &entry.kind {
-                PickerEntryKind::GlobalShortcutOnly(_) => 0,
-                PickerEntryKind::Tool(_) => 1,
-                PickerEntryKind::Automation(_) => 2,
-            };
-            if let Some(prev) = last_section {
-                if section != prev && ix > 0 {
-                    self.separator_indices.push(ix - 1);
-                }
-            }
-            last_section = Some(section);
-        }
     }
 }
 

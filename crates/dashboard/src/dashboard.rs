@@ -176,18 +176,12 @@ pub fn init(cx: &mut App) {
                 let entries = automation_picker::build_picker_entries(workspace, cx);
                 let weak_workspace = workspace.weak_handle();
                 workspace.toggle_modal(window, cx, move |window, cx| {
-                    automation_picker::build_picker(entries, weak_workspace, window, cx)
+                    automation_picker::AutomationModal::new(entries, weak_workspace, window, cx)
                 });
             },
         );
     })
     .detach();
-
-    cx.bind_keys([gpui::KeyBinding::new(
-        "cmd-alt-d",
-        automation_picker::RunAutomationPicker,
-        None,
-    )]);
 }
 
 /// Ensure a Dashboard tab exists in the workspace, and switch config_root
