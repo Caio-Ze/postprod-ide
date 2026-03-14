@@ -20,6 +20,13 @@ impl FeatureFlag for AgentV2FeatureFlag {
     fn enabled_for_staff() -> bool {
         true
     }
+
+    // PostProd: Always enable AgentV2 so multi_workspace actions appear in
+    // the command palette and the sidebar initializes. Cannot use update_flags()
+    // because client/src/user.rs overwrites flags on server response.
+    fn enabled_for_all() -> bool {
+        true
+    }
 }
 
 /// A feature flag for granting access to beta ACP features.
