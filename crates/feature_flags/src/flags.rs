@@ -12,6 +12,24 @@ impl FeatureFlag for PanicFeatureFlag {
     const NAME: &'static str = "panic";
 }
 
+pub struct AgentV2FeatureFlag;
+
+impl FeatureFlag for AgentV2FeatureFlag {
+    const NAME: &'static str = "agent-v2";
+
+    fn enabled_for_staff() -> bool {
+        true
+    }
+
+    // PostProd: Always enable AgentV2 so multi_workspace actions appear in
+    // the command palette and the sidebar initializes. Cannot use update_flags()
+    // because client/src/user.rs overwrites flags on server response.
+    fn enabled_for_all() -> bool {
+        true
+    }
+}
+
+
 /// A feature flag for granting access to beta ACP features.
 ///
 /// We reuse this feature flag for new betas, so don't delete it if it is not currently in use.
