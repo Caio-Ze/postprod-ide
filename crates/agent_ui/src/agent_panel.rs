@@ -482,11 +482,16 @@ pub fn init(cx: &mut App) {
                         return;
                     }
                     if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                        if let Some(sidebar) = panel.read(cx).sidebar.clone() {
-                            sidebar.update(cx, |sidebar, cx| {
-                                sidebar.toggle(window, cx);
-                            });
-                        }
+                        panel.update(cx, |panel, cx| {
+                            if panel.sidebar.is_none() {
+                                panel.sidebar = find_or_create_sidebar_for_window(window, cx);
+                            }
+                            if let Some(sidebar) = panel.sidebar.clone() {
+                                sidebar.update(cx, |sidebar, cx| {
+                                    sidebar.toggle(window, cx);
+                                });
+                            }
+                        });
                     }
                 })
                 .register_action(|workspace, _: &FocusWorkspaceSidebar, window, cx| {
@@ -494,11 +499,16 @@ pub fn init(cx: &mut App) {
                         return;
                     }
                     if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                        if let Some(sidebar) = panel.read(cx).sidebar.clone() {
-                            sidebar.update(cx, |sidebar, cx| {
-                                sidebar.focus_or_unfocus(workspace, window, cx);
-                            });
-                        }
+                        panel.update(cx, |panel, cx| {
+                            if panel.sidebar.is_none() {
+                                panel.sidebar = find_or_create_sidebar_for_window(window, cx);
+                            }
+                            if let Some(sidebar) = panel.sidebar.clone() {
+                                sidebar.update(cx, |sidebar, cx| {
+                                    sidebar.focus_or_unfocus(workspace, window, cx);
+                                });
+                            }
+                        });
                     }
                 });
         },
