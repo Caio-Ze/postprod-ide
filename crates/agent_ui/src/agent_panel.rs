@@ -2368,10 +2368,13 @@ impl AgentPanel {
         self.external_thread(
             None,
             None,
+            None,
+            None,
             Some(AgentInitialContent::ContentBlock {
                 blocks: vec![acp::ContentBlock::Text(acp::TextContent::new(text))],
                 auto_submit: true,
             }),
+            true,
             window,
             cx,
         );

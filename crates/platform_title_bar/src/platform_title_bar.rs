@@ -67,28 +67,6 @@ impl PlatformTitleBar {
         SystemWindowTabs::init(cx);
     }
 
-    pub fn is_workspace_sidebar_open(&self) -> bool {
-        self.workspace_sidebar_open
-    }
-
-    pub fn set_workspace_sidebar_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.workspace_sidebar_open = open;
-        cx.notify();
-    }
-
-    pub fn sidebar_has_notifications(&self) -> bool {
-        self.sidebar_has_notifications
-    }
-
-    pub fn set_sidebar_has_notifications(
-        &mut self,
-        has_notifications: bool,
-        cx: &mut Context<Self>,
-    ) {
-        self.sidebar_has_notifications = has_notifications;
-        cx.notify();
-    }
-
     pub fn is_multi_workspace_enabled(_cx: &App) -> bool {
         true
     }
