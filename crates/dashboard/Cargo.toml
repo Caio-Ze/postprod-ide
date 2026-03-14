@@ -19,6 +19,7 @@ fuzzy.workspace = true
 global-hotkey.workspace = true
 gpui.workspace = true
 log.workspace = true
+menu.workspace = true
 paths.workspace = true
 picker.workspace = true
 postprod_scheduler.workspace = true
