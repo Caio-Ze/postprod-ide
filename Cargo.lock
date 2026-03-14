@@ -4582,6 +4582,7 @@ dependencies = [
  "global-hotkey",
  "gpui",
  "log",
+ "menu",
  "paths",
  "picker",
  "postprod_scheduler",
