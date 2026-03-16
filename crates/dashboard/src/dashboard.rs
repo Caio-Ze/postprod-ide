@@ -90,6 +90,9 @@ pub struct RunDashboardTool {
 /// Marker type for the context-launcher failure toast notification ID.
 struct ContextLauncherToast;
 
+/// Marker type for the auto-disable toast notification ID.
+struct AutoDisableToast;
+
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
@@ -719,6 +722,30 @@ impl Dashboard {
                     }
                     SchedulerEvent::MissedJob { automation_id, policy } => {
                         log::info!("Scheduler: missed job {automation_id} (policy: {policy:?})");
+                    }
+                    SchedulerEvent::AutoDisabled { automation_id, consecutive_failures } => {
+                        log::warn!("Scheduler: {automation_id} auto-disabled after {consecutive_failures} failures — notifying user");
+                        let label = dashboard
+                            .automations
+                            .iter()
+                            .find(|a| &a.id == automation_id)
+                            .map(|a| a.label.clone())
+                            .unwrap_or_else(|| automation_id.clone());
+                        if let Some(workspace) = dashboard.workspace.upgrade() {
+                            workspace.update(cx, |workspace, cx| {
+                                workspace.show_toast(
+                                    Toast::new(
+                                        NotificationId::unique::<AutoDisableToast>(),
+                                        format!(
+                                            "\"{}\" auto-disabled after {} consecutive failures",
+                                            label, consecutive_failures
+                                        ),
+                                    ),
+                                    cx,
+                                );
+                            });
+                        }
+                        cx.notify();
                     }
                 }
             });
@@ -1683,6 +1710,7 @@ Rules for the completion report:
                     enabled: s.enabled,
                     catch_up: s.catch_up.clone(),
                     timeout_secs: s.timeout,
+                    auto_disable_after: s.auto_disable_after,
                     chain: a.chain.as_ref().map(|c| {
                         postprod_scheduler::ChainConfig {
                             triggers: c.triggers.clone(),

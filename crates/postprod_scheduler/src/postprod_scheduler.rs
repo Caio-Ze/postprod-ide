@@ -23,6 +23,7 @@ pub struct ScheduleEntry {
     pub catch_up: CatchUpPolicy,
     pub timeout_secs: u64,
     pub active_folder: PathBuf,
+    pub auto_disable_after: u32,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -127,6 +128,10 @@ pub enum SchedulerEvent {
     MissedJob {
         automation_id: String,
         policy: CatchUpPolicy,
+    },
+    AutoDisabled {
+        automation_id: String,
+        consecutive_failures: u32,
     },
 }
 
@@ -355,6 +360,7 @@ impl Scheduler {
                     catch_up: sync.catch_up,
                     timeout_secs: sync.timeout_secs,
                     active_folder,
+                    auto_disable_after: sync.auto_disable_after,
                 },
             );
 
@@ -409,12 +415,21 @@ impl Scheduler {
             }
             RunResult::Failed { .. } | RunResult::Timeout => {
                 status.consecutive_failures += 1;
-                if status.consecutive_failures >= AUTO_DISABLE_THRESHOLD {
+                let threshold = self
+                    .entries
+                    .get(automation_id)
+                    .map(|e| e.auto_disable_after)
+                    .unwrap_or(AUTO_DISABLE_THRESHOLD);
+                if threshold > 0 && status.consecutive_failures >= threshold {
                     status.auto_disabled = true;
                     log::warn!(
                         "Scheduler: auto-disabled {automation_id} after {} consecutive failures",
                         status.consecutive_failures
                     );
+                    cx.emit(SchedulerEvent::AutoDisabled {
+                        automation_id: automation_id.to_string(),
+                        consecutive_failures: status.consecutive_failures,
+                    });
                 }
             }
             RunResult::Skipped { .. } => {}
@@ -532,6 +547,7 @@ pub struct SyncEntry {
     pub enabled: bool,
     pub catch_up: CatchUpPolicy,
     pub timeout_secs: u64,
+    pub auto_disable_after: u32,
     pub chain: Option<ChainConfig>,
 }
 
@@ -619,6 +635,19 @@ mod tests {
             catch_up: CatchUpPolicy::Skip,
             timeout_secs: 3600,
             active_folder: PathBuf::from("/test"),
+            auto_disable_after: AUTO_DISABLE_THRESHOLD,
+        }
+    }
+
+    fn make_sync(id: &str, cron: &str, chain: Option<ChainConfig>) -> SyncEntry {
+        SyncEntry {
+            automation_id: id.to_string(),
+            cron_expr: cron.to_string(),
+            enabled: true,
+            catch_up: CatchUpPolicy::Skip,
+            timeout_secs: 3600,
+            auto_disable_after: AUTO_DISABLE_THRESHOLD,
+            chain,
         }
     }
 
@@ -865,14 +894,7 @@ mod tests {
         // Sync an entry so report_completion has something to work with
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
-                vec![SyncEntry {
-                    automation_id: "flaky-job".to_string(),
-                    cron_expr: "0 3 * * *".to_string(),
-                    enabled: true,
-                    catch_up: CatchUpPolicy::Skip,
-                    timeout_secs: 3600,
-                    chain: None,
-                }],
+                vec![make_sync("flaky-job", "0 3 * * *", None)],
                 PathBuf::from("/tmp"),
             );
         });
@@ -935,14 +957,7 @@ mod tests {
 
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
-                vec![SyncEntry {
-                    automation_id: "broken".to_string(),
-                    cron_expr: "0 * * * *".to_string(),
-                    enabled: true,
-                    catch_up: CatchUpPolicy::Skip,
-                    timeout_secs: 3600,
-                    chain: None,
-                }],
+                vec![make_sync("broken", "0 * * * *", None)],
                 PathBuf::from("/tmp"),
             );
         });
@@ -990,24 +1005,10 @@ mod tests {
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
                 vec![
-                    SyncEntry {
-                        automation_id: "review".to_string(),
-                        cron_expr: "0 3 * * *".to_string(),
-                        enabled: true,
-                        catch_up: CatchUpPolicy::Skip,
-                        timeout_secs: 3600,
-                        chain: Some(ChainConfig {
-                            triggers: vec!["deploy".to_string()],
-                        }),
-                    },
-                    SyncEntry {
-                        automation_id: "deploy".to_string(),
-                        cron_expr: "0 6 * * *".to_string(),
-                        enabled: true,
-                        catch_up: CatchUpPolicy::Skip,
-                        timeout_secs: 3600,
-                        chain: None,
-                    },
+                    make_sync("review", "0 3 * * *", Some(ChainConfig {
+                        triggers: vec!["deploy".to_string()],
+                    })),
+                    make_sync("deploy", "0 6 * * *", None),
                 ],
                 PathBuf::from("/tmp"),
             );
@@ -1058,24 +1059,10 @@ mod tests {
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
                 vec![
-                    SyncEntry {
-                        automation_id: "review".to_string(),
-                        cron_expr: "0 3 * * *".to_string(),
-                        enabled: true,
-                        catch_up: CatchUpPolicy::Skip,
-                        timeout_secs: 3600,
-                        chain: Some(ChainConfig {
-                            triggers: vec!["deploy".to_string()],
-                        }),
-                    },
-                    SyncEntry {
-                        automation_id: "deploy".to_string(),
-                        cron_expr: "0 6 * * *".to_string(),
-                        enabled: true,
-                        catch_up: CatchUpPolicy::Skip,
-                        timeout_secs: 3600,
-                        chain: None,
-                    },
+                    make_sync("review", "0 3 * * *", Some(ChainConfig {
+                        triggers: vec!["deploy".to_string()],
+                    })),
+                    make_sync("deploy", "0 6 * * *", None),
                 ],
                 PathBuf::from("/tmp"),
             );
@@ -1124,24 +1111,10 @@ mod tests {
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
                 vec![
-                    SyncEntry {
-                        automation_id: "review".to_string(),
-                        cron_expr: "0 3 * * *".to_string(),
-                        enabled: true,
-                        catch_up: CatchUpPolicy::Skip,
-                        timeout_secs: 3600,
-                        chain: Some(ChainConfig {
-                            triggers: vec!["deploy".to_string()],
-                        }),
-                    },
-                    SyncEntry {
-                        automation_id: "deploy".to_string(),
-                        cron_expr: "0 6 * * *".to_string(),
-                        enabled: true,
-                        catch_up: CatchUpPolicy::Skip,
-                        timeout_secs: 3600,
-                        chain: None,
-                    },
+                    make_sync("review", "0 3 * * *", Some(ChainConfig {
+                        triggers: vec!["deploy".to_string()],
+                    })),
+                    make_sync("deploy", "0 6 * * *", None),
                 ],
                 PathBuf::from("/tmp"),
             );
