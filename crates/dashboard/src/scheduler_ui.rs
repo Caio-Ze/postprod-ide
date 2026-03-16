@@ -149,6 +149,13 @@ impl Dashboard {
 
                 let is_auto_disabled = status.is_some_and(|s| s.auto_disabled);
 
+                let (status_label, status_color) = if is_auto_disabled {
+                    let failures = status.map(|s| s.consecutive_failures).unwrap_or(0);
+                    (format!("Auto-disabled ({failures} failures)"), Color::Error)
+                } else {
+                    (status_label.to_string(), status_color)
+                };
+
                 let pause_entity = entity.clone();
                 let pause_id = entry.id.clone();
 
