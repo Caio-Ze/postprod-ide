@@ -6,7 +6,7 @@
 This is a Zed fork. These rules override upstream conventions where they conflict.
 
 ## Branch model
-- `main` = upstream Zed mirror (read-only, fast-forward only)
+- `main` = upstream Zed mirror (read-only, updated via `reset --hard` to target release tag)
 - `postprod` = production branch (all work happens here, default on GitHub)
 - Never commit to `main`. Feature branches go off `postprod`.
 
@@ -48,26 +48,26 @@ Before any destructive action (rewrite, delete module, force-push):
 - `private/` is gitignored — all internal docs live here
 - Never commit: hardcoded paths (`/Users/...`), API keys, client names, PROTOOLS_SDK_PTSL source
 - `git diff --cached` before every commit — read every line
-- Full rules: `private/GITHUB_INSTRUCTIONS.md`
+- Full rules: `private/GITHUB-INSTRUCTIONS.md`
 
 ## Reference docs (read before working in these areas)
 | Area | File |
 |------|------|
-| Full project rules | `private/PROJECT_RULES.md` |
+| Full project rules | `private/PROJECT-RULES.md` |
 | Fork maintenance | `private/fork/FORK_GUIDE.md` |
 | What we changed upstream | `private/fork/FORK_OUR_CHANGES.md` |
 | Dashboard internals | `private/reference/DASHBOARD_ARCHITECTURE.md` |
 | GPUI framework | `private/reference/GPUI_REFERENCE.md` |
-| Architectural principles | `private/principles/DESIGN_CHOICES.md` |
-| Design philosophy | `private/principles/DESIGN_PHILOSOPHY.md` |
-| Engineering philosophy | `private/principles/ENGINEERING_PHILOSOPHY.md` |
+| Architectural principles | `private/principles/DESIGN-CHOICES.md` |
+| Design philosophy | `private/principles/DESIGN-PHILOSOPHY.md` |
+| Engineering philosophy | `private/principles/ENGINEERING-PHILOSOPHY.md` |
 | Skill/automation/agent system | `private/reference/SKILL_SYSTEM.md` |
-| Known bugs and problems | `private/know_bugs_problems.md` |
+| Known bugs and problems | `private/KNOWN-BUGS.md` |
 | Release and distribution | `private/release/DISTRIBUTION_PLAN.md` |
 | Deployment guide | `private/release/DEPLOYMENT_GUIDE.md` |
 | Project story and history | `private/PROJECT_STORY.md` |
 | Rebase knowledge base | `private/fork/Rebase/` |
-| GitHub safety | `private/GITHUB_INSTRUCTIONS.md` |
+| GitHub safety | `private/GITHUB-INSTRUCTIONS.md` |
 
 ---
 
