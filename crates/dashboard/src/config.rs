@@ -207,6 +207,10 @@ fn default_timeout() -> u64 {
     3600
 }
 
+fn default_auto_disable_after() -> u32 {
+    5
+}
+
 #[derive(Deserialize, Clone, Debug, Default)]
 pub(crate) struct ScheduleConfig {
     #[serde(default)]
@@ -217,6 +221,8 @@ pub(crate) struct ScheduleConfig {
     pub(crate) catch_up: CatchUpPolicy,
     #[serde(default = "default_timeout")]
     pub(crate) timeout: u64,
+    #[serde(default = "default_auto_disable_after")]
+    pub(crate) auto_disable_after: u32,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
