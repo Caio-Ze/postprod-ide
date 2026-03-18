@@ -42,6 +42,14 @@ pub struct ChainConfig {
     pub triggers: Vec<String>,
 }
 
+/// A non-scheduled automation the scheduler needs to know about —
+/// either as a chain source (has `[chain]`) or as a chain target.
+pub struct ChainOnlyEntry {
+    pub automation_id: String,
+    pub active_folder: PathBuf,
+    pub chain: Option<ChainConfig>,
+}
+
 // ── Scheduler state (persisted to JSON) ──
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -140,6 +148,7 @@ pub enum SchedulerEvent {
 pub struct Scheduler {
     entries: HashMap<String, ScheduleEntry>,
     chains: HashMap<String, ChainConfig>,
+    unscheduled: HashMap<String, PathBuf>,
     status: HashMap<String, AutomationStatus>,
     state_path: PathBuf,
     startup_grace_remaining: bool,
@@ -157,6 +166,7 @@ impl Scheduler {
         let mut scheduler = Self {
             entries: HashMap::new(),
             chains: HashMap::new(),
+            unscheduled: HashMap::new(),
             status,
             state_path,
             startup_grace_remaining: true,
@@ -325,10 +335,12 @@ impl Scheduler {
     pub fn sync_entries(
         &mut self,
         entries: Vec<SyncEntry>,
+        unscheduled: Vec<ChainOnlyEntry>,
         default_folder: PathBuf,
     ) {
         let mut new_entries = HashMap::new();
         let mut new_chains = HashMap::new();
+        let mut new_unscheduled = HashMap::new();
 
         for sync in entries {
             let cron = match Cron::from_str(&sync.cron_expr) {
@@ -371,14 +383,25 @@ impl Scheduler {
             }
         }
 
+        // Register non-scheduled automations and their chains
+        for entry in unscheduled {
+            new_unscheduled.insert(entry.automation_id.clone(), entry.active_folder);
+            if let Some(chain) = entry.chain {
+                if !chain.triggers.is_empty() {
+                    new_chains.insert(entry.automation_id, chain);
+                }
+            }
+        }
+
         // Validate chains before accepting them
-        let warnings = validate_chains(&new_entries, &new_chains);
+        let warnings = validate_chains(&new_entries, &new_unscheduled, &new_chains);
         for warning in &warnings {
             log::warn!("Scheduler: {warning}");
         }
 
         self.entries = new_entries;
         self.chains = new_chains;
+        self.unscheduled = new_unscheduled;
     }
 
     /// Report completion of a scheduled automation run.
@@ -454,10 +477,16 @@ impl Scheduler {
                             continue;
                         }
 
-                        if let Some(entry) = self.entries.get(&trigger_id) {
+                        let active_folder = self
+                            .entries
+                            .get(&trigger_id)
+                            .map(|e| e.active_folder.clone())
+                            .or_else(|| self.unscheduled.get(&trigger_id).cloned());
+
+                        if let Some(active_folder) = active_folder {
                             cx.emit(SchedulerEvent::Fire {
                                 automation_id: trigger_id,
-                                active_folder: entry.active_folder.clone(),
+                                active_folder,
                                 chain_depth: next_depth,
                             });
                             self.running_count += 1;
@@ -555,6 +584,7 @@ pub struct SyncEntry {
 
 fn validate_chains(
     entries: &HashMap<String, ScheduleEntry>,
+    unscheduled: &HashMap<String, PathBuf>,
     chains: &HashMap<String, ChainConfig>,
 ) -> Vec<String> {
     let mut warnings = Vec::new();
@@ -574,7 +604,7 @@ fn validate_chains(
     // Ghost trigger check: triggers pointing to non-existent automations
     for (id, chain) in chains {
         for trigger_id in &chain.triggers {
-            if !entries.contains_key(trigger_id) {
+            if !entries.contains_key(trigger_id) && !unscheduled.contains_key(trigger_id) {
                 warnings.push(format!(
                     "Chain {id} -> {trigger_id}: target not found, will be skipped"
                 ));
@@ -693,7 +723,7 @@ mod tests {
             },
         );
 
-        let warnings = validate_chains(&entries, &chains);
+        let warnings = validate_chains(&entries, &HashMap::new(), &chains);
         assert!(warnings.is_empty(), "no cycles expected: {warnings:?}");
     }
 
@@ -717,7 +747,7 @@ mod tests {
             },
         );
 
-        let warnings = validate_chains(&entries, &chains);
+        let warnings = validate_chains(&entries, &HashMap::new(), &chains);
         assert!(!warnings.is_empty(), "cycle should be detected");
         assert!(
             warnings.iter().any(|w| w.contains("Cycle")),
@@ -752,7 +782,7 @@ mod tests {
             },
         );
 
-        let warnings = validate_chains(&entries, &chains);
+        let warnings = validate_chains(&entries, &HashMap::new(), &chains);
         assert!(!warnings.is_empty(), "cycle should be detected");
     }
 
@@ -769,7 +799,7 @@ mod tests {
             },
         );
 
-        let warnings = validate_chains(&entries, &chains);
+        let warnings = validate_chains(&entries, &HashMap::new(), &chains);
         assert!(
             warnings.iter().any(|w| w.contains("not found")),
             "ghost trigger should be warned: {warnings:?}"
@@ -895,6 +925,7 @@ mod tests {
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
                 vec![make_sync("flaky-job", "0 3 * * *", None)],
+                vec![],
                 PathBuf::from("/tmp"),
             );
         });
@@ -958,6 +989,7 @@ mod tests {
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
                 vec![make_sync("broken", "0 * * * *", None)],
+                vec![],
                 PathBuf::from("/tmp"),
             );
         });
@@ -1010,6 +1042,7 @@ mod tests {
                     })),
                     make_sync("deploy", "0 6 * * *", None),
                 ],
+                vec![],
                 PathBuf::from("/tmp"),
             );
         });
@@ -1064,6 +1097,7 @@ mod tests {
                     })),
                     make_sync("deploy", "0 6 * * *", None),
                 ],
+                vec![],
                 PathBuf::from("/tmp"),
             );
         });
@@ -1116,6 +1150,7 @@ mod tests {
                     })),
                     make_sync("deploy", "0 6 * * *", None),
                 ],
+                vec![],
                 PathBuf::from("/tmp"),
             );
         });
@@ -1144,6 +1179,128 @@ mod tests {
             events.lock().unwrap().is_empty(),
             "chain should not fire when skip_chain is set"
         );
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // ── Chain with unscheduled entries ──
+
+    #[gpui::test]
+    fn test_chain_fires_to_unscheduled_target(cx: &mut gpui::TestAppContext) {
+        let tmp = std::env::temp_dir().join("scheduler_test_chain_unscheduled");
+        let _ = std::fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+
+        let scheduler = cx.new(|cx| Scheduler::new(state_path.clone(), cx));
+
+        // "review" is scheduled with a chain to "deploy", but "deploy" is unscheduled
+        scheduler.update(cx, |s, _cx| {
+            s.sync_entries(
+                vec![
+                    make_sync("review", "0 3 * * *", Some(ChainConfig {
+                        triggers: vec!["deploy".to_string()],
+                    })),
+                ],
+                vec![ChainOnlyEntry {
+                    automation_id: "deploy".to_string(),
+                    active_folder: PathBuf::from("/projects"),
+                    chain: None,
+                }],
+                PathBuf::from("/tmp"),
+            );
+        });
+
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        cx.update(|cx| {
+            cx.subscribe(&scheduler, move |_scheduler, event, _cx| {
+                events_clone.lock().unwrap().push(event.clone());
+            })
+            .detach();
+        });
+
+        // Success on "review" should trigger chain to unscheduled "deploy"
+        scheduler.update(cx, |s, cx| {
+            s.running_count += 1;
+            s.report_completion("review", &RunResult::Success, None, 0, cx);
+        });
+
+        let fired = events.lock().unwrap();
+        assert_eq!(fired.len(), 1, "expected exactly one chain fire event");
+        match &fired[0] {
+            SchedulerEvent::Fire {
+                automation_id,
+                active_folder,
+                chain_depth,
+            } => {
+                assert_eq!(automation_id, "deploy");
+                assert_eq!(active_folder, &PathBuf::from("/projects"));
+                assert_eq!(*chain_depth, 1);
+            }
+            other => panic!("expected Fire event, got: {other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[gpui::test]
+    fn test_unscheduled_source_chain_fires(cx: &mut gpui::TestAppContext) {
+        let tmp = std::env::temp_dir().join("scheduler_test_unscheduled_source");
+        let _ = std::fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+
+        let scheduler = cx.new(|cx| Scheduler::new(state_path.clone(), cx));
+
+        // "scan" is unscheduled with a chain to "notify" (also unscheduled)
+        scheduler.update(cx, |s, _cx| {
+            s.sync_entries(
+                vec![],
+                vec![
+                    ChainOnlyEntry {
+                        automation_id: "scan".to_string(),
+                        active_folder: PathBuf::from("/projects"),
+                        chain: Some(ChainConfig {
+                            triggers: vec!["notify".to_string()],
+                        }),
+                    },
+                    ChainOnlyEntry {
+                        automation_id: "notify".to_string(),
+                        active_folder: PathBuf::from("/projects"),
+                        chain: None,
+                    },
+                ],
+                PathBuf::from("/tmp"),
+            );
+        });
+
+        let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let events_clone = events.clone();
+        cx.update(|cx| {
+            cx.subscribe(&scheduler, move |_scheduler, event, _cx| {
+                events_clone.lock().unwrap().push(event.clone());
+            })
+            .detach();
+        });
+
+        // Success on unscheduled "scan" should trigger chain to "notify"
+        scheduler.update(cx, |s, cx| {
+            s.running_count += 1;
+            s.report_completion("scan", &RunResult::Success, None, 0, cx);
+        });
+
+        let fired = events.lock().unwrap();
+        assert_eq!(fired.len(), 1, "expected exactly one chain fire event");
+        match &fired[0] {
+            SchedulerEvent::Fire {
+                automation_id,
+                chain_depth,
+                ..
+            } => {
+                assert_eq!(automation_id, "notify");
+                assert_eq!(*chain_depth, 1);
+            }
+            other => panic!("expected Fire event, got: {other:?}"),
+        }
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
