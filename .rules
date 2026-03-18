@@ -65,7 +65,7 @@ Before any destructive action (rewrite, delete module, force-push):
 | Known bugs and problems | `private/KNOWN-BUGS.md` |
 | Release and distribution | `private/release/DISTRIBUTION_PLAN.md` |
 | Deployment guide | `private/release/DEPLOYMENT_GUIDE.md` |
-| Project story and history | `private/PROJECT_STORY.md` |
+| Project story and history | `private/PROJECT-STORY.md` |
 | Rebase knowledge base | `private/fork/Rebase/` |
 | GitHub safety | `private/GITHUB-INSTRUCTIONS.md` |
 
