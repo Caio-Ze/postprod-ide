@@ -53,7 +53,8 @@ use workspace::{
 };
 
 use postprod_scheduler::{
-    CompletionReport, RunResult, Scheduler, SchedulerEvent, SyncEntry, completion_marker_path,
+    ChainOnlyEntry, CompletionReport, RunResult, Scheduler, SchedulerEvent, SyncEntry,
+    completion_marker_path,
 };
 use util::ResultExt as _;
 
@@ -611,11 +612,12 @@ impl Dashboard {
                                 .retain(|k, _| valid_keys.contains(k));
 
                             // Sync schedule entries to scheduler
-                            let sync_entries = Self::build_sync_entries(&dashboard.automations);
                             let default_folder = dashboard.active_folder.clone()
                                 .unwrap_or_else(|| dashboard.config_root.clone());
+                            let sync_entries = Self::build_sync_entries(&dashboard.automations);
+                            let unscheduled = Self::build_unscheduled_entries(&dashboard.automations, &default_folder);
                             dashboard.scheduler.update(cx, |scheduler, _cx| {
-                                scheduler.sync_entries(sync_entries, default_folder);
+                                scheduler.sync_entries(sync_entries, unscheduled, default_folder);
                             });
 
                             cx.notify();
@@ -703,12 +705,13 @@ impl Dashboard {
 
             // Initial schedule sync
             {
-                let entries = Self::build_sync_entries(&automations);
                 let default_folder = active_folder.clone()
                     .unwrap_or_else(|| config_root.clone());
+                let entries = Self::build_sync_entries(&automations);
+                let unscheduled = Self::build_unscheduled_entries(&automations, &default_folder);
 
                 scheduler.update(cx, |scheduler, _cx| {
-                    scheduler.sync_entries(entries, default_folder);
+                    scheduler.sync_entries(entries, unscheduled, default_folder);
                 });
             }
 
@@ -1061,6 +1064,28 @@ impl Dashboard {
             .map(|a| a.use_context_launcher)
             .unwrap_or(true);
 
+        // Check if this automation has chain config (for terminal backends only)
+        let has_chain = self.automations.iter()
+            .find(|a| a.id == entry_id)
+            .and_then(|a| a.chain.as_ref())
+            .is_some_and(|c| !c.triggers.is_empty());
+
+        // Prepare chain tracking for terminal backends
+        let chain_marker = if has_chain {
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let state_dir = state_dir_for(&self.config_root);
+            let marker_path = completion_marker_path(&state_dir, entry_id, timestamp);
+            if let Some(parent) = marker_path.parent() {
+                std::fs::create_dir_all(parent).log_err();
+            }
+            Some(marker_path)
+        } else {
+            None
+        };
+
         // Capture values needed by the async block
         let launcher_path = self.resolve_context_launcher();
         let workspace = self.workspace.clone();
@@ -1078,6 +1103,32 @@ impl Dashboard {
                     launcher_args.push("--param".to_string());
                     launcher_args.push(format!("{}={}", key, value));
                 }
+            }
+        }
+
+        // If chain is configured but backend can't support it, warn
+        if has_chain && matches!(agent_backend, AgentBackend::Native | AgentBackend::CopyOnly) {
+            log::warn!(
+                "dashboard: automation '{}' has chain config but uses non-terminal backend — chains require a terminal backend",
+                entry_id
+            );
+        }
+
+        // Spawn the completion poller before the async block (needs &self + Context)
+        if let Some(marker_path) = &chain_marker {
+            if !matches!(agent_backend, AgentBackend::Native | AgentBackend::CopyOnly) {
+                let timeout_secs = self.automations.iter()
+                    .find(|a| a.id == entry_id)
+                    .and_then(|a| a.schedule.as_ref())
+                    .map(|s| s.timeout)
+                    .unwrap_or(3600);
+                self.spawn_completion_poller(
+                    entry_id.clone(),
+                    marker_path.clone(),
+                    timeout_secs,
+                    0,
+                    cx,
+                );
             }
         }
 
@@ -1145,7 +1196,18 @@ impl Dashboard {
                         return;
                     }
 
-                    // Terminal backend: collapse multi-line prompt to single line
+                    // Terminal backend: append completion report instruction if chained
+                    let enriched_prompt = if let Some(marker_path) = &chain_marker {
+                        let mut prompt_with_completion = enriched_prompt;
+                        prompt_with_completion.push_str(
+                            &Self::completion_report_instruction(marker_path),
+                        );
+                        prompt_with_completion
+                    } else {
+                        enriched_prompt
+                    };
+
+                    // Collapse multi-line prompt to single line
                     // to avoid `zsh: parse error near '\n'` when spawning
                     // `claude -p "..."`.
                     let resolved_prompt = enriched_prompt
@@ -1350,29 +1412,7 @@ impl Dashboard {
         }
 
         // Append completion report instruction (the agent writes a JSON marker when done)
-        let marker_display = marker_path.display();
-        resolved_prompt.push_str(&format!(r#"
-
-FINAL STEP — COMPLETION REPORT (mandatory):
-When ALL tasks above are complete, create this JSON file using the Bash tool:
-
-cat > {marker_display} << 'COMPLETION_EOF'
-{{
-  "status": "success",
-  "summary": "1-2 sentence summary of what you did and found",
-  "outputs": ["list/of/files/you/created/or/modified.md"],
-  "skip_chain": false,
-  "message": ""
-}}
-COMPLETION_EOF
-
-Rules for the completion report:
-- Set "status" to "success" if you completed the core task, or "failed: reason" if you could not.
-- Set "skip_chain" to true ONLY if your work produced no meaningful output for downstream automations (e.g., no changes since last scan).
-- "outputs" should list the files you created or modified during this run.
-- "message" is for anything the user should see (warnings, suggestions, etc.). Leave empty if none.
-- This is your FINAL action. Do not do anything after writing this file.
-"#));
+        resolved_prompt.push_str(&Self::completion_report_instruction(&marker_path));
 
         // Collapse multi-line prompt for shell safety
         let resolved_prompt = resolved_prompt
@@ -1407,11 +1447,10 @@ Rules for the completion report:
         };
 
         let workspace = self.workspace.clone();
-        let automation_id = automation_id.to_string();
-        let scheduler = self.scheduler.downgrade();
+        let automation_id_owned = automation_id.to_string();
         let timeout_secs = self.scheduler.read(cx)
             .entries()
-            .get(&automation_id)
+            .get(&automation_id_owned)
             .map(|e| e.timeout_secs)
             .unwrap_or(3600);
 
@@ -1435,6 +1474,24 @@ Rules for the completion report:
                 })
             })?;
 
+            Ok(())
+        })
+        .detach();
+
+        self.spawn_completion_poller(automation_id_owned, marker_path, timeout_secs, chain_depth, cx);
+    }
+
+    fn spawn_completion_poller(
+        &self,
+        automation_id: String,
+        marker_path: PathBuf,
+        timeout_secs: u64,
+        chain_depth: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let scheduler = self.scheduler.downgrade();
+
+        cx.spawn(async move |_this, cx: &mut AsyncApp| -> anyhow::Result<()> {
             // Poll for the completion marker file instead of awaiting the terminal process.
             // The agent writes this JSON file as its final action.
             let poll_interval = Duration::from_secs(10);
@@ -1629,6 +1686,32 @@ Rules for the completion report:
         editor
     }
 
+    fn completion_report_instruction(marker_path: &Path) -> String {
+        let marker_display = marker_path.display();
+        format!(r#"
+
+FINAL STEP — COMPLETION REPORT (mandatory):
+When ALL tasks above are complete, create this JSON file using the Bash tool:
+
+cat > {marker_display} << 'COMPLETION_EOF'
+{{
+  "status": "success",
+  "summary": "1-2 sentence summary of what you did and found",
+  "outputs": ["list/of/files/you/created/or/modified.md"],
+  "skip_chain": false,
+  "message": ""
+}}
+COMPLETION_EOF
+
+Rules for the completion report:
+- Set "status" to "success" if you completed the core task, or "failed: reason" if you could not.
+- Set "skip_chain" to true ONLY if your work produced no meaningful output for downstream automations (e.g., no changes since last scan).
+- "outputs" should list the files you created or modified during this run.
+- "message" is for anything the user should see (warnings, suggestions, etc.). Leave empty if none.
+- This is your FINAL action. Do not do anything after writing this file.
+"#)
+    }
+
     fn schedule_param_write(&mut self, cx: &mut Context<Self>) {
         self._param_write_task = Some(cx.spawn(async move |this, cx| {
             cx.background_executor()
@@ -1721,6 +1804,23 @@ Rules for the completion report:
             .collect()
     }
 
+    fn build_unscheduled_entries(
+        automations: &[AutomationEntry],
+        default_folder: &Path,
+    ) -> Vec<ChainOnlyEntry> {
+        automations
+            .iter()
+            .filter(|a| a.schedule.is_none())
+            .map(|a| ChainOnlyEntry {
+                automation_id: a.id.clone(),
+                active_folder: default_folder.to_path_buf(),
+                chain: a.chain.as_ref().map(|c| postprod_scheduler::ChainConfig {
+                    triggers: c.triggers.clone(),
+                }),
+            })
+            .collect()
+    }
+
     fn write_schedule_field(&self, automation_id: &str, cx: &mut Context<Self>) {
         let entry = match self.automations.iter().find(|a| a.id == automation_id) {
             Some(e) => e,
@@ -1769,11 +1869,12 @@ Rules for the completion report:
         .detach();
 
         // Sync updated schedule to scheduler (immediate — scheduler state is in-memory)
-        let sync_entries = Self::build_sync_entries(&self.automations);
         let default_folder = self.active_folder.clone()
             .unwrap_or_else(|| self.config_root.clone());
+        let sync_entries = Self::build_sync_entries(&self.automations);
+        let unscheduled = Self::build_unscheduled_entries(&self.automations, &default_folder);
         self.scheduler.update(cx, |scheduler, _cx| {
-            scheduler.sync_entries(sync_entries, default_folder);
+            scheduler.sync_entries(sync_entries, unscheduled, default_folder);
         });
     }
 
