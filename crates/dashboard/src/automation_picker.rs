@@ -73,6 +73,31 @@ pub(crate) struct PickerEntry {
     config_root: Option<PathBuf>,
 }
 
+impl PickerEntry {
+    pub(crate) fn new_tool(tool: crate::config::ToolEntry, config_root: Option<PathBuf>) -> Self {
+        Self {
+            id: tool.id.clone(),
+            label: tool.label.clone(),
+            kind: PickerEntryKind::Tool(tool),
+            global_hotkey: None,
+            config_root,
+        }
+    }
+
+    pub(crate) fn new_automation(
+        automation: crate::config::AutomationEntry,
+        config_root: Option<PathBuf>,
+    ) -> Self {
+        Self {
+            id: automation.id.clone(),
+            label: automation.label.clone(),
+            kind: PickerEntryKind::Automation(automation),
+            global_hotkey: None,
+            config_root,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Build entry list from workspace state (called before toggle_modal)
 // ---------------------------------------------------------------------------
