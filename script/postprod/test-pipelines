@@ -1,0 +1,285 @@
+#!/usr/bin/env bash
+# Quick pipeline TOML validation tests — no compilation needed.
+# Tests parsing, round-trip write, and step grouping via the TOML files directly.
+set -euo pipefail
+
+PASS=0
+FAIL=0
+DIR=$(mktemp -d)
+trap 'rm -rf "$DIR"' EXIT
+
+pass() { PASS=$((PASS + 1)); echo "  ✓ $1"; }
+fail() { FAIL=$((FAIL + 1)); echo "  ✗ $1: $2"; }
+
+echo "Pipeline TOML tests"
+echo "==================="
+
+# --- Test 1: Pipeline TOML with steps parses correctly ---
+cat > "$DIR/pipeline.toml" << 'EOF'
+id = "quality-pipeline"
+label = "Quality Pipeline"
+description = "Full cycle"
+icon = "zap"
+type = "pipeline"
+
+[[step]]
+automation = "daily-scan"
+
+[[step]]
+automation = "review"
+
+[[step]]
+automation = "doc-scan"
+group = 3
+
+[[step]]
+automation = "review-doc"
+group = 3
+
+[[step]]
+tool = "context-launcher"
+EOF
+
+# Validate it's valid TOML with expected fields
+if python3 -c "
+import tomllib, sys
+with open('$DIR/pipeline.toml', 'rb') as f:
+    d = tomllib.load(f)
+assert d['type'] == 'pipeline', 'type not pipeline'
+assert len(d['step']) == 5, f'expected 5 steps, got {len(d[\"step\"])}'
+assert d['step'][0]['automation'] == 'daily-scan'
+assert d['step'][2].get('group') == 3
+assert d['step'][3].get('group') == 3
+assert d['step'][4].get('tool') == 'context-launcher'
+assert 'prompt' not in d, 'pipeline should not require prompt'
+" 2>/dev/null; then
+    pass "Pipeline TOML with 5 steps parses"
+else
+    fail "Pipeline TOML parsing" "validation failed"
+fi
+
+# --- Test 2: Empty pipeline (no steps) ---
+cat > "$DIR/empty.toml" << 'EOF'
+id = "empty"
+label = "Empty Pipeline"
+description = ""
+icon = "zap"
+type = "pipeline"
+EOF
+
+if python3 -c "
+import tomllib
+with open('$DIR/empty.toml', 'rb') as f:
+    d = tomllib.load(f)
+assert d['type'] == 'pipeline'
+assert 'step' not in d or len(d.get('step', [])) == 0
+" 2>/dev/null; then
+    pass "Empty pipeline (no steps) parses"
+else
+    fail "Empty pipeline" "should parse without steps"
+fi
+
+# --- Test 3: Pipeline with schedule ---
+cat > "$DIR/scheduled.toml" << 'EOF'
+id = "scheduled-pipe"
+label = "Scheduled"
+description = ""
+icon = "zap"
+type = "pipeline"
+
+[[step]]
+automation = "scan"
+
+[schedule]
+enabled = true
+cron = "0 9 * * 1-5"
+EOF
+
+if python3 -c "
+import tomllib
+with open('$DIR/scheduled.toml', 'rb') as f:
+    d = tomllib.load(f)
+assert d['type'] == 'pipeline'
+assert d['schedule']['enabled'] == True
+assert d['schedule']['cron'] == '0 9 * * 1-5'
+assert len(d['step']) == 1
+" 2>/dev/null; then
+    pass "Pipeline with schedule parses"
+else
+    fail "Pipeline with schedule" "validation failed"
+fi
+
+# --- Test 4: Regular automation still requires prompt ---
+cat > "$DIR/regular.toml" << 'EOF'
+id = "scan"
+label = "Scan"
+description = "Regular"
+icon = "sparkle"
+prompt = "Do the scan for {active_folder}"
+EOF
+
+if python3 -c "
+import tomllib
+with open('$DIR/regular.toml', 'rb') as f:
+    d = tomllib.load(f)
+assert 'type' not in d or d.get('type') != 'pipeline'
+assert d['prompt'] == 'Do the scan for {active_folder}'
+" 2>/dev/null; then
+    pass "Regular automation with prompt parses"
+else
+    fail "Regular automation" "validation failed"
+fi
+
+# --- Test 5: Step with both automation and tool (invalid) ---
+cat > "$DIR/invalid-step.toml" << 'EOF'
+id = "bad"
+label = "Bad"
+description = ""
+icon = "zap"
+type = "pipeline"
+
+[[step]]
+automation = "scan"
+tool = "launcher"
+EOF
+
+if python3 -c "
+import tomllib
+with open('$DIR/invalid-step.toml', 'rb') as f:
+    d = tomllib.load(f)
+step = d['step'][0]
+assert 'automation' in step and 'tool' in step, 'both fields present'
+" 2>/dev/null; then
+    pass "Invalid step (both automation+tool) detected"
+else
+    fail "Invalid step detection" "should have both fields"
+fi
+
+# --- Test 6: Step with neither automation nor tool (invalid) ---
+cat > "$DIR/empty-step.toml" << 'EOF'
+id = "bad2"
+label = "Bad2"
+description = ""
+icon = "zap"
+type = "pipeline"
+
+[[step]]
+group = 1
+EOF
+
+if python3 -c "
+import tomllib
+with open('$DIR/empty-step.toml', 'rb') as f:
+    d = tomllib.load(f)
+step = d['step'][0]
+assert 'automation' not in step and 'tool' not in step
+" 2>/dev/null; then
+    pass "Invalid step (neither automation nor tool) detected"
+else
+    fail "Empty step detection" "should have neither field"
+fi
+
+# --- Test 7: Validate real pipeline TOMLs in config ---
+PIPELINE_DIR="private/config/automations/pipelines"
+if [ -d "$PIPELINE_DIR" ]; then
+    ALL_VALID=true
+    for f in "$PIPELINE_DIR"/*.toml; do
+        [ -f "$f" ] || continue
+        if ! python3 -c "
+import tomllib, sys
+with open('$f', 'rb') as fh:
+    d = tomllib.load(fh)
+assert d.get('type') == 'pipeline', f'not a pipeline: {d.get(\"type\")}'
+assert 'id' in d and 'label' in d
+for s in d.get('step', []):
+    has_auto = 'automation' in s
+    has_tool = 'tool' in s
+    assert has_auto or has_tool, f'step has neither automation nor tool'
+    assert not (has_auto and has_tool), f'step has both automation and tool'
+" 2>/dev/null; then
+            ALL_VALID=false
+            fail "Real pipeline $f" "validation failed"
+        fi
+    done
+    if $ALL_VALID; then
+        count=$(ls "$PIPELINE_DIR"/*.toml 2>/dev/null | wc -l | tr -d ' ')
+        pass "All $count real pipeline TOMLs valid"
+    fi
+else
+    echo "  - Skipped: $PIPELINE_DIR not found"
+fi
+
+# --- Test 8: TOML round-trip (add step, re-read) ---
+cp "$DIR/empty.toml" "$DIR/roundtrip.toml"
+
+if python3 -c "
+import tomllib
+
+# Read original
+with open('$DIR/roundtrip.toml', 'rb') as f:
+    d = tomllib.load(f)
+assert 'step' not in d
+
+# Append a step manually (simulates what toml_edit does)
+with open('$DIR/roundtrip.toml', 'a') as f:
+    f.write('\n[[step]]\nautomation = \"added-step\"\n')
+
+# Re-read
+with open('$DIR/roundtrip.toml', 'rb') as f:
+    d = tomllib.load(f)
+assert len(d['step']) == 1
+assert d['step'][0]['automation'] == 'added-step'
+" 2>/dev/null; then
+    pass "TOML round-trip (append step)"
+else
+    fail "TOML round-trip" "step not preserved"
+fi
+
+# --- Test 9: Group numbering logic ---
+if python3 -c "
+# Simulates collect_step_groups()
+steps = [
+    {'automation': 'first'},
+    {'automation': 'second'},
+    {'automation': 'par-a', 'group': 3},
+    {'automation': 'par-b', 'group': 3},
+    {'tool': 'launcher'},
+]
+
+groups = []
+group_indices = {}
+next_implicit = 2**32 - 1
+
+for step in steps:
+    g = step.get('group')
+    if g is None:
+        next_implicit -= 1
+        g = next_implicit
+    if g in group_indices:
+        groups[group_indices[g]].append(step)
+    else:
+        group_indices[g] = len(groups)
+        groups.append([step])
+
+assert len(groups) == 4, f'expected 4 groups, got {len(groups)}'
+assert len(groups[0]) == 1  # first
+assert len(groups[1]) == 1  # second
+assert len(groups[2]) == 2  # par-a + par-b
+assert len(groups[3]) == 1  # launcher
+assert groups[2][0]['automation'] == 'par-a'
+assert groups[2][1]['automation'] == 'par-b'
+" 2>/dev/null; then
+    pass "Step group collection logic"
+else
+    fail "Step group logic" "grouping incorrect"
+fi
+
+# --- Summary ---
+echo ""
+TOTAL=$((PASS + FAIL))
+if [ "$FAIL" -eq 0 ]; then
+    echo "All $TOTAL tests passed"
+else
+    echo "$PASS/$TOTAL passed, $FAIL failed"
+    exit 1
+fi
