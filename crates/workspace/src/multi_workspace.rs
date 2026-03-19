@@ -28,6 +28,10 @@ actions!(
         ToggleWorkspaceSidebar,
         /// Moves focus to or from the workspace sidebar without closing it.
         FocusWorkspaceSidebar,
+        /// Switches to the next workspace in the window.
+        NextWorkspaceInWindow,
+        /// Switches to the previous workspace in the window.
+        PreviousWorkspaceInWindow,
     ]
 );
 
@@ -380,6 +384,26 @@ impl MultiWorkspace {
         cx.notify();
     }
 
+    pub fn activate_next_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspaces.len() <= 1 {
+            return;
+        }
+        let next = (self.active_workspace_index + 1) % self.workspaces.len();
+        self.activate_index(next, window, cx);
+    }
+
+    pub fn activate_previous_workspace(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspaces.len() <= 1 {
+            return;
+        }
+        let previous = if self.active_workspace_index == 0 {
+            self.workspaces.len() - 1
+        } else {
+            self.active_workspace_index - 1
+        };
+        self.activate_index(previous, window, cx);
+    }
+
     fn serialize(&mut self, cx: &mut App) {
         let window_id = self.window_id;
         let state = crate::persistence::model::MultiWorkspaceState {
@@ -726,6 +750,16 @@ impl Render for MultiWorkspace {
                     .on_action(cx.listener(
                         |this: &mut Self, _: &FocusWorkspaceSidebar, window, cx| {
                             this.focus_sidebar(window, cx);
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |this: &mut Self, _: &NextWorkspaceInWindow, window, cx| {
+                            this.activate_next_workspace(window, cx);
+                        },
+                    ))
+                    .on_action(cx.listener(
+                        |this: &mut Self, _: &PreviousWorkspaceInWindow, window, cx| {
+                            this.activate_previous_workspace(window, cx);
                         },
                     ))
                 })
