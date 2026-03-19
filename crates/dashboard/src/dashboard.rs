@@ -3869,10 +3869,15 @@ Rules for the completion report:
             elements.push(row.into_any_element());
         }
 
-        // [+ Add Step] button
-        let add_entity = entity;
+        // [+ Add Step] button — capture everything outside the closure to avoid
+        // re-entering Dashboard while it's being updated (build_picker_entries
+        // calls dashboard.read() which would deadlock).
         let source_path = entry.source_path.clone();
         let add_pipeline_id = entry.id.clone();
+        let workspace_handle = self.workspace.clone();
+        let picker_tools = self.tools.clone();
+        let picker_automations = self.automations.clone();
+        let picker_config_root = self.config_root.clone();
         elements.push(
             h_flex()
                 .pl_4()
@@ -3888,31 +3893,43 @@ Rules for the completion report:
                         )
                         .on_click(move |_, window, cx| {
                             let Some(source_path) = source_path.clone() else { return };
-                            add_entity.update(cx, |this, cx| {
-                                let Some(workspace) = this.workspace.upgrade() else { return };
-                                let entries = crate::automation_picker::build_picker_entries(
-                                    &workspace.read(cx),
-                                    cx,
-                                );
-                                let mode = crate::automation_picker::PickerMode::AddPipelineStep {
-                                    pipeline_source_path: source_path,
-                                    group: None,
-                                };
-                                let ws = this.workspace.clone();
-                                let pipeline_id = add_pipeline_id.clone();
-                                workspace.update(cx, |workspace, cx| {
-                                    workspace.toggle_modal(window, cx, |window, cx| {
-                                        crate::automation_picker::AutomationModal::new_with_mode(
-                                            entries,
-                                            mode,
-                                            Some(pipeline_id),
-                                            ws,
-                                            window,
-                                            cx,
-                                        )
-                                    });
+                            let Some(workspace) = workspace_handle.upgrade() else { return };
+
+                            // Build picker entries from pre-captured data (not from dashboard.read())
+                            let mut entries: Vec<crate::automation_picker::PickerEntry> = Vec::new();
+                            for tool in &picker_tools {
+                                if tool.hidden { continue; }
+                                entries.push(crate::automation_picker::PickerEntry::new_tool(
+                                    tool.clone(),
+                                    Some(picker_config_root.clone()),
+                                ));
+                            }
+                            for auto in &picker_automations {
+                                if auto.hidden { continue; }
+                                entries.push(crate::automation_picker::PickerEntry::new_automation(
+                                    auto.clone(),
+                                    Some(picker_config_root.clone()),
+                                ));
+                            }
+
+                            let mode = crate::automation_picker::PickerMode::AddPipelineStep {
+                                pipeline_source_path: source_path,
+                                group: None,
+                            };
+                            let ws = workspace_handle.clone();
+                            let pipeline_id = add_pipeline_id.clone();
+                            workspace.update(cx, |workspace, cx| {
+                                workspace.toggle_modal(window, cx, |window, cx| {
+                                    crate::automation_picker::AutomationModal::new_with_mode(
+                                        entries,
+                                        mode,
+                                        Some(pipeline_id),
+                                        ws,
+                                        window,
+                                        cx,
+                                    )
                                 });
-                            }).log_err();
+                            });
                         }),
                 )
                 .into_any_element(),
