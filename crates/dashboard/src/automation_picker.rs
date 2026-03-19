@@ -29,6 +29,20 @@ use util::ResultExt as _;
 actions!(dashboard, [RunAutomationPicker]);
 
 // ---------------------------------------------------------------------------
+// Picker mode
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Default)]
+pub(crate) enum PickerMode {
+    #[default]
+    Run,
+    AddPipelineStep {
+        pipeline_source_path: PathBuf,
+        group: Option<u32>,
+    },
+}
+
+// ---------------------------------------------------------------------------
 // Tab enum
 // ---------------------------------------------------------------------------
 
@@ -151,6 +165,7 @@ pub(crate) fn build_picker_entries(workspace: &Workspace, cx: &App) -> Vec<Picke
 pub(crate) struct AutomationModal {
     picker: Entity<Picker<AutomationPickerDelegate>>,
     active_tab: PickerTab,
+    mode: PickerMode,
     _subscription: Subscription,
 }
 
@@ -161,13 +176,32 @@ impl AutomationModal {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_with_mode(entries, PickerMode::Run, None, workspace, window, cx)
+    }
+
+    pub(crate) fn new_with_mode(
+        entries: Vec<PickerEntry>,
+        mode: PickerMode,
+        exclude_id: Option<String>,
+        workspace: WeakEntity<Workspace>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let initial_tab = match &mode {
+            PickerMode::Run => PickerTab::Tools,
+            PickerMode::AddPipelineStep { .. } => PickerTab::Automations,
+        };
+        let delegate_mode = mode.clone();
+
         let picker = cx.new(|cx| {
             let delegate = AutomationPickerDelegate {
                 workspace,
                 all_entries: entries,
                 matches: Vec::new(),
                 selected_index: 0,
-                active_tab: PickerTab::Tools,
+                active_tab: initial_tab,
+                mode: delegate_mode,
+                exclude_id,
             };
             let picker = Picker::uniform_list(delegate, window, cx);
             picker.set_query("", window, cx);
@@ -180,7 +214,8 @@ impl AutomationModal {
 
         Self {
             picker,
-            active_tab: PickerTab::Tools,
+            active_tab: initial_tab,
+            mode,
             _subscription: subscription,
         }
     }
@@ -272,7 +307,10 @@ impl Render for AutomationModal {
                     .border_t_1()
                     .border_color(cx.theme().colors().border_variant)
                     .child(
-                        Label::new("Spawn")
+                        Label::new(match &self.mode {
+                            PickerMode::AddPipelineStep { .. } => "Add Step",
+                            PickerMode::Run => "Spawn",
+                        })
                             .size(LabelSize::Small)
                             .color(Color::Muted),
                     )
@@ -291,6 +329,8 @@ pub(crate) struct AutomationPickerDelegate {
     matches: Vec<StringMatch>,
     selected_index: usize,
     active_tab: PickerTab,
+    mode: PickerMode,
+    exclude_id: Option<String>,
 }
 
 impl AutomationPickerDelegate {
@@ -323,9 +363,12 @@ impl PickerDelegate for AutomationPickerDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        match self.active_tab {
-            PickerTab::Tools => "Find a tool...".into(),
-            PickerTab::Automations => "Find an automation...".into(),
+        match &self.mode {
+            PickerMode::AddPipelineStep { .. } => "Add a step...".into(),
+            PickerMode::Run => match self.active_tab {
+                PickerTab::Tools => "Find a tool...".into(),
+                PickerTab::Automations => "Find an automation...".into(),
+            },
         }
     }
 
@@ -336,16 +379,25 @@ impl PickerDelegate for AutomationPickerDelegate {
         cx: &mut Context<Picker<Self>>,
     ) -> Task<()> {
         let tab = self.active_tab;
+        let exclude_id = self.exclude_id.clone();
         let candidates: Vec<StringMatchCandidate> = self
             .all_entries
             .iter()
             .enumerate()
-            .filter(|(_, entry)| match tab {
-                PickerTab::Tools => matches!(
-                    entry.kind,
-                    PickerEntryKind::Tool(_) | PickerEntryKind::GlobalShortcutOnly(_)
-                ),
-                PickerTab::Automations => matches!(entry.kind, PickerEntryKind::Automation(_)),
+            .filter(|(_, entry)| {
+                // Filter out excluded entry (e.g., pipeline can't add itself as step)
+                if let Some(ref exclude) = exclude_id {
+                    if entry.id == *exclude {
+                        return false;
+                    }
+                }
+                match tab {
+                    PickerTab::Tools => matches!(
+                        entry.kind,
+                        PickerEntryKind::Tool(_) | PickerEntryKind::GlobalShortcutOnly(_)
+                    ),
+                    PickerTab::Automations => matches!(entry.kind, PickerEntryKind::Automation(_)),
+                }
             })
             .map(|(ix, entry)| StringMatchCandidate::new(ix, &entry.label))
             .collect();
@@ -391,17 +443,43 @@ impl PickerDelegate for AutomationPickerDelegate {
             return;
         };
 
-        match &entry.kind {
-            PickerEntryKind::Tool(tool) | PickerEntryKind::GlobalShortcutOnly(tool) => {
-                let config_root = entry
-                    .config_root
-                    .clone()
-                    .unwrap_or_else(crate::paths::suite_root);
-
-                spawn_tool_from_picker(tool, &config_root, &self.workspace, window, cx);
-            }
-            PickerEntryKind::Automation(_) => {
+        match &self.mode {
+            PickerMode::AddPipelineStep { pipeline_source_path, group } => {
+                let step = match &entry.kind {
+                    PickerEntryKind::Tool(tool) | PickerEntryKind::GlobalShortcutOnly(tool) => {
+                        crate::config::PipelineStep {
+                            automation: None,
+                            tool: Some(tool.id.clone()),
+                            group: *group,
+                        }
+                    }
+                    PickerEntryKind::Automation(auto) => {
+                        crate::config::PipelineStep {
+                            automation: Some(auto.id.clone()),
+                            tool: None,
+                            group: *group,
+                        }
+                    }
+                };
+                if let Err(e) = append_step_to_pipeline(pipeline_source_path, &step) {
+                    log::error!("Failed to write pipeline step: {e}");
+                }
+                // Trigger dashboard reload
                 window.dispatch_action(Box::new(crate::ShowDashboard), cx);
+            }
+            PickerMode::Run => {
+                match &entry.kind {
+                    PickerEntryKind::Tool(tool) | PickerEntryKind::GlobalShortcutOnly(tool) => {
+                        let config_root = entry
+                            .config_root
+                            .clone()
+                            .unwrap_or_else(crate::paths::suite_root);
+                        spawn_tool_from_picker(tool, &config_root, &self.workspace, window, cx);
+                    }
+                    PickerEntryKind::Automation(_) => {
+                        window.dispatch_action(Box::new(crate::ShowDashboard), cx);
+                    }
+                }
             }
         }
 
@@ -574,4 +652,37 @@ fn spawn_tool_from_picker(
             workspace.spawn_in_terminal(spawn, window, cx).detach();
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline step TOML writer
+// ---------------------------------------------------------------------------
+
+fn append_step_to_pipeline(
+    source_path: &Path,
+    step: &crate::config::PipelineStep,
+) -> anyhow::Result<()> {
+    let content = std::fs::read_to_string(source_path)?;
+    let mut doc = content.parse::<toml_edit::DocumentMut>()?;
+
+    let steps = doc
+        .entry("step")
+        .or_insert_with(|| toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
+
+    if let Some(array) = steps.as_array_of_tables_mut() {
+        let mut table = toml_edit::Table::new();
+        if let Some(auto_id) = &step.automation {
+            table.insert("automation", toml_edit::value(auto_id.as_str()));
+        }
+        if let Some(tool_id) = &step.tool {
+            table.insert("tool", toml_edit::value(tool_id.as_str()));
+        }
+        if let Some(group) = step.group {
+            table.insert("group", toml_edit::value(group as i64));
+        }
+        array.push(table);
+    }
+
+    std::fs::write(source_path, doc.to_string())?;
+    Ok(())
 }

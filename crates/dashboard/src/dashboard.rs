@@ -6,9 +6,9 @@ pub(crate) mod persistence;
 mod scheduler_ui;
 
 use config::{
-    AgentEntry, AutomationEntry, BackendEntry, FolderTarget, ParamEntry, ParamType, ScheduleConfig,
-    ToolEntry, ToolSource, ToolTier, icon_for_automation, icon_for_tool, load_agents_config,
-    load_automations_registry, load_tools_registry,
+    AgentEntry, AutomationEntry, BackendEntry, FolderTarget, ParamEntry, ParamType, PipelineStep,
+    ScheduleConfig, ToolEntry, ToolSource, ToolTier, icon_for_automation, icon_for_tool,
+    load_agents_config, load_automations_registry, load_tools_registry,
 };
 use paths::{
     DeliveryStatus, automations_dir_for, ensure_config_extracted, ensure_workspace_dirs,
@@ -288,6 +288,36 @@ impl AgentBackend {
     }
 }
 
+const MAX_PIPELINE_DEPTH: u32 = 10;
+
+/// Groups pipeline steps for execution. Ungrouped steps each become their own
+/// single-element group (sequential). Steps sharing a `group` number are
+/// collected into one Vec (parallel). Order follows first occurrence.
+fn collect_step_groups(steps: &[PipelineStep]) -> Vec<Vec<PipelineStep>> {
+    let mut groups: Vec<Vec<PipelineStep>> = Vec::new();
+    let mut group_indices: HashMap<u32, usize> = HashMap::new();
+    let mut next_implicit = u32::MAX;
+
+    for step in steps {
+        let group_key = match step.group {
+            Some(g) => g,
+            None => {
+                next_implicit = next_implicit.wrapping_sub(1);
+                next_implicit
+            }
+        };
+
+        if let Some(&idx) = group_indices.get(&group_key) {
+            groups[idx].push(step.clone());
+        } else {
+            let idx = groups.len();
+            group_indices.insert(group_key, idx);
+            groups.push(vec![step.clone()]);
+        }
+    }
+    groups
+}
+
 // ---------------------------------------------------------------------------
 // Dashboard struct
 // ---------------------------------------------------------------------------
@@ -345,6 +375,9 @@ pub struct Dashboard {
     scheduler: Entity<Scheduler>,
     window_handle: Option<AnyWindowHandle>,
     _scheduler_subscription: Subscription,
+    // Pipelines
+    active_pipelines: HashSet<String>,
+    pipelines_in_edit_mode: HashSet<String>,
 }
 
 pub(crate) fn resolve_tool_command(
@@ -718,7 +751,16 @@ impl Dashboard {
             let _scheduler_subscription = cx.subscribe(&scheduler, |dashboard, _scheduler, event, cx| {
                 match event {
                     SchedulerEvent::Fire { automation_id, active_folder, chain_depth } => {
-                        dashboard.run_scheduled_automation(automation_id, active_folder, *chain_depth, cx);
+                        let is_pipeline = dashboard.automations.iter()
+                            .find(|a| &a.id == automation_id)
+                            .is_some_and(|a| a.is_pipeline());
+                        if is_pipeline {
+                            if let Some(entry) = dashboard.automations.iter().find(|a| &a.id == automation_id).cloned() {
+                                dashboard.run_pipeline(&entry, active_folder, *chain_depth, RevealStrategy::Never, cx);
+                            }
+                        } else {
+                            dashboard.run_scheduled_automation(automation_id, active_folder, *chain_depth, cx);
+                        }
                     }
                     SchedulerEvent::Skipped { automation_id, reason } => {
                         log::info!("Scheduler: skipped {automation_id}: {reason}");
@@ -821,6 +863,8 @@ impl Dashboard {
                 scheduler,
                 window_handle: None,
                 _scheduler_subscription,
+                active_pipelines: HashSet::new(),
+                pipelines_in_edit_mode: HashSet::new(),
             }
         })
     }
@@ -1346,44 +1390,45 @@ impl Dashboard {
         .detach();
     }
 
-    fn run_scheduled_automation(
+    /// Resolves prompt, appends completion instruction, spawns terminal.
+    /// Returns the marker path for the caller to poll. Both `run_scheduled_automation()`
+    /// and `run_pipeline()` use this — they differ only in how they handle completion.
+    fn spawn_automation_in_terminal(
         &self,
         automation_id: &str,
         active_folder: &Path,
-        chain_depth: u32,
+        reveal: RevealStrategy,
+        label_prefix: &str,
         cx: &mut Context<Self>,
-    ) {
+    ) -> Option<PathBuf> {
         let entry = match self.automations.iter().find(|a| a.id == automation_id) {
             Some(e) => e.clone(),
             None => {
-                log::warn!("Scheduler: automation {automation_id} not found in registry");
-                return;
+                log::warn!("spawn_automation_in_terminal: automation {automation_id} not found");
+                return None;
             }
         };
 
-        // Resolve CLI backend config (first CLI-type backend from AGENTS.toml)
         let backend_config = match self.backends.iter().find(|b| !b.command.is_empty()) {
             Some(b) => b.clone(),
             None => {
-                log::warn!("Scheduler: no CLI backend configured for scheduled run");
-                return;
+                log::warn!("spawn_automation_in_terminal: no CLI backend configured");
+                return None;
             }
         };
 
-        // Build completion marker path (agent writes JSON here when done)
+        // Build completion marker path
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         let state_dir = state_dir_for(&self.config_root);
         let marker_path = completion_marker_path(&state_dir, automation_id, timestamp);
-
-        // Ensure the completed/ directory exists
         if let Some(parent) = marker_path.parent() {
             std::fs::create_dir_all(parent).log_err();
         }
 
-        // Variable substitution (same as run_automation, but active_folder comes from schedule)
+        // Variable substitution
         let mut resolved_prompt = entry.prompt.clone();
         if let Some(session) = &self.session_path {
             resolved_prompt = resolved_prompt.replace("{session_path}", session);
@@ -1411,7 +1456,7 @@ impl Dashboard {
             }
         }
 
-        // Append completion report instruction (the agent writes a JSON marker when done)
+        // Append completion report instruction
         resolved_prompt.push_str(&Self::completion_report_instruction(&marker_path));
 
         // Collapse multi-line prompt for shell safety
@@ -1422,7 +1467,7 @@ impl Dashboard {
             .collect::<Vec<_>>()
             .join(" ");
 
-        // Build CLI command using backend config
+        // Build CLI command
         let command = resolve_bin(&backend_config.command);
         let escaped = resolved_prompt.replace('\'', "'\\''");
         let flags = &backend_config.flags;
@@ -1430,23 +1475,69 @@ impl Dashboard {
         let full_command = format!("{command} {flags} {prompt_flag} '{escaped}'");
         let agent_cwd = self.agent_cwd();
 
+        let display_label = if label_prefix.is_empty() {
+            entry.label.clone()
+        } else {
+            format!("[{label_prefix}] {}", entry.label)
+        };
+
         let spawn = SpawnInTerminal {
-            id: TaskId(format!("scheduled-{}", entry.id)),
-            label: format!("[Scheduled] {}", entry.label),
-            full_label: format!("[Scheduled] {}", entry.label),
+            id: TaskId(format!("automation-{}", entry.id)),
+            label: display_label.clone(),
+            full_label: display_label.clone(),
             command: Some(full_command),
             args: vec![],
-            command_label: format!("[Scheduled] {}", entry.label),
+            command_label: display_label,
             cwd: Some(agent_cwd),
             use_new_terminal: true,
             allow_concurrent_runs: false,
-            reveal: RevealStrategy::Never,
+            reveal,
             show_command: false,
             show_rerun: true,
             ..Default::default()
         };
 
         let workspace = self.workspace.clone();
+        let window_handle = self.window_handle;
+
+        cx.spawn(async move |_this, cx: &mut AsyncApp| -> anyhow::Result<()> {
+            let Some(window_handle) = window_handle else {
+                log::warn!("spawn_automation_in_terminal: window handle not yet available");
+                return Ok(());
+            };
+            let Some(workspace) = workspace.upgrade() else {
+                log::warn!("spawn_automation_in_terminal: workspace released");
+                return Ok(());
+            };
+            window_handle.update(cx, |_, window, cx| {
+                workspace.update(cx, |workspace, cx| {
+                    workspace.spawn_in_terminal(spawn, window, cx).detach();
+                })
+            })?;
+            Ok(())
+        })
+        .detach();
+
+        Some(marker_path)
+    }
+
+    fn run_scheduled_automation(
+        &self,
+        automation_id: &str,
+        active_folder: &Path,
+        chain_depth: u32,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(marker_path) = self.spawn_automation_in_terminal(
+            automation_id,
+            active_folder,
+            RevealStrategy::Never,
+            "Scheduled",
+            cx,
+        ) else {
+            return;
+        };
+
         let automation_id_owned = automation_id.to_string();
         let timeout_secs = self.scheduler.read(cx)
             .entries()
@@ -1454,31 +1545,252 @@ impl Dashboard {
             .map(|e| e.timeout_secs)
             .unwrap_or(3600);
 
-        let window_handle = self.window_handle;
+        self.spawn_completion_poller(automation_id_owned, marker_path, timeout_secs, chain_depth, cx);
+    }
 
-        cx.spawn(async move |_this, cx: &mut AsyncApp| -> anyhow::Result<()> {
-            let Some(window_handle) = window_handle else {
-                log::warn!("Scheduler: window handle not yet available");
-                return Ok(());
-            };
+    fn run_pipeline(
+        &mut self,
+        pipeline_entry: &AutomationEntry,
+        active_folder: &Path,
+        depth: u32,
+        reveal: RevealStrategy,
+        cx: &mut Context<Self>,
+    ) {
+        let pipeline_id = pipeline_entry.id.clone();
 
-            let Some(workspace) = workspace.upgrade() else {
-                log::warn!("Scheduler: workspace released");
-                return Ok(());
-            };
+        if self.active_pipelines.contains(&pipeline_id) {
+            log::warn!("Pipeline '{pipeline_id}' is already running — skipping");
+            return;
+        }
+        if depth >= MAX_PIPELINE_DEPTH {
+            log::warn!("Pipeline depth limit ({MAX_PIPELINE_DEPTH}) reached at '{pipeline_id}'");
+            return;
+        }
+        if pipeline_entry.steps.is_empty() {
+            log::warn!("Pipeline '{pipeline_id}' has no steps — nothing to run");
+            return;
+        }
 
-            // Spawn the terminal (fire and forget — we don't await the terminal task)
-            window_handle.update(cx, |_, window, cx| {
-                workspace.update(cx, |workspace, cx| {
-                    workspace.spawn_in_terminal(spawn, window, cx).detach();
-                })
-            })?;
+        self.active_pipelines.insert(pipeline_id.clone());
+        cx.notify();
 
-            Ok(())
+        let steps = pipeline_entry.steps.clone();
+        let active_folder = active_folder.to_path_buf();
+        let config_root = self.config_root.clone();
+        let automations = self.automations.clone();
+        let tools = self.tools.clone();
+        let runtime_path = self.runtime_path.clone();
+        let agent_tools_path = self.agent_tools_path.clone();
+        let session_path = self.session_path.clone();
+        let param_values = self.param_values.clone();
+
+        let label_prefix = if reveal == RevealStrategy::Never {
+            "Scheduled"
+        } else {
+            "Pipeline"
+        };
+
+        cx.spawn(async move |this, cx: &mut AsyncApp| {
+            let groups = collect_step_groups(&steps);
+            let mut pipeline_failed = false;
+            let mut failure_message = String::new();
+
+            'outer: for group in &groups {
+                if pipeline_failed {
+                    break;
+                }
+
+                let mut step_futures = Vec::new();
+
+                for step in group {
+                    let Some(target_id) = step.target_id() else {
+                        continue;
+                    };
+
+                    if step.is_tool() {
+                        // Tool step: resolve command and spawn
+                        let tool = tools.iter().find(|t| t.id == target_id).cloned();
+                        let Some(tool) = tool else {
+                            log::warn!("Pipeline '{pipeline_id}': tool '{target_id}' not found — skipping step");
+                            continue;
+                        };
+                        let tool_params = param_values.get(&tool.id).cloned().unwrap_or_default();
+                        let runtime_path = runtime_path.clone();
+                        let agent_tools_path = agent_tools_path.clone();
+                        let config_root = config_root.clone();
+                        let session_path = session_path.clone();
+                        let active_folder = active_folder.clone();
+                        let future = cx.background_executor().spawn(async move {
+                            let (command, args, cwd, env) = resolve_tool_command(
+                                &tool,
+                                &runtime_path,
+                                &agent_tools_path,
+                                &config_root,
+                                &session_path,
+                                &Some(active_folder),
+                                &tool_params,
+                            );
+                            let mut cmd = smol::process::Command::new(&command);
+                            cmd.args(&args).current_dir(&cwd);
+                            for (key, value) in &env {
+                                cmd.env(key, value);
+                            }
+                            match cmd.status().await {
+                                Ok(status) => status.success(),
+                                Err(e) => {
+                                    log::error!("Pipeline tool '{}' failed to start: {e}", tool.id);
+                                    false
+                                }
+                            }
+                        });
+                        step_futures.push(future);
+                    } else {
+                        // Automation step: check if target is itself a pipeline
+                        let target_entry = automations.iter().find(|a| a.id == target_id).cloned();
+                        let Some(target_entry) = target_entry else {
+                            log::warn!("Pipeline '{pipeline_id}': automation '{target_id}' not found — skipping step");
+                            continue;
+                        };
+
+                        if target_entry.is_pipeline() {
+                            // Nested pipeline: spawn recursively via this.update
+                            let target = target_entry.clone();
+                            let active_folder = active_folder.clone();
+                            let this = this.clone();
+                            let new_depth = depth + 1;
+
+                            // For nested pipelines, spawn a marker-based poll
+                            let state_dir = state_dir_for(&config_root);
+                            let timestamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs() as i64)
+                                .unwrap_or(0);
+                            let nested_marker = completion_marker_path(&state_dir, target_id, timestamp);
+
+                            // Fire the nested pipeline
+                            this.update(cx, |dashboard, cx| {
+                                dashboard.run_pipeline(
+                                    &target,
+                                    &active_folder,
+                                    new_depth,
+                                    reveal,
+                                    cx,
+                                );
+                            }).log_err();
+
+                            // Poll for the nested pipeline's completion marker
+                            let marker = nested_marker;
+                            let executor = cx.background_executor().clone();
+                            let future = executor.spawn(async move {
+                                // Nested pipelines write their own marker when done.
+                                // However, since the nested pipeline manages its own marker
+                                // lifecycle, we poll for the active_pipelines set instead.
+                                // For now, we consider nested pipeline steps as fire-and-forget
+                                // and always succeed (the nested pipeline tracks its own status).
+                                // TODO: poll nested pipeline completion properly
+                                let _ = marker;
+                                true
+                            });
+                            step_futures.push(future);
+                        } else {
+                            // Regular automation: spawn in terminal and poll marker
+                            let target_id = target_id.to_string();
+                            let active_folder = active_folder.clone();
+                            let label_prefix = label_prefix.to_string();
+                            let this = this.clone();
+
+                            let marker_path = this.update(cx, |dashboard, cx| {
+                                dashboard.spawn_automation_in_terminal(
+                                    &target_id,
+                                    &active_folder,
+                                    reveal,
+                                    &label_prefix,
+                                    cx,
+                                )
+                            }).ok().flatten();
+
+                            let Some(marker_path) = marker_path else {
+                                log::warn!("Pipeline '{pipeline_id}': failed to spawn automation '{target_id}'");
+                                continue;
+                            };
+
+                            let spawner = cx.background_executor().clone();
+                            let timer_executor = spawner.clone();
+                            let future = spawner.spawn({
+                                let marker_path = marker_path.clone();
+                                async move {
+                                    let poll_interval = Duration::from_secs(10);
+                                    let timeout = Duration::from_secs(3600);
+                                    let start = std::time::Instant::now();
+                                    loop {
+                                        timer_executor.timer(poll_interval).await;
+                                        if marker_path.exists() {
+                                            let result = CompletionReport::from_marker(&marker_path);
+                                            std::fs::remove_file(&marker_path).log_err();
+                                            return match result {
+                                                Some((_report, RunResult::Success)) => true,
+                                                Some((report, _)) => {
+                                                    log::warn!("Pipeline step '{target_id}' failed: {}", report.summary);
+                                                    false
+                                                }
+                                                None => true,
+                                            };
+                                        }
+                                        if start.elapsed() > timeout {
+                                            log::warn!("Pipeline step '{target_id}' timed out");
+                                            return false;
+                                        }
+                                    }
+                                }
+                            });
+                            step_futures.push(future);
+                        }
+                    }
+                }
+
+                // Wait for all steps in this group to complete
+                let results = futures::future::join_all(step_futures).await;
+                for (i, success) in results.iter().enumerate() {
+                    if !success {
+                        pipeline_failed = true;
+                        if let Some(step) = group.get(i) {
+                            failure_message = format!(
+                                "Step '{}' failed",
+                                step.target_id().unwrap_or("unknown"),
+                            );
+                        }
+                        break 'outer;
+                    }
+                }
+            }
+
+            // Write pipeline's own completion marker
+            let state_dir = state_dir_for(&config_root);
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let pipeline_marker = completion_marker_path(&state_dir, &pipeline_id, timestamp);
+            if let Some(parent) = pipeline_marker.parent() {
+                std::fs::create_dir_all(parent).log_err();
+            }
+            let status = if pipeline_failed { format!("failed: {failure_message}") } else { "success".to_string() };
+            let report = serde_json::json!({
+                "status": status,
+                "summary": if pipeline_failed { &failure_message } else { "All steps completed" },
+                "outputs": [],
+                "skip_chain": false,
+                "message": ""
+            });
+            std::fs::write(&pipeline_marker, report.to_string()).log_err();
+
+            // Remove from active set
+            this.update(cx, |dashboard, cx| {
+                dashboard.active_pipelines.remove(&pipeline_id);
+                cx.notify();
+            }).log_err();
         })
         .detach();
-
-        self.spawn_completion_poller(automation_id_owned, marker_path, timeout_secs, chain_depth, cx);
     }
 
     fn spawn_completion_poller(
@@ -1876,6 +2188,116 @@ Rules for the completion report:
         self.scheduler.update(cx, |scheduler, _cx| {
             scheduler.sync_entries(sync_entries, unscheduled, default_folder);
         });
+    }
+
+    fn reload_automations(&mut self, cx: &mut Context<Self>) {
+        let (automations, automations_error) = load_automations_registry(&self.config_root);
+        self.automations = automations;
+        self.automations_error = automations_error;
+        cx.notify();
+    }
+
+    fn write_pipeline_steps(&self, pipeline_id: &str, steps: &[PipelineStep], cx: &mut Context<Self>) {
+        let entry = match self.automations.iter().find(|a| a.id == pipeline_id) {
+            Some(e) => e,
+            None => return,
+        };
+        let Some(source_path) = &entry.source_path else { return };
+        let source_path = source_path.clone();
+        let steps = steps.to_vec();
+
+        cx.background_spawn(async move {
+            let content = match std::fs::read_to_string(&source_path) {
+                Ok(c) => c,
+                Err(error) => {
+                    log::warn!("Failed to read {}: {error}", source_path.display());
+                    return;
+                }
+            };
+            let mut doc = match content.parse::<toml_edit::DocumentMut>() {
+                Ok(d) => d,
+                Err(error) => {
+                    log::warn!("Failed to parse {}: {error}", source_path.display());
+                    return;
+                }
+            };
+
+            doc.remove("step");
+            let mut array = toml_edit::ArrayOfTables::new();
+            for step in &steps {
+                let mut table = toml_edit::Table::new();
+                if let Some(auto_id) = &step.automation {
+                    table.insert("automation", toml_edit::value(auto_id.as_str()));
+                }
+                if let Some(tool_id) = &step.tool {
+                    table.insert("tool", toml_edit::value(tool_id.as_str()));
+                }
+                if let Some(group) = step.group {
+                    table.insert("group", toml_edit::value(group as i64));
+                }
+                array.push(table);
+            }
+            if !steps.is_empty() {
+                doc.insert("step", toml_edit::Item::ArrayOfTables(array));
+            }
+
+            if let Err(error) = std::fs::write(&source_path, doc.to_string()) {
+                log::warn!("Failed to write pipeline steps to {}: {error}", source_path.display());
+            }
+        })
+        .detach();
+    }
+
+    fn create_pipeline_toml(&mut self, name: &str, cx: &mut Context<Self>) {
+        let id = format!(
+            "pipeline-{}",
+            name.to_lowercase()
+                .chars()
+                .map(|c| if c.is_alphanumeric() { c } else { '-' })
+                .collect::<String>()
+        );
+        let dir = automations_dir_for(&self.config_root).join("pipelines");
+        std::fs::create_dir_all(&dir).log_err();
+        let path = dir.join(format!("{id}.toml"));
+        let content = format!(
+            "id = \"{id}\"\nlabel = \"{name}\"\ndescription = \"\"\nicon = \"zap\"\ntype = \"pipeline\"\n"
+        );
+        std::fs::write(&path, content).log_err();
+        self.reload_automations(cx);
+    }
+
+    fn delete_pipeline_toml(&mut self, pipeline_id: &str, cx: &mut Context<Self>) {
+        if let Some(path) = self.automations.iter()
+            .find(|a| a.id == pipeline_id)
+            .and_then(|a| a.source_path.clone())
+        {
+            std::fs::remove_file(&path).log_err();
+            self.pipelines_in_edit_mode.remove(pipeline_id);
+            self.reload_automations(cx);
+        }
+    }
+
+    fn remove_pipeline_step(&mut self, pipeline_id: &str, step_index: usize, cx: &mut Context<Self>) {
+        if let Some(entry) = self.automations.iter_mut().find(|a| a.id == pipeline_id) {
+            if step_index < entry.steps.len() {
+                entry.steps.remove(step_index);
+                let steps = entry.steps.clone();
+                self.write_pipeline_steps(pipeline_id, &steps, cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn reorder_pipeline_step(&mut self, pipeline_id: &str, from: usize, direction: i32, cx: &mut Context<Self>) {
+        if let Some(entry) = self.automations.iter_mut().find(|a| a.id == pipeline_id) {
+            let to = (from as i32 + direction) as usize;
+            if to < entry.steps.len() {
+                entry.steps.swap(from, to);
+                let steps = entry.steps.clone();
+                self.write_pipeline_steps(pipeline_id, &steps, cx);
+                cx.notify();
+            }
+        }
     }
 
     fn render_session_status(&self, _cx: &App) -> AnyElement {
@@ -3284,6 +3706,505 @@ Rules for the completion report:
             })
     }
 
+    fn render_pipeline_step_tree(
+        &self,
+        steps: &[PipelineStep],
+        _cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let groups = collect_step_groups(steps);
+        let mut elements = Vec::new();
+        let mut display_num: u32 = 0;
+
+        for group in &groups {
+            display_num += 1;
+            let is_parallel = group.len() > 1;
+
+            for (sub_idx, step) in group.iter().enumerate() {
+                let target_id = step.target_id().unwrap_or("unknown");
+
+                // Resolve display name from automations/tools registry
+                let (display_name, is_tool_step) = if step.is_tool() {
+                    let name = self.tools.iter()
+                        .find(|t| t.id == target_id)
+                        .map(|t| t.label.clone())
+                        .unwrap_or_else(|| format!("missing: {target_id}"));
+                    (name, true)
+                } else {
+                    let name = self.automations.iter()
+                        .find(|a| a.id == target_id)
+                        .map(|a| a.label.clone())
+                        .unwrap_or_else(|| format!("missing: {target_id}"));
+                    (name, false)
+                };
+
+                let is_broken = if step.is_tool() {
+                    !self.tools.iter().any(|t| t.id == target_id)
+                } else {
+                    !self.automations.iter().any(|a| a.id == target_id)
+                };
+
+                let label_text = if is_parallel {
+                    let suffix = (b'a' + sub_idx as u8) as char;
+                    format!("{display_num}{suffix}. {display_name}")
+                } else {
+                    format!("{display_num}. {display_name}")
+                };
+
+                let label_text = if is_tool_step {
+                    format!("{label_text} (tool)")
+                } else {
+                    label_text
+                };
+
+                let text_color = if is_broken { Color::Error } else { Color::Muted };
+
+                let mut row = h_flex()
+                    .gap_2()
+                    .pl_4()
+                    .child(
+                        Label::new(label_text)
+                            .size(LabelSize::XSmall)
+                            .color(text_color),
+                    );
+
+                if is_parallel && sub_idx == 0 {
+                    row = row.child(
+                        Label::new("┐")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    );
+                } else if is_parallel && sub_idx == group.len() - 1 {
+                    row = row.child(
+                        Label::new("┘")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    );
+                } else if is_parallel {
+                    row = row.child(
+                        Label::new("│")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    );
+                }
+
+                elements.push(row.into_any_element());
+            }
+        }
+        elements
+    }
+
+    fn render_pipeline_edit_steps(
+        &self,
+        entry: &AutomationEntry,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let mut elements = Vec::new();
+        let entity = cx.entity().downgrade();
+        let step_count = entry.steps.len();
+
+        for (i, step) in entry.steps.iter().enumerate() {
+            let target_id = step.target_id().unwrap_or("unknown");
+            let display_name = if step.is_tool() {
+                self.tools.iter()
+                    .find(|t| t.id == target_id)
+                    .map(|t| t.label.clone())
+                    .unwrap_or_else(|| format!("missing: {target_id}"))
+            } else {
+                self.automations.iter()
+                    .find(|a| a.id == target_id)
+                    .map(|a| a.label.clone())
+                    .unwrap_or_else(|| format!("missing: {target_id}"))
+            };
+
+            let suffix = if step.is_tool() { " (tool)" } else { "" };
+            let label_text = format!("{}. {display_name}{suffix}", i + 1);
+
+            let up_entity = entity.clone();
+            let down_entity = entity.clone();
+            let remove_entity = entity.clone();
+            let pipeline_id = entry.id.clone();
+            let pipeline_id2 = entry.id.clone();
+            let pipeline_id3 = entry.id.clone();
+
+            let row = h_flex()
+                .gap_1()
+                .pl_4()
+                .items_center()
+                .child(
+                    Label::new(label_text)
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                )
+                .child(div().flex_1())
+                .child(
+                    IconButton::new(format!("step-up-{}-{}", entry.id, i), IconName::ArrowUp)
+                        .size(ui::ButtonSize::Compact)
+                        .disabled(i == 0)
+                        .on_click(move |_, _, cx| {
+                            up_entity.update(cx, |this, cx| {
+                                this.reorder_pipeline_step(&pipeline_id, i, -1, cx);
+                            }).log_err();
+                        }),
+                )
+                .child(
+                    IconButton::new(format!("step-down-{}-{}", entry.id, i), IconName::ArrowDown)
+                        .size(ui::ButtonSize::Compact)
+                        .disabled(i >= step_count - 1)
+                        .on_click(move |_, _, cx| {
+                            down_entity.update(cx, |this, cx| {
+                                this.reorder_pipeline_step(&pipeline_id2, i, 1, cx);
+                            }).log_err();
+                        }),
+                )
+                .child(
+                    IconButton::new(format!("step-remove-{}-{}", entry.id, i), IconName::Close)
+                        .size(ui::ButtonSize::Compact)
+                        .on_click(move |_, _, cx| {
+                            remove_entity.update(cx, |this, cx| {
+                                this.remove_pipeline_step(&pipeline_id3, i, cx);
+                            }).log_err();
+                        }),
+                );
+
+            elements.push(row.into_any_element());
+        }
+
+        // [+ Add Step] button
+        let add_entity = entity;
+        let source_path = entry.source_path.clone();
+        let add_pipeline_id = entry.id.clone();
+        elements.push(
+            h_flex()
+                .pl_4()
+                .pt_1()
+                .child(
+                    ButtonLike::new(format!("add-step-{}", add_pipeline_id))
+                        .style(ButtonStyle::Subtle)
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .child(Icon::new(IconName::Plus).size(IconSize::XSmall).color(Color::Muted))
+                                .child(Label::new("Add Step").size(LabelSize::XSmall).color(Color::Muted)),
+                        )
+                        .on_click(move |_, window, cx| {
+                            let Some(source_path) = source_path.clone() else { return };
+                            add_entity.update(cx, |this, cx| {
+                                let Some(workspace) = this.workspace.upgrade() else { return };
+                                let entries = crate::automation_picker::build_picker_entries(
+                                    &workspace.read(cx),
+                                    cx,
+                                );
+                                let mode = crate::automation_picker::PickerMode::AddPipelineStep {
+                                    pipeline_source_path: source_path,
+                                    group: None,
+                                };
+                                let ws = this.workspace.clone();
+                                let pipeline_id = add_pipeline_id.clone();
+                                workspace.update(cx, |workspace, cx| {
+                                    workspace.toggle_modal(window, cx, |window, cx| {
+                                        crate::automation_picker::AutomationModal::new_with_mode(
+                                            entries,
+                                            mode,
+                                            Some(pipeline_id),
+                                            ws,
+                                            window,
+                                            cx,
+                                        )
+                                    });
+                                });
+                            }).log_err();
+                        }),
+                )
+                .into_any_element(),
+        );
+
+        elements
+    }
+
+    fn render_pipeline_card(
+        &mut self,
+        entry: &AutomationEntry,
+        idx: usize,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let entry_id = entry.id.clone();
+        let entry_label: SharedString = entry.label.clone().into();
+        let entry_description: SharedString = entry.description.clone().into();
+        let icon = icon_for_automation(&entry.icon);
+        let is_running = self.active_pipelines.contains(&entry.id);
+        let has_steps = !entry.steps.is_empty();
+        let is_expanded = self.expanded_automations.contains(&entry.id);
+
+        let card_bg = cx.theme().colors().elevated_surface_background;
+        let hover_bg = cx.theme().colors().ghost_element_hover;
+        let accent = cx.theme().colors().text_accent;
+        let accent_bg = accent.opacity(0.15);
+
+        let entity = cx.entity().downgrade();
+
+        let is_editing = self.pipelines_in_edit_mode.contains(&entry.id);
+
+        // Run button
+        let run_entity = entity.clone();
+        let run_id = entry_id.clone();
+        let run_entry = entry.clone();
+
+        // Edit toggle
+        let edit_entity = entity.clone();
+        let edit_id = entry_id.clone();
+
+        // Delete
+        let delete_entity = entity.clone();
+        let delete_id = entry_id.clone();
+
+        // Expand/collapse
+        let disc_entity = entity;
+        let disc_id = entry_id.clone();
+
+        // Step tree (built before the element tree to avoid borrow issues)
+        let step_tree = if is_editing {
+            self.render_pipeline_edit_steps(entry, cx)
+        } else {
+            self.render_pipeline_step_tree(&entry.steps, cx)
+        };
+
+        let active_folder = self.active_folder.clone()
+            .unwrap_or_else(|| self.config_root.clone());
+
+        div()
+            .id(SharedString::from(format!("pipeline-card-{}-{}", entry_id, idx)))
+            .w_full()
+            .rounded_lg()
+            .border_1()
+            .border_color(accent.opacity(0.5))
+            .bg(card_bg)
+            .overflow_hidden()
+            .cursor_pointer()
+            .hover(move |style| style.bg(hover_bg))
+            .child(
+                h_flex()
+                    .w_full()
+                    .child(div().w(px(3.)).h_full().flex_shrink_0().bg(accent))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .p_2()
+                                    .gap_3()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .size(px(36.))
+                                            .rounded(px(8.))
+                                            .bg(accent_bg)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                Icon::new(icon)
+                                                    .size(IconSize::Medium)
+                                                    .color(Color::Accent),
+                                            ),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .child(Label::new(entry_label))
+                                            .child(
+                                                Label::new(entry_description)
+                                                    .color(Color::Muted)
+                                                    .size(LabelSize::XSmall),
+                                            ),
+                                    )
+                                    .child(
+                                        Label::new(if is_running {
+                                            SharedString::from("running")
+                                        } else {
+                                            SharedString::from(format!("{} steps", entry.steps.len()))
+                                        })
+                                        .color(if is_running { Color::Accent } else { Color::Muted })
+                                        .size(LabelSize::XSmall),
+                                    )
+                                    .child(
+                                        h_flex()
+                                            .gap_1()
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                |_, window, cx| {
+                                                    window.prevent_default();
+                                                    cx.stop_propagation();
+                                                },
+                                            )
+                                            .child(
+                                                Disclosure::new(
+                                                    SharedString::from(format!("disc-pipeline-{}", disc_id)),
+                                                    is_expanded,
+                                                )
+                                                .on_click(move |_, _, cx| {
+                                                    disc_entity.update(cx, |this, cx| {
+                                                        if this.expanded_automations.contains(&disc_id) {
+                                                            this.expanded_automations.remove(&disc_id);
+                                                        } else {
+                                                            this.expanded_automations.insert(disc_id.clone());
+                                                        }
+                                                        cx.notify();
+                                                    }).log_err();
+                                                }),
+                                            )
+                                            .child(
+                                                IconButton::new(
+                                                    format!("run-pipeline-{}", run_id),
+                                                    IconName::PlayFilled,
+                                                )
+                                                .disabled(is_running || !has_steps)
+                                                .tooltip(Tooltip::text(if is_running {
+                                                    "Pipeline is running"
+                                                } else if !has_steps {
+                                                    "No steps to run"
+                                                } else {
+                                                    "Run pipeline"
+                                                }))
+                                                .on_click(move |_, _, cx| {
+                                                    run_entity.update(cx, |this, cx| {
+                                                        this.run_pipeline(
+                                                            &run_entry,
+                                                            &active_folder,
+                                                            0,
+                                                            RevealStrategy::Always,
+                                                            cx,
+                                                        );
+                                                    }).log_err();
+                                                }),
+                                            )
+                                            .child(
+                                                IconButton::new(
+                                                    format!("edit-pipeline-{}", edit_id),
+                                                    if is_editing { IconName::Check } else { IconName::Settings },
+                                                )
+                                                .tooltip(Tooltip::text(if is_editing { "Done editing" } else { "Edit pipeline" }))
+                                                .on_click(move |_, _, cx| {
+                                                    edit_entity.update(cx, |this, cx| {
+                                                        if this.pipelines_in_edit_mode.contains(&edit_id) {
+                                                            this.pipelines_in_edit_mode.remove(&edit_id);
+                                                        } else {
+                                                            this.pipelines_in_edit_mode.insert(edit_id.clone());
+                                                            this.expanded_automations.insert(edit_id.clone());
+                                                        }
+                                                        cx.notify();
+                                                    }).log_err();
+                                                }),
+                                            )
+                                            .when(is_editing, |el| {
+                                                el.child(
+                                                    IconButton::new(
+                                                        format!("delete-pipeline-{}", delete_id),
+                                                        IconName::Trash,
+                                                    )
+                                                    .tooltip(Tooltip::text("Delete pipeline"))
+                                                    .on_click(move |_, _, cx| {
+                                                        delete_entity.update(cx, |this, cx| {
+                                                            this.delete_pipeline_toml(&delete_id, cx);
+                                                        }).log_err();
+                                                    }),
+                                                )
+                                            }),
+                                    ),
+                            )
+                            .when(is_expanded && !step_tree.is_empty(), |el| {
+                                el.child(
+                                    v_flex()
+                                        .px_2()
+                                        .pb_2()
+                                        .gap_px()
+                                        .children(step_tree),
+                                )
+                            }),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_pipelines_section(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let pipelines: Vec<AutomationEntry> = self
+            .automations
+            .iter()
+            .filter(|a| a.is_pipeline() && !a.hidden)
+            .cloned()
+            .collect();
+
+        // Hide the section entirely if no pipelines exist and no automations dir
+        if pipelines.is_empty() && !automations_dir_for(&self.config_root).join("pipelines").exists() {
+            return v_flex().w_full();
+        }
+
+        let is_open = !self.collapsed_sections.contains("pipelines");
+
+        let disc_entity = cx.entity().downgrade();
+        let disclosure = Disclosure::new(SharedString::from("disc-pipelines"), is_open).on_click(
+            move |_, _, cx| {
+                disc_entity.update(cx, |this, cx| {
+                    this.toggle_section("pipelines", cx);
+                }).log_err();
+            },
+        );
+
+        let header = h_flex()
+            .px_1()
+            .mb_2()
+            .gap_2()
+            .items_center()
+            .child(disclosure)
+            .child(
+                Label::new("PIPELINES")
+                    .color(Color::Muted)
+                    .size(LabelSize::XSmall),
+            )
+            .child(Divider::horizontal().color(DividerColor::BorderVariant));
+
+        if !is_open {
+            return v_flex().w_full().gap_1().child(header);
+        }
+
+        let cards: Vec<gpui::AnyElement> = pipelines
+            .iter()
+            .enumerate()
+            .map(|(idx, entry)| {
+                self.render_pipeline_card(entry, idx, window, cx)
+            })
+            .collect();
+
+        // [+ New Pipeline] button
+        let new_entity = cx.entity().downgrade();
+        let new_pipeline_button = ButtonLike::new("new-pipeline-btn")
+            .style(ButtonStyle::Subtle)
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(Icon::new(IconName::Plus).size(IconSize::XSmall).color(Color::Muted))
+                    .child(Label::new("New Pipeline").size(LabelSize::XSmall).color(Color::Muted)),
+            )
+            .on_click(move |_, _, cx| {
+                new_entity.update(cx, |this, cx| {
+                    this.create_pipeline_toml("New Pipeline", cx);
+                }).log_err();
+            });
+
+        v_flex()
+            .w_full()
+            .gap_1()
+            .child(header)
+            .child(v_flex().w_full().gap_2().children(cards))
+            .child(new_pipeline_button)
+    }
+
     fn render_automations_section(
         &mut self,
         window: &mut Window,
@@ -3364,7 +4285,7 @@ Rules for the completion report:
         let all: Vec<AutomationEntry> = self
             .automations
             .iter()
-            .filter(|a| !a.hidden)
+            .filter(|a| !a.hidden && !a.is_pipeline())
             .cloned()
             .collect();
         let meta: Vec<_> = all
@@ -3676,6 +4597,8 @@ impl Render for Dashboard {
                             .child(self.render_ai_agents_section(cx))
                             // Scheduled automations (only shown when at least one is scheduled)
                             .child(self.render_scheduled_section(cx))
+                            // Pipelines
+                            .child(self.render_pipelines_section(window, cx))
                             // Automations
                             .child(self.render_automations_section(window, cx))
                             // Delivery status
@@ -3773,5 +4696,136 @@ triggers = ["review", "deploy"]
         let entry: config::AutomationEntry = toml::from_str(toml_str).unwrap();
         let chain = entry.chain.unwrap();
         assert_eq!(chain.triggers, vec!["review", "deploy"]);
+    }
+
+    #[test]
+    fn test_collect_step_groups_sequential() {
+        let steps = vec![
+            config::PipelineStep { automation: Some("a".into()), tool: None, group: None },
+            config::PipelineStep { automation: Some("b".into()), tool: None, group: None },
+            config::PipelineStep { automation: Some("c".into()), tool: None, group: None },
+        ];
+        let groups = collect_step_groups(&steps);
+        assert_eq!(groups.len(), 3);
+        assert_eq!(groups[0].len(), 1);
+        assert_eq!(groups[1].len(), 1);
+        assert_eq!(groups[2].len(), 1);
+    }
+
+    #[test]
+    fn test_collect_step_groups_parallel() {
+        let steps = vec![
+            config::PipelineStep { automation: Some("a".into()), tool: None, group: Some(1) },
+            config::PipelineStep { automation: Some("b".into()), tool: None, group: Some(1) },
+            config::PipelineStep { automation: Some("c".into()), tool: None, group: Some(1) },
+        ];
+        let groups = collect_step_groups(&steps);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 3);
+    }
+
+    #[test]
+    fn test_collect_step_groups_mixed() {
+        let steps = vec![
+            config::PipelineStep { automation: Some("first".into()), tool: None, group: None },
+            config::PipelineStep { automation: Some("second".into()), tool: None, group: None },
+            config::PipelineStep { automation: Some("par-a".into()), tool: None, group: Some(3) },
+            config::PipelineStep { automation: Some("par-b".into()), tool: None, group: Some(3) },
+            config::PipelineStep { tool: Some("launcher".into()), automation: None, group: None },
+        ];
+        let groups = collect_step_groups(&steps);
+        assert_eq!(groups.len(), 4); // first, second, group-3 (2 steps), launcher
+        assert_eq!(groups[0].len(), 1);
+        assert_eq!(groups[0][0].automation.as_deref(), Some("first"));
+        assert_eq!(groups[1].len(), 1);
+        assert_eq!(groups[1][0].automation.as_deref(), Some("second"));
+        assert_eq!(groups[2].len(), 2);
+        assert_eq!(groups[2][0].automation.as_deref(), Some("par-a"));
+        assert_eq!(groups[2][1].automation.as_deref(), Some("par-b"));
+        assert_eq!(groups[3].len(), 1);
+        assert!(groups[3][0].is_tool());
+    }
+
+    #[test]
+    fn test_collect_step_groups_non_adjacent_same_group() {
+        let steps = vec![
+            config::PipelineStep { automation: Some("a".into()), tool: None, group: Some(1) },
+            config::PipelineStep { automation: Some("middle".into()), tool: None, group: None },
+            config::PipelineStep { automation: Some("b".into()), tool: None, group: Some(1) },
+        ];
+        let groups = collect_step_groups(&steps);
+        // group 1 collects both "a" and "b" even though "middle" is between them
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].len(), 2); // group 1: a + b
+        assert_eq!(groups[1].len(), 1); // middle
+    }
+
+    #[test]
+    fn test_pipeline_toml_round_trip_write() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("test-pipeline.toml");
+        std::fs::write(
+            &path,
+            r#"id = "test-pipe"
+label = "Test"
+description = ""
+icon = "zap"
+type = "pipeline"
+
+[[step]]
+automation = "scan"
+
+[[step]]
+automation = "review"
+"#,
+        )?;
+
+        // Verify initial parse
+        let entry = config::load_single_automation(&path)?;
+        assert_eq!(entry.steps.len(), 2);
+
+        // Modify steps via TOML writer
+        let new_steps = vec![
+            config::PipelineStep { automation: Some("new-first".into()), tool: None, group: None },
+            config::PipelineStep { tool: Some("my-tool".into()), automation: None, group: Some(2) },
+            config::PipelineStep { automation: Some("par-auto".into()), tool: None, group: Some(2) },
+        ];
+
+        // Write steps directly using toml_edit (same logic as write_pipeline_steps)
+        let content = std::fs::read_to_string(&path)?;
+        let mut doc = content.parse::<toml_edit::DocumentMut>()?;
+        doc.remove("step");
+        let mut array = toml_edit::ArrayOfTables::new();
+        for step in &new_steps {
+            let mut table = toml_edit::Table::new();
+            if let Some(auto_id) = &step.automation {
+                table.insert("automation", toml_edit::value(auto_id.as_str()));
+            }
+            if let Some(tool_id) = &step.tool {
+                table.insert("tool", toml_edit::value(tool_id.as_str()));
+            }
+            if let Some(group) = step.group {
+                table.insert("group", toml_edit::value(group as i64));
+            }
+            array.push(table);
+        }
+        doc.insert("step", toml_edit::Item::ArrayOfTables(array));
+        std::fs::write(&path, doc.to_string())?;
+
+        // Re-parse and verify
+        let entry = config::load_single_automation(&path)?;
+        assert_eq!(entry.steps.len(), 3);
+        assert_eq!(entry.steps[0].automation.as_deref(), Some("new-first"));
+        assert!(entry.steps[0].group.is_none());
+        assert_eq!(entry.steps[1].tool.as_deref(), Some("my-tool"));
+        assert_eq!(entry.steps[1].group, Some(2));
+        assert_eq!(entry.steps[2].automation.as_deref(), Some("par-auto"));
+        assert_eq!(entry.steps[2].group, Some(2));
+
+        // Verify other fields preserved
+        assert_eq!(entry.id, "test-pipe");
+        assert!(entry.is_pipeline());
+
+        Ok(())
     }
 }

@@ -179,6 +179,7 @@ pub(crate) struct AutomationEntry {
     pub(crate) label: String,
     pub(crate) description: String,
     pub(crate) icon: String,
+    #[serde(default)]
     pub(crate) prompt: String,
     #[serde(default)]
     pub(crate) hidden: bool,
@@ -201,6 +202,18 @@ pub(crate) struct AutomationEntry {
 
     #[serde(default)]
     pub(crate) chain: Option<ChainConfig>,
+
+    #[serde(default, rename = "type")]
+    pub(crate) entry_type: Option<String>,
+
+    #[serde(default, rename = "step")]
+    pub(crate) steps: Vec<PipelineStep>,
+}
+
+impl AutomationEntry {
+    pub(crate) fn is_pipeline(&self) -> bool {
+        self.entry_type.as_deref() == Some("pipeline")
+    }
 }
 
 fn default_timeout() -> u64 {
@@ -231,12 +244,54 @@ pub(crate) struct ChainConfig {
     pub(crate) triggers: Vec<String>,
 }
 
+#[derive(Deserialize, Serialize, Clone, Debug)]
+pub(crate) struct PipelineStep {
+    #[serde(default)]
+    pub(crate) automation: Option<String>,
+    #[serde(default)]
+    pub(crate) tool: Option<String>,
+    #[serde(default)]
+    pub(crate) group: Option<u32>,
+}
+
+impl PipelineStep {
+    pub(crate) fn target_id(&self) -> Option<&str> {
+        self.automation.as_deref().or(self.tool.as_deref())
+    }
+
+    pub(crate) fn is_tool(&self) -> bool {
+        self.tool.is_some()
+    }
+
+    pub(crate) fn validate(&self) -> anyhow::Result<()> {
+        match (&self.automation, &self.tool) {
+            (Some(_), None) | (None, Some(_)) => Ok(()),
+            (Some(_), Some(_)) => anyhow::bail!("step has both `automation` and `tool` — pick one"),
+            (None, None) => anyhow::bail!("step has neither `automation` nor `tool`"),
+        }
+    }
+}
+
 pub(crate) fn load_single_automation(path: &Path) -> Result<AutomationEntry, String> {
     let content = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    toml::from_str::<AutomationEntry>(&content).map_err(|e| {
+    let mut entry = toml::from_str::<AutomationEntry>(&content).map_err(|e| {
         let filename = path.file_name().unwrap_or_default().to_string_lossy();
         format!("{filename}: {e}")
-    })
+    })?;
+
+    // Validate pipeline steps — skip invalid ones with a warning
+    if entry.is_pipeline() {
+        let filename = path.file_name().unwrap_or_default().to_string_lossy();
+        entry.steps.retain(|step| match step.validate() {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("{filename}: skipping invalid pipeline step: {e}");
+                false
+            }
+        });
+    }
+
+    Ok(entry)
 }
 
 pub(crate) fn load_automations_registry(config_root: &Path) -> (Vec<AutomationEntry>, Option<String>) {
@@ -634,6 +689,158 @@ tier = "compact"
         assert_eq!(tools.len(), 2);
         assert!(error.is_some());
         assert!(error.unwrap().contains("bad.toml"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_pipeline_toml_parsing() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("quality-pipeline.toml");
+        std::fs::write(
+            &path,
+            r#"
+id = "quality-pipeline"
+label = "Quality Pipeline"
+description = "Full quality cycle"
+icon = "zap"
+type = "pipeline"
+
+[[step]]
+automation = "daily-scan"
+
+[[step]]
+automation = "review"
+
+[[step]]
+automation = "doc-scan"
+group = 3
+
+[[step]]
+automation = "review-doc"
+group = 3
+
+[[step]]
+tool = "context-launcher"
+"#,
+        )?;
+        let entry = load_single_automation(&path)?;
+        assert!(entry.is_pipeline());
+        assert_eq!(entry.steps.len(), 5);
+        assert_eq!(entry.prompt, "");
+
+        // Sequential steps
+        assert_eq!(entry.steps[0].automation.as_deref(), Some("daily-scan"));
+        assert!(entry.steps[0].group.is_none());
+
+        // Parallel group
+        assert_eq!(entry.steps[2].group, Some(3));
+        assert_eq!(entry.steps[3].group, Some(3));
+
+        // Tool step
+        assert!(entry.steps[4].is_tool());
+        assert_eq!(entry.steps[4].tool.as_deref(), Some("context-launcher"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_pipeline_empty_steps() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("empty.toml");
+        std::fs::write(
+            &path,
+            r#"
+id = "empty-pipe"
+label = "Empty"
+description = ""
+icon = "zap"
+type = "pipeline"
+"#,
+        )?;
+        let entry = load_single_automation(&path)?;
+        assert!(entry.is_pipeline());
+        assert!(entry.steps.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_pipeline_step_validate() {
+        let valid_auto = PipelineStep {
+            automation: Some("scan".into()),
+            tool: None,
+            group: None,
+        };
+        assert!(valid_auto.validate().is_ok());
+
+        let valid_tool = PipelineStep {
+            automation: None,
+            tool: Some("launcher".into()),
+            group: Some(1),
+        };
+        assert!(valid_tool.validate().is_ok());
+        assert!(valid_tool.is_tool());
+        assert_eq!(valid_tool.target_id(), Some("launcher"));
+
+        let both = PipelineStep {
+            automation: Some("a".into()),
+            tool: Some("b".into()),
+            group: None,
+        };
+        assert!(both.validate().is_err());
+
+        let neither = PipelineStep {
+            automation: None,
+            tool: None,
+            group: None,
+        };
+        assert!(neither.validate().is_err());
+    }
+
+    #[test]
+    fn test_pipeline_invalid_steps_filtered_on_load() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("bad-steps.toml");
+        std::fs::write(
+            &path,
+            r#"
+id = "bad-pipe"
+label = "Bad Pipeline"
+description = ""
+icon = "zap"
+type = "pipeline"
+
+[[step]]
+automation = "good-step"
+
+[[step]]
+
+[[step]]
+automation = "also-good"
+tool = "conflict"
+"#,
+        )?;
+        let entry = load_single_automation(&path)?;
+        assert_eq!(entry.steps.len(), 1);
+        assert_eq!(entry.steps[0].automation.as_deref(), Some("good-step"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_is_pipeline_false_for_regular_automation() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("regular.toml");
+        std::fs::write(
+            &path,
+            r#"
+id = "scan"
+label = "Scan"
+description = "Regular automation"
+icon = "sparkle"
+prompt = "Do the scan"
+"#,
+        )?;
+        let entry = load_single_automation(&path)?;
+        assert!(!entry.is_pipeline());
+        assert!(entry.steps.is_empty());
         Ok(())
     }
 }
