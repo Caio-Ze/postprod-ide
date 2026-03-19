@@ -2290,8 +2290,10 @@ Rules for the completion report:
 
     fn reorder_pipeline_step(&mut self, pipeline_id: &str, from: usize, direction: i32, cx: &mut Context<Self>) {
         if let Some(entry) = self.automations.iter_mut().find(|a| a.id == pipeline_id) {
-            let to = (from as i32 + direction) as usize;
-            if to < entry.steps.len() {
+            let to_signed = from as i32 + direction;
+            if to_signed < 0 { return; }
+            let to = to_signed as usize;
+            if from < entry.steps.len() && to < entry.steps.len() {
                 entry.steps.swap(from, to);
                 let steps = entry.steps.clone();
                 self.write_pipeline_steps(pipeline_id, &steps, cx);
