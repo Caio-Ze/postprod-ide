@@ -159,6 +159,8 @@ impl Dashboard {
                 let pause_entity = entity.clone();
                 let pause_id = entry.id.clone();
 
+                let is_pipeline = entry.is_pipeline();
+
                 let row = h_flex()
                     .id(SharedString::from(format!("sched-row-{}", entry.id)))
                     .w_full()
@@ -171,6 +173,13 @@ impl Dashboard {
                             .size(LabelSize::Small)
                             .color(if is_auto_disabled { Color::Disabled } else { Color::Default }),
                     )
+                    .when(is_pipeline, |el| {
+                        el.child(
+                            Label::new(format!("{} steps", entry.steps.len()))
+                                .size(LabelSize::XSmall)
+                                .color(Color::Muted),
+                        )
+                    })
                     .child(
                         Label::new(summary)
                             .color(Color::Muted)
