@@ -26,6 +26,7 @@ pub use hotkeys::init_global_hotkeys;
 use hotkeys::GlobalShortcutModal;
 
 use agent_ui::AgentPanel;
+use menu;
 use editor::{Editor, EditorEvent};
 use gpui::{
     Action, AnyWindowHandle, App, AsyncApp, ClipboardItem, Context, Corner, Entity, EventEmitter,
@@ -58,10 +59,13 @@ use postprod_scheduler::{
 };
 use util::ResultExt as _;
 
+use futures::channel::oneshot;
+
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 // ---------------------------------------------------------------------------
@@ -378,6 +382,11 @@ pub struct Dashboard {
     // Pipelines
     active_pipelines: HashSet<String>,
     pipelines_in_edit_mode: HashSet<String>,
+    pipeline_cancel_flags: HashMap<String, Arc<AtomicBool>>,
+    pipelines_pending_delete: HashSet<String>,
+    // Pipeline creation
+    pending_new_pipeline: Option<Entity<Editor>>,
+    _pending_pipeline_subscription: Option<Subscription>,
 }
 
 pub(crate) fn resolve_tool_command(
@@ -865,6 +874,10 @@ impl Dashboard {
                 _scheduler_subscription,
                 active_pipelines: HashSet::new(),
                 pipelines_in_edit_mode: HashSet::new(),
+                pipeline_cancel_flags: HashMap::new(),
+                pipelines_pending_delete: HashSet::new(),
+                pending_new_pipeline: None,
+                _pending_pipeline_subscription: None,
             }
         })
     }
@@ -1051,6 +1064,8 @@ impl Dashboard {
         self._param_editor_subscriptions.clear();
         self._param_write_task = None;
         self.expanded_automations.clear();
+        self.pending_new_pipeline = None;
+        self._pending_pipeline_subscription = None;
 
         cx.notify();
     }
@@ -1391,8 +1406,9 @@ impl Dashboard {
     }
 
     /// Resolves prompt, appends completion instruction, spawns terminal.
-    /// Returns the marker path for the caller to poll. Both `run_scheduled_automation()`
-    /// and `run_pipeline()` use this — they differ only in how they handle completion.
+    /// Returns (marker_path, terminal_task) for the caller to poll/race.
+    /// Both `run_scheduled_automation()` and `run_pipeline()` use this —
+    /// they differ only in how they handle completion.
     fn spawn_automation_in_terminal(
         &self,
         automation_id: &str,
@@ -1400,7 +1416,7 @@ impl Dashboard {
         reveal: RevealStrategy,
         label_prefix: &str,
         cx: &mut Context<Self>,
-    ) -> Option<PathBuf> {
+    ) -> Option<(PathBuf, gpui::Task<()>)> {
         let entry = match self.automations.iter().find(|a| a.id == automation_id) {
             Some(e) => e.clone(),
             None => {
@@ -1500,6 +1516,8 @@ impl Dashboard {
         let workspace = self.workspace.clone();
         let window_handle = self.window_handle;
 
+        let (tx, rx) = oneshot::channel();
+
         cx.spawn(async move |_this, cx: &mut AsyncApp| -> anyhow::Result<()> {
             let Some(window_handle) = window_handle else {
                 log::warn!("spawn_automation_in_terminal: window handle not yet available");
@@ -1509,16 +1527,24 @@ impl Dashboard {
                 log::warn!("spawn_automation_in_terminal: workspace released");
                 return Ok(());
             };
-            window_handle.update(cx, |_, window, cx| {
+            if let Ok(terminal_task) = window_handle.update(cx, |_, window, cx| {
                 workspace.update(cx, |workspace, cx| {
-                    workspace.spawn_in_terminal(spawn, window, cx).detach();
+                    workspace.spawn_in_terminal(spawn, window, cx)
                 })
-            })?;
+            }) {
+                tx.send(terminal_task).ok();
+            }
             Ok(())
         })
         .detach();
 
-        Some(marker_path)
+        let terminal_task = cx.background_spawn(async move {
+            if let Ok(inner_task) = rx.await {
+                let _ = inner_task.await;
+            }
+        });
+
+        Some((marker_path, terminal_task))
     }
 
     fn run_scheduled_automation(
@@ -1528,7 +1554,7 @@ impl Dashboard {
         chain_depth: u32,
         cx: &mut Context<Self>,
     ) {
-        let Some(marker_path) = self.spawn_automation_in_terminal(
+        let Some((marker_path, _terminal_task)) = self.spawn_automation_in_terminal(
             automation_id,
             active_folder,
             RevealStrategy::Never,
@@ -1572,6 +1598,8 @@ impl Dashboard {
         }
 
         self.active_pipelines.insert(pipeline_id.clone());
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        self.pipeline_cancel_flags.insert(pipeline_id.clone(), cancel_flag.clone());
         cx.notify();
 
         let steps = pipeline_entry.steps.clone();
@@ -1599,8 +1627,14 @@ impl Dashboard {
                 if pipeline_failed {
                     break;
                 }
+                if cancel_flag.load(Ordering::Relaxed) {
+                    pipeline_failed = true;
+                    failure_message = "Pipeline cancelled by user".to_string();
+                    break;
+                }
 
                 let mut step_futures = Vec::new();
+                let mut term_watchers: Vec<gpui::Task<()>> = Vec::new();
 
                 for step in group {
                     let Some(target_id) = step.target_id() else {
@@ -1699,7 +1733,7 @@ impl Dashboard {
                             let label_prefix = label_prefix.to_string();
                             let this = this.clone();
 
-                            let marker_path = this.update(cx, |dashboard, cx| {
+                            let spawn_result = this.update(cx, |dashboard, cx| {
                                 dashboard.spawn_automation_in_terminal(
                                     &target_id,
                                     &active_folder,
@@ -1709,11 +1743,19 @@ impl Dashboard {
                                 )
                             }).ok().flatten();
 
-                            let Some(marker_path) = marker_path else {
+                            let Some((marker_path, terminal_task)) = spawn_result else {
                                 log::warn!("Pipeline '{pipeline_id}': failed to spawn automation '{target_id}'");
                                 continue;
                             };
 
+                            let (term_tx, mut term_rx) = oneshot::channel::<()>();
+                            let term_watcher = cx.background_executor().spawn(async move {
+                                let _ = terminal_task.await;
+                                term_tx.send(()).ok();
+                            });
+                            term_watchers.push(term_watcher);
+
+                            let cancel = cancel_flag.clone();
                             let spawner = cx.background_executor().clone();
                             let timer_executor = spawner.clone();
                             let future = spawner.spawn({
@@ -1724,6 +1766,12 @@ impl Dashboard {
                                     let start = std::time::Instant::now();
                                     loop {
                                         timer_executor.timer(poll_interval).await;
+
+                                        if cancel.load(Ordering::Relaxed) {
+                                            log::info!("Pipeline step '{target_id}' cancelled by user");
+                                            return false;
+                                        }
+
                                         if marker_path.exists() {
                                             let result = CompletionReport::from_marker(&marker_path);
                                             std::fs::remove_file(&marker_path).log_err();
@@ -1736,6 +1784,12 @@ impl Dashboard {
                                                 None => true,
                                             };
                                         }
+
+                                        if matches!(term_rx.try_recv(), Ok(Some(()))) {
+                                            log::warn!("Pipeline step '{target_id}': terminal exited without completion marker");
+                                            return false;
+                                        }
+
                                         if start.elapsed() > timeout {
                                             log::warn!("Pipeline step '{target_id}' timed out");
                                             return false;
@@ -1750,6 +1804,7 @@ impl Dashboard {
 
                 // Wait for all steps in this group to complete
                 let results = futures::future::join_all(step_futures).await;
+                drop(term_watchers);
                 for (i, success) in results.iter().enumerate() {
                     if !success {
                         pipeline_failed = true;
@@ -1784,9 +1839,10 @@ impl Dashboard {
             });
             std::fs::write(&pipeline_marker, report.to_string()).log_err();
 
-            // Remove from active set
+            // Remove from active set and clean up cancel flag
             this.update(cx, |dashboard, cx| {
                 dashboard.active_pipelines.remove(&pipeline_id);
+                dashboard.pipeline_cancel_flags.remove(&pipeline_id);
                 cx.notify();
             }).log_err();
         })
@@ -2248,8 +2304,8 @@ Rules for the completion report:
         .detach();
     }
 
-    fn create_pipeline_toml(&mut self, name: &str, cx: &mut Context<Self>) {
-        let id = format!(
+    fn create_pipeline_toml(&mut self, name: &str, cx: &mut Context<Self>) -> String {
+        let mut id = format!(
             "pipeline-{}",
             name.to_lowercase()
                 .chars()
@@ -2258,12 +2314,65 @@ Rules for the completion report:
         );
         let dir = automations_dir_for(&self.config_root).join("pipelines");
         std::fs::create_dir_all(&dir).log_err();
-        let path = dir.join(format!("{id}.toml"));
+        let mut path = dir.join(format!("{id}.toml"));
+        let base_id = id.clone();
+        let mut counter = 2u32;
+        while path.exists() {
+            id = format!("{base_id}-{counter}");
+            path = dir.join(format!("{id}.toml"));
+            counter += 1;
+        }
         let content = format!(
             "id = \"{id}\"\nlabel = \"{name}\"\ndescription = \"\"\nicon = \"zap\"\ntype = \"pipeline\"\n"
         );
         std::fs::write(&path, content).log_err();
         self.reload_automations(cx);
+        id
+    }
+
+    fn start_new_pipeline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = cx.new(|cx| {
+            let mut ed = Editor::single_line(window, cx);
+            ed.set_placeholder_text("Pipeline name", window, cx);
+            ed
+        });
+
+        let subscription = cx.subscribe(&editor, |this: &mut Dashboard, editor, event, cx| {
+            if let EditorEvent::Blurred = event {
+                if this.pending_new_pipeline.is_some() {
+                    let text = editor.read(cx).text(cx).trim().to_string();
+                    this.finish_new_pipeline(text, cx);
+                }
+            }
+        });
+
+        self.pending_new_pipeline = Some(editor.clone());
+        self._pending_pipeline_subscription = Some(subscription);
+
+        editor.update(cx, |ed, cx| {
+            ed.focus_handle(cx).focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn finish_new_pipeline(&mut self, name: String, cx: &mut Context<Self>) {
+        self.pending_new_pipeline = None;
+        self._pending_pipeline_subscription = None;
+
+        if name.is_empty() {
+            cx.notify();
+            return;
+        }
+
+        let id = self.create_pipeline_toml(&name, cx);
+        self.pipelines_in_edit_mode.insert(id.clone());
+        self.expanded_automations.insert(id);
+    }
+
+    fn cancel_new_pipeline(&mut self, cx: &mut Context<Self>) {
+        self.pending_new_pipeline = None;
+        self._pending_pipeline_subscription = None;
+        cx.notify();
     }
 
     fn delete_pipeline_toml(&mut self, pipeline_id: &str, cx: &mut Context<Self>) {
@@ -3963,10 +4072,13 @@ Rules for the completion report:
         let entity = cx.entity().downgrade();
 
         let is_editing = self.pipelines_in_edit_mode.contains(&entry.id);
+        let is_pending_delete = self.pipelines_pending_delete.contains(&entry.id);
 
-        // Run button
+        // Run/Stop button
         let run_entity = entity.clone();
+        let stop_entity = entity.clone();
         let run_id = entry_id.clone();
+        let stop_id = entry_id.clone();
         let run_entry = entry.clone();
 
         // Edit toggle
@@ -4074,15 +4186,27 @@ Rules for the completion report:
                                                     }).log_err();
                                                 }),
                                             )
-                                            .child(
+                                            .child(if is_running {
+                                                IconButton::new(
+                                                    format!("stop-pipeline-{}", stop_id),
+                                                    IconName::Stop,
+                                                )
+                                                .tooltip(Tooltip::text("Stop pipeline"))
+                                                .on_click(move |_, _, cx| {
+                                                    stop_entity.update(cx, |this, cx| {
+                                                        if let Some(flag) = this.pipeline_cancel_flags.get(&stop_id) {
+                                                            flag.store(true, Ordering::Relaxed);
+                                                        }
+                                                        cx.notify();
+                                                    }).log_err();
+                                                })
+                                            } else {
                                                 IconButton::new(
                                                     format!("run-pipeline-{}", run_id),
                                                     IconName::PlayFilled,
                                                 )
-                                                .disabled(is_running || !has_steps)
-                                                .tooltip(Tooltip::text(if is_running {
-                                                    "Pipeline is running"
-                                                } else if !has_steps {
+                                                .disabled(!has_steps)
+                                                .tooltip(Tooltip::text(if !has_steps {
                                                     "No steps to run"
                                                 } else {
                                                     "Run pipeline"
@@ -4097,18 +4221,26 @@ Rules for the completion report:
                                                             cx,
                                                         );
                                                     }).log_err();
-                                                }),
-                                            )
+                                                })
+                                            })
                                             .child(
                                                 IconButton::new(
                                                     format!("edit-pipeline-{}", edit_id),
                                                     if is_editing { IconName::Check } else { IconName::Settings },
                                                 )
-                                                .tooltip(Tooltip::text(if is_editing { "Done editing" } else { "Edit pipeline" }))
+                                                .disabled(is_running)
+                                                .tooltip(Tooltip::text(if is_running {
+                                                    "Cannot edit while running"
+                                                } else if is_editing {
+                                                    "Done editing"
+                                                } else {
+                                                    "Edit pipeline"
+                                                }))
                                                 .on_click(move |_, _, cx| {
                                                     edit_entity.update(cx, |this, cx| {
                                                         if this.pipelines_in_edit_mode.contains(&edit_id) {
                                                             this.pipelines_in_edit_mode.remove(&edit_id);
+                                                            this.pipelines_pending_delete.remove(&edit_id);
                                                         } else {
                                                             this.pipelines_in_edit_mode.insert(edit_id.clone());
                                                             this.expanded_automations.insert(edit_id.clone());
@@ -4123,10 +4255,21 @@ Rules for the completion report:
                                                         format!("delete-pipeline-{}", delete_id),
                                                         IconName::Trash,
                                                     )
-                                                    .tooltip(Tooltip::text("Delete pipeline"))
+                                                    .icon_color(if is_pending_delete { Color::Error } else { Color::Default })
+                                                    .tooltip(Tooltip::text(if is_pending_delete {
+                                                        "Click again to confirm delete"
+                                                    } else {
+                                                        "Delete pipeline"
+                                                    }))
                                                     .on_click(move |_, _, cx| {
                                                         delete_entity.update(cx, |this, cx| {
-                                                            this.delete_pipeline_toml(&delete_id, cx);
+                                                            if this.pipelines_pending_delete.contains(&delete_id) {
+                                                                this.pipelines_pending_delete.remove(&delete_id);
+                                                                this.delete_pipeline_toml(&delete_id, cx);
+                                                            } else {
+                                                                this.pipelines_pending_delete.insert(delete_id.clone());
+                                                                cx.notify();
+                                                            }
                                                         }).log_err();
                                                     }),
                                                 )
@@ -4200,27 +4343,95 @@ Rules for the completion report:
             })
             .collect();
 
+        // Ghost card for pending new pipeline
+        let ghost_card = self.pending_new_pipeline.clone().map(|editor| {
+            let accent = cx.theme().colors().text_accent;
+            let accent_bg = accent.opacity(0.15);
+            let card_bg = cx.theme().colors().elevated_surface_background;
+            let border_color = cx.theme().colors().border;
+            let confirm_entity = cx.entity().downgrade();
+            let cancel_entity = cx.entity().downgrade();
+
+            div()
+                .id("new-pipeline-ghost")
+                .w_full()
+                .rounded_lg()
+                .border_1()
+                .border_color(accent.opacity(0.5))
+                .bg(card_bg)
+                .overflow_hidden()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .child(div().w(px(3.)).h_full().flex_shrink_0().bg(accent))
+                        .child(
+                            h_flex()
+                                .flex_1()
+                                .p_2()
+                                .gap_3()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .size(px(36.))
+                                        .rounded(px(8.))
+                                        .bg(accent_bg)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            Icon::new(IconName::PlayFilled)
+                                                .size(IconSize::Medium)
+                                                .color(Color::Accent),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .border_1()
+                                        .border_color(border_color)
+                                        .rounded_sm()
+                                        .px_1()
+                                        .child(editor),
+                                ),
+                        ),
+                )
+                .on_action(move |_: &menu::Confirm, _, cx| {
+                    confirm_entity.update(cx, |this, cx| {
+                        if let Some(editor) = &this.pending_new_pipeline {
+                            let text = editor.read(cx).text(cx).trim().to_string();
+                            this.finish_new_pipeline(text, cx);
+                        }
+                    }).log_err();
+                })
+                .on_action(move |_: &menu::Cancel, _, cx| {
+                    cancel_entity.update(cx, |this, cx| {
+                        this.cancel_new_pipeline(cx);
+                    }).log_err();
+                })
+        });
+
         // [+ New Pipeline] button
-        let new_entity = cx.entity().downgrade();
+        let has_pending = self.pending_new_pipeline.is_some();
         let new_pipeline_button = ButtonLike::new("new-pipeline-btn")
             .style(ButtonStyle::Subtle)
+            .disabled(has_pending)
             .child(
                 h_flex()
                     .gap_1()
                     .child(Icon::new(IconName::Plus).size(IconSize::XSmall).color(Color::Muted))
                     .child(Label::new("New Pipeline").size(LabelSize::XSmall).color(Color::Muted)),
             )
-            .on_click(move |_, _, cx| {
-                new_entity.update(cx, |this, cx| {
-                    this.create_pipeline_toml("New Pipeline", cx);
-                }).log_err();
-            });
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.start_new_pipeline(window, cx);
+            }));
 
         v_flex()
             .w_full()
             .gap_1()
             .child(header)
             .child(v_flex().w_full().gap_2().children(cards))
+            .when_some(ghost_card, |el, card| el.child(card))
             .child(new_pipeline_button)
     }
 
