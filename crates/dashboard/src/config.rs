@@ -569,6 +569,7 @@ pub(crate) struct BackendEntry {
     #[serde(default)]
     pub(crate) flags: String,
     #[serde(default)]
+    #[allow(dead_code)] // Parsed from AGENTS.toml; reserved for backends that use prompt flags
     pub(crate) prompt_flag: String,
 }
 
@@ -1059,6 +1060,295 @@ prompt = "Do the scan"
         let entry = load_single_automation(&path, tmp.path())?;
         assert!(!entry.is_pipeline());
         assert!(entry.steps.is_empty());
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // prompt_file resolution
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_resolve_file_by_name_found() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir(&sub)?;
+        std::fs::write(sub.join("hello.md"), "content")?;
+
+        let result = resolve_file_by_name(tmp.path(), "hello.md");
+        assert!(result.is_ok());
+        assert_eq!(result.as_ref().unwrap().file_name().unwrap(), "hello.md");
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_file_by_name_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let result = resolve_file_by_name(tmp.path(), "missing.md");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not found"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_file_by_name_ambiguous() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let dir_a = tmp.path().join("a");
+        let dir_b = tmp.path().join("b");
+        std::fs::create_dir(&dir_a)?;
+        std::fs::create_dir(&dir_b)?;
+        std::fs::write(dir_a.join("dup.md"), "first")?;
+        std::fs::write(dir_b.join("dup.md"), "second")?;
+
+        let result = resolve_file_by_name(tmp.path(), "dup.md");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("ambiguous"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_file_by_name_nonexistent_dir() {
+        let result = resolve_file_by_name(Path::new("/nonexistent/dir"), "file.md");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_prompt_file_loads_content() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let config_root = tmp.path();
+        let prompts_dir = config_root.join("config/prompts");
+        std::fs::create_dir_all(&prompts_dir)?;
+        std::fs::write(prompts_dir.join("test.md"), "Hello from file")?;
+
+        let auto_dir = config_root.join("config/automations");
+        std::fs::create_dir_all(&auto_dir)?;
+        std::fs::write(auto_dir.join("test.toml"), r#"
+id = "test"
+label = "Test"
+description = "d"
+icon = "zap"
+prompt_file = "test.md"
+"#)?;
+
+        let entry = load_single_automation(&auto_dir.join("test.toml"), config_root)?;
+        assert_eq!(entry.prompt, "Hello from file");
+        Ok(())
+    }
+
+    #[test]
+    fn test_inline_prompt_fallback() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("inline.toml");
+        std::fs::write(&path, r#"
+id = "inline"
+label = "Inline"
+description = "d"
+icon = "zap"
+prompt = "inline content"
+"#)?;
+
+        let entry = load_single_automation(&path, tmp.path())?;
+        assert_eq!(entry.prompt, "inline content");
+        Ok(())
+    }
+
+    #[test]
+    fn test_prompt_file_missing_rejects_automation() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("missing.toml");
+        std::fs::write(&path, r#"
+id = "missing"
+label = "Missing"
+description = "d"
+icon = "zap"
+prompt_file = "does-not-exist.md"
+"#)?;
+
+        let result = load_single_automation(&path, tmp.path());
+        match result {
+            Err(e) => assert!(e.contains("not found"), "unexpected error: {e}"),
+            Ok(_) => panic!("should fail when prompt file is missing"),
+        }
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // read_path_context (file and folder reading)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_read_path_context_file() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        std::fs::write(tmp.path().join("notes.txt"), "some notes")?;
+
+        let result = read_path_context(&tmp.path().join("notes.txt"))?;
+        assert_eq!(result, "some notes");
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_path_context_folder() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        std::fs::write(tmp.path().join("a.txt"), "alpha")?;
+        std::fs::write(tmp.path().join("b.txt"), "beta")?;
+
+        let result = read_path_context(tmp.path())?;
+        assert!(result.contains("--- a.txt ---"));
+        assert!(result.contains("alpha"));
+        assert!(result.contains("--- b.txt ---"));
+        assert!(result.contains("beta"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_path_context_folder_with_subdirs() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        std::fs::write(tmp.path().join("root.txt"), "root")?;
+        let sub = tmp.path().join("sub");
+        std::fs::create_dir(&sub)?;
+        std::fs::write(sub.join("nested.txt"), "nested")?;
+
+        let result = read_path_context(tmp.path())?;
+        assert!(result.contains("root.txt"));
+        assert!(result.contains("sub/nested.txt") || result.contains("sub\\nested.txt"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_path_context_nonexistent() {
+        let result = read_path_context(Path::new("/nonexistent/path"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_read_path_context_file_truncation() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let big_content = "x".repeat(200 * 1024);
+        std::fs::write(tmp.path().join("big.txt"), &big_content)?;
+
+        let result = read_path_context(&tmp.path().join("big.txt"))?;
+        assert!(result.len() < big_content.len());
+        assert!(result.contains("[... truncated at 150KB]"));
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // load_default_contexts
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_load_default_contexts_empty() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let contexts = load_default_contexts(tmp.path());
+        assert!(contexts.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_default_contexts_loads_entries() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path().join("config/default-context");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("git.toml"), r#"
+[[context]]
+source = "script"
+script = "git-status.sh"
+label = "Git status"
+required = false
+"#)?;
+
+        let contexts = load_default_contexts(tmp.path());
+        assert_eq!(contexts.len(), 1);
+        assert_eq!(contexts[0].source_type, "script");
+        assert_eq!(contexts[0].label, "Git status");
+        assert!(!contexts[0].required);
+        Ok(())
+    }
+
+    #[test]
+    fn test_load_default_contexts_multiple_files() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path().join("config/default-context");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("a.toml"), r#"
+[[context]]
+source = "script"
+script = "a.sh"
+label = "A"
+"#)?;
+        std::fs::write(dir.join("b.toml"), r#"
+[[context]]
+source = "path"
+path = "/tmp/test"
+label = "B"
+"#)?;
+
+        let contexts = load_default_contexts(tmp.path());
+        assert_eq!(contexts.len(), 2);
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // ContextEntry TOML parsing
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_context_entry_parsing() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("ctx.toml");
+        std::fs::write(&path, r#"
+id = "with-ctx"
+label = "With Context"
+description = "d"
+icon = "zap"
+prompt = "do something"
+skip_default_context = true
+
+[[context]]
+source = "path"
+path = "/tmp/notes.md"
+label = "Notes"
+
+[[context]]
+source = "script"
+script = "status.sh"
+label = "Status"
+required = false
+"#)?;
+
+        let entry = load_single_automation(&path, tmp.path())?;
+        assert_eq!(entry.contexts.len(), 2);
+        assert!(entry.skip_default_context);
+        assert_eq!(entry.contexts[0].source_type, "path");
+        assert_eq!(entry.contexts[0].path.as_deref(), Some("/tmp/notes.md"));
+        assert!(entry.contexts[0].required); // default true
+        assert_eq!(entry.contexts[1].source_type, "script");
+        assert_eq!(entry.contexts[1].script.as_deref(), Some("status.sh"));
+        assert!(!entry.contexts[1].required);
+        Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // collect_context_scripts
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_collect_context_scripts_empty() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let scripts = collect_context_scripts(tmp.path());
+        assert!(scripts.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_collect_context_scripts_finds_files() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let dir = tmp.path().join("config/context-scripts");
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("a.sh"), "#!/bin/bash")?;
+        std::fs::write(dir.join("b.sh"), "#!/bin/bash")?;
+
+        let scripts = collect_context_scripts(tmp.path());
+        assert_eq!(scripts.len(), 2);
         Ok(())
     }
 }
