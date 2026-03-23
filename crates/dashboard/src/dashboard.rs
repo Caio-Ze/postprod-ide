@@ -2322,6 +2322,7 @@ Rules for the completion report:
         }
     }
 
+    #[allow(dead_code)] // Used by automation_picker's AddContextScript mode; will be used in context edit mode
     fn add_context_script_entry(&mut self, automation_id: &str, script_name: String, cx: &mut Context<Self>) {
         let label = std::path::Path::new(&script_name)
             .file_stem()
@@ -3731,7 +3732,6 @@ Rules for the completion report:
         let disc_id = entry_id.clone();
 
         let param_fields = self.render_entry_params(&entry.id, &entry.params, window, cx);
-        let has_contexts = !entry.contexts.is_empty() || !self.default_contexts.is_empty();
         let context_rows = if is_expanded {
             self.render_context_editor(&entry.id, &entry.contexts, entry.skip_default_context, cx)
         } else {
@@ -4037,9 +4037,8 @@ Rules for the completion report:
         }
 
         // "Add Context" buttons
-        let add_path_entity = entity.clone();
+        let add_path_entity = entity;
         let add_path_id = automation_id.to_string();
-        let add_script_entity = entity.clone();
         let add_script_id = automation_id.to_string();
         let workspace_for_script = self.workspace.clone();
         let scripts = config::collect_context_scripts(&self.config_root);
@@ -4061,7 +4060,7 @@ Rules for the completion report:
                         )
                         .on_click(move |_, _, cx| {
                             let auto_id = add_path_id.clone();
-                            add_path_entity.update(cx, |this, cx| {
+                            add_path_entity.update(cx, |_this, cx| {
                                 let receiver = cx.prompt_for_paths(PathPromptOptions {
                                     files: true,
                                     directories: true,
@@ -4091,8 +4090,8 @@ Rules for the completion report:
                             )
                         })
                         .collect();
-                    let auto_id = add_script_id.clone();
-                    let ws = workspace_for_script.clone();
+                    let auto_id = add_script_id;
+                    let ws = workspace_for_script;
                     move |el| {
                         el.child(
                             ButtonLike::new(format!("add-ctx-script-{}", auto_id))
@@ -4104,9 +4103,9 @@ Rules for the completion report:
                                         .child(Label::new("Add Script").size(LabelSize::XSmall).color(Color::Muted)),
                                 )
                                 .on_click({
-                                    let entries = scripts_entries.clone();
-                                    let ws = ws.clone();
-                                    let auto_id = auto_id.clone();
+                                    let entries = scripts_entries;
+                                    let ws = ws;
+                                    let auto_id = auto_id;
                                     move |_, window, cx| {
                                         let Some(workspace) = ws.upgrade() else { return };
                                         let mode = crate::automation_picker::PickerMode::AddContextScript {
@@ -5342,6 +5341,9 @@ fn gather_context_blocking(
                     }
                 };
 
+                // This runs on a background thread via gather_context_blocking(),
+                // so blocking .output() is intentional and correct here.
+                #[allow(clippy::disallowed_methods)]
                 let result = Command::new("sh")
                     .arg("-c")
                     .arg(script_path.to_string_lossy().as_ref())
