@@ -5391,8 +5391,10 @@ fn gather_context_blocking(
     Ok(output)
 }
 
-/// Build a SpawnInTerminal that reads the prompt from a temp file.
-/// Returns None if the backend config is missing.
+/// Build a SpawnInTerminal that reads the prompt from a temp file via stdin piping.
+/// The prompt (with any gathered context prepended) is written to /tmp/postprod_prompt_{id}.md,
+/// then executed as: `cat <temp_file> | <command> <flags>`.
+/// Returns None if the backend config is missing or the temp file cannot be written.
 fn build_temp_file_terminal_command(
     prompt: &str,
     entry_id: &str,
