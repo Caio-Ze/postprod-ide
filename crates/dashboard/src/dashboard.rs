@@ -4943,6 +4943,95 @@ Rules for the completion report:
                         .children(regular_elements),
                 )
             })
+            .when_some(self.render_new_automation_ghost(cx), |el, card| el.child(card))
+            .child(self.render_new_automation_button(cx))
+    }
+
+    fn render_new_automation_ghost(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let editor = self.pending_new_automation.clone()?;
+        let accent = cx.theme().colors().text_accent;
+        let accent_bg = accent.opacity(0.15);
+        let card_bg = cx.theme().colors().elevated_surface_background;
+        let border_color = cx.theme().colors().border;
+        let confirm_entity = cx.entity().downgrade();
+        let cancel_entity = cx.entity().downgrade();
+
+        Some(
+            div()
+                .id("new-automation-ghost")
+                .w_full()
+                .rounded_lg()
+                .border_1()
+                .border_color(accent.opacity(0.5))
+                .bg(card_bg)
+                .overflow_hidden()
+                .child(
+                    h_flex()
+                        .w_full()
+                        .child(div().w(px(3.)).h_full().flex_shrink_0().bg(accent))
+                        .child(
+                            h_flex()
+                                .flex_1()
+                                .p_2()
+                                .gap_3()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .flex_shrink_0()
+                                        .size(px(36.))
+                                        .rounded(px(8.))
+                                        .bg(accent_bg)
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .child(
+                                            Icon::new(IconName::Sparkle)
+                                                .size(IconSize::Medium)
+                                                .color(Color::Accent),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .border_1()
+                                        .border_color(border_color)
+                                        .rounded_sm()
+                                        .px_1()
+                                        .child(editor),
+                                ),
+                        ),
+                )
+                .on_action(move |_: &menu::Confirm, _, cx| {
+                    confirm_entity.update(cx, |this, cx| {
+                        if let Some(editor) = &this.pending_new_automation {
+                            let text = editor.read(cx).text(cx).trim().to_string();
+                            this.finish_new_automation(text, cx);
+                        }
+                    }).log_err();
+                })
+                .on_action(move |_: &menu::Cancel, _, cx| {
+                    cancel_entity.update(cx, |this, cx| {
+                        this.cancel_new_automation(cx);
+                    }).log_err();
+                })
+                .into_any_element(),
+        )
+    }
+
+    fn render_new_automation_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let has_pending = self.pending_new_automation.is_some();
+        ButtonLike::new("new-automation-btn")
+            .style(ButtonStyle::Subtle)
+            .disabled(has_pending)
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(Icon::new(IconName::Plus).size(IconSize::XSmall).color(Color::Muted))
+                    .child(Label::new("New Automation").size(LabelSize::XSmall).color(Color::Muted)),
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.start_new_automation(window, cx);
+            }))
     }
 
     fn render_ai_agents_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
