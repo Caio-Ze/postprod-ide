@@ -110,7 +110,7 @@ impl PickerEntry {
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| filename.clone());
         Self {
-            id: filename.clone(),
+            id: filename,
             label,
             kind: PickerEntryKind::ContextScript(script_path),
             global_hotkey: None,
