@@ -40,6 +40,9 @@ pub(crate) enum PickerMode {
         pipeline_source_path: PathBuf,
         group: Option<u32>,
     },
+    AddContextScript {
+        automation_id: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -62,6 +65,7 @@ enum PickerEntryKind {
     Tool(ToolEntry),
     Automation(AutomationEntry),
     GlobalShortcutOnly(ToolEntry),
+    ContextScript(PathBuf),
 }
 
 #[derive(Clone)]
@@ -92,6 +96,23 @@ impl PickerEntry {
             id: automation.id.clone(),
             label: automation.label.clone(),
             kind: PickerEntryKind::Automation(automation),
+            global_hotkey: None,
+            config_root,
+        }
+    }
+
+    pub(crate) fn new_context_script(script_path: PathBuf, config_root: Option<PathBuf>) -> Self {
+        let filename = script_path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let label = std::path::Path::new(&filename)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| filename.clone());
+        Self {
+            id: filename.clone(),
+            label,
+            kind: PickerEntryKind::ContextScript(script_path),
             global_hotkey: None,
             config_root,
         }
@@ -215,6 +236,7 @@ impl AutomationModal {
         let initial_tab = match &mode {
             PickerMode::Run => PickerTab::Tools,
             PickerMode::AddPipelineStep { .. } => PickerTab::Automations,
+            PickerMode::AddContextScript { .. } => PickerTab::Automations,
         };
         let delegate_mode = mode.clone();
 
@@ -334,6 +356,7 @@ impl Render for AutomationModal {
                     .child(
                         Label::new(match &self.mode {
                             PickerMode::AddPipelineStep { .. } => "Add Step",
+                            PickerMode::AddContextScript { .. } => "Add Script",
                             PickerMode::Run => "Spawn",
                         })
                             .size(LabelSize::Small)
@@ -390,6 +413,7 @@ impl PickerDelegate for AutomationPickerDelegate {
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
         match &self.mode {
             PickerMode::AddPipelineStep { .. } => "Add a step...".into(),
+            PickerMode::AddContextScript { .. } => "Add a script...".into(),
             PickerMode::Run => match self.active_tab {
                 PickerTab::Tools => "Find a tool...".into(),
                 PickerTab::Automations => "Find an automation...".into(),
@@ -415,6 +439,10 @@ impl PickerDelegate for AutomationPickerDelegate {
                     if entry.id == *exclude {
                         return false;
                     }
+                }
+                // In AddContextScript mode, show only script entries regardless of tab
+                if matches!(self.mode, PickerMode::AddContextScript { .. }) {
+                    return matches!(entry.kind, PickerEntryKind::ContextScript(_));
                 }
                 match tab {
                     PickerTab::Tools => matches!(
@@ -485,11 +513,27 @@ impl PickerDelegate for AutomationPickerDelegate {
                             group: *group,
                         }
                     }
+                    PickerEntryKind::ContextScript(_) => return,
                 };
                 if let Err(e) = append_step_to_pipeline(pipeline_source_path, &step) {
                     log::error!("Failed to write pipeline step: {e}");
                 }
                 // Trigger dashboard reload
+                window.dispatch_action(Box::new(crate::ShowDashboard), cx);
+            }
+            PickerMode::AddContextScript { automation_id } => {
+                let script_name = match &entry.kind {
+                    PickerEntryKind::ContextScript(path) => {
+                        path.file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default()
+                    }
+                    _ => return,
+                };
+                let auto_id = automation_id.clone();
+                if let Err(e) = append_context_script_to_toml(&auto_id, &script_name, &self.all_entries) {
+                    log::error!("Failed to add context script: {e}");
+                }
                 window.dispatch_action(Box::new(crate::ShowDashboard), cx);
             }
             PickerMode::Run => {
@@ -504,6 +548,7 @@ impl PickerDelegate for AutomationPickerDelegate {
                     PickerEntryKind::Automation(_) => {
                         window.dispatch_action(Box::new(crate::ShowDashboard), cx);
                     }
+                    PickerEntryKind::ContextScript(_) => {}
                 }
             }
         }
@@ -532,6 +577,9 @@ impl PickerDelegate for AutomationPickerDelegate {
                     .size(IconSize::Small)
             }
             PickerEntryKind::Automation(_) => Icon::new(IconName::PlayOutlined)
+                .color(Color::Muted)
+                .size(IconSize::Small),
+            PickerEntryKind::ContextScript(_) => Icon::new(IconName::ToolTerminal)
                 .color(Color::Muted)
                 .size(IconSize::Small),
         };
@@ -709,5 +757,43 @@ fn append_step_to_pipeline(
     }
 
     std::fs::write(source_path, doc.to_string())?;
+    Ok(())
+}
+
+fn append_context_script_to_toml(
+    automation_id: &str,
+    script_name: &str,
+    entries: &[PickerEntry],
+) -> anyhow::Result<()> {
+    // Find the automation's source path from the entries list
+    let source_path = entries.iter()
+        .find(|e| e.id == automation_id)
+        .and_then(|e| match &e.kind {
+            PickerEntryKind::Automation(auto) => auto.source_path.clone(),
+            _ => None,
+        })
+        .ok_or_else(|| anyhow::anyhow!("automation '{automation_id}' not found"))?;
+
+    let content = std::fs::read_to_string(&source_path)?;
+    let mut doc = content.parse::<toml_edit::DocumentMut>()?;
+
+    let contexts = doc
+        .entry("context")
+        .or_insert_with(|| toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
+
+    if let Some(array) = contexts.as_array_of_tables_mut() {
+        let label = std::path::Path::new(script_name)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| script_name.to_string());
+        let mut table = toml_edit::Table::new();
+        table.insert("source", toml_edit::value("script"));
+        table.insert("script", toml_edit::value(script_name));
+        table.insert("label", toml_edit::value(label.as_str()));
+        table.insert("required", toml_edit::value(false));
+        array.push(table);
+    }
+
+    std::fs::write(&source_path, doc.to_string())?;
     Ok(())
 }

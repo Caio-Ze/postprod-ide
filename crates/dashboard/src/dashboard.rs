@@ -351,6 +351,8 @@ pub struct Dashboard {
     _delivery_scan_task: gpui::Task<()>,
     // Automations (loaded from TOML)
     pub(crate) automations: Vec<AutomationEntry>,
+    // Default context entries (from config/default-context/)
+    default_contexts: Vec<config::ContextEntry>,
     agent_backend: AgentBackend,
     backends: Vec<BackendEntry>,
     agent_launchers: Vec<AgentEntry>,
@@ -387,6 +389,9 @@ pub struct Dashboard {
     // Pipeline creation
     pending_new_pipeline: Option<Entity<Editor>>,
     _pending_pipeline_subscription: Option<Subscription>,
+    // "Add Automation" ghost card state
+    pending_new_automation: Option<Entity<Editor>>,
+    _pending_automation_subscription: Option<Subscription>,
 }
 
 pub(crate) fn resolve_tool_command(
@@ -488,6 +493,7 @@ impl Dashboard {
         let (automations, automations_error) = load_automations_registry(&config_root);
         let (tools, tools_error) = load_tools_registry(&config_root);
         let (backends, agent_launchers, _agents_error) = load_agents_config(&config_root);
+        let default_contexts = config::load_default_contexts(&config_root);
         let background_tools = read_background_tools(&config_root);
         let collapsed_sections = read_collapsed_sections(&config_root);
         let section_order = read_section_order(&config_root);
@@ -852,6 +858,7 @@ impl Dashboard {
                 delivery_status: DeliveryStatus::default(),
                 _delivery_scan_task: delivery_scan_task,
                 automations,
+                default_contexts,
                 agent_backend: AgentBackend::Claude,
                 backends,
                 agent_launchers,
@@ -878,6 +885,8 @@ impl Dashboard {
                 pipelines_pending_delete: HashSet::new(),
                 pending_new_pipeline: None,
                 _pending_pipeline_subscription: None,
+                pending_new_automation: None,
+                _pending_automation_subscription: None,
             }
         })
     }
@@ -1026,6 +1035,7 @@ impl Dashboard {
         self.tools_error = tools_error;
         self.automations = automations;
         self.automations_error = automations_error;
+        self.default_contexts = config::load_default_contexts(&self.config_root);
         self.backends = backends;
         self.agent_launchers = agent_launchers;
 
@@ -1070,15 +1080,7 @@ impl Dashboard {
         cx.notify();
     }
 
-    /// Find the context-launcher binary using the runtime path resolution.
-    /// Returns None if the binary is not deployed (fallback to dashboard substitution).
-    fn resolve_context_launcher(&self) -> Option<PathBuf> {
-        let candidate = self.runtime_path.join("tools/context-launcher");
-        if candidate.is_file() {
-            return Some(candidate);
-        }
-        None
-    }
+
 
     fn run_automation(
         &self,
@@ -1118,11 +1120,6 @@ impl Dashboard {
             resolved
         };
 
-        let use_context_launcher = self.automations.iter()
-            .find(|a| a.id == entry_id)
-            .map(|a| a.use_context_launcher)
-            .unwrap_or(true);
-
         // Check if this automation has chain config (for terminal backends only)
         let has_chain = self.automations.iter()
             .find(|a| a.id == entry_id)
@@ -1146,7 +1143,6 @@ impl Dashboard {
         };
 
         // Capture values needed by the async block
-        let launcher_path = self.resolve_context_launcher();
         let workspace = self.workspace.clone();
         let agent_backend = self.agent_backend;
         let backends = self.backends.clone();
@@ -1154,16 +1150,28 @@ impl Dashboard {
         let entry_id = entry_id.to_string();
         let entry_label = entry_label.to_string();
 
-        // Build context-launcher CLI args
-        let mut launcher_args = vec!["--automation".to_string(), entry_id.clone()];
-        if let Some(values) = self.param_values.get(&entry_id) {
-            for (key, value) in values {
-                if !value.is_empty() {
-                    launcher_args.push("--param".to_string());
-                    launcher_args.push(format!("{}={}", key, value));
-                }
+        // Collect context entries (default + per-automation)
+        let contexts = {
+            let entry = self.automations.iter().find(|a| a.id == entry_id);
+            let mut all_contexts = if entry.is_some_and(|e| !e.skip_default_context) {
+                self.default_contexts.clone()
+            } else {
+                Vec::new()
+            };
+            if let Some(e) = entry {
+                all_contexts.extend(e.contexts.clone());
             }
-        }
+            all_contexts
+        };
+        let config_root = self.config_root.clone();
+        let session_path_for_env = self.session_path.clone().unwrap_or_default();
+        let active_folder_for_env = self.active_folder.as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let destination_for_env = self.destination_folder.as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let param_values_for_env = self.param_values.get(&entry_id).cloned().unwrap_or_default();
 
         // If chain is configured but backend can't support it, warn
         if has_chain && matches!(agent_backend, AgentBackend::Native | AgentBackend::CopyOnly) {
@@ -1192,126 +1200,28 @@ impl Dashboard {
         }
 
         cx.spawn_in(window, async move |_this, cx| {
-            // Phase 1: Run context-launcher → Result<String, String>.
-            // Ok = enriched prompt (stdout), Err = human-readable reason.
-            let result: Result<String, String> = if !use_context_launcher {
-                Ok(fallback_prompt.clone())
-            } else if let Some(launcher) = launcher_path {
-                let args = launcher_args;
-                let output_result = cx
-                    .background_executor()
-                    .spawn(async move {
-                        smol::process::Command::new(&launcher)
-                            .args(&args)
-                            .output()
-                            .await
-                    })
-                    .await;
-
-                match output_result {
-                    Ok(output) if output.status.success() => {
-                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                        if stdout.trim().is_empty() {
-                            Err("context-launcher returned empty output".into())
-                        } else {
-                            Ok(stdout)
-                        }
-                    }
-                    Ok(output) => {
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let snippet = stderr.lines().next().unwrap_or("unknown error");
-                        Err(format!("exit {}: {snippet}", output.status))
-                    }
-                    Err(e) => Err(format!("{e}")),
-                }
+            // Phase 1: Gather context on background thread.
+            let context_result: Result<String, String> = if contexts.is_empty() {
+                Ok(String::new())
             } else {
-                Err("context-launcher not installed".into())
+                let contexts = contexts.clone();
+                let config_root = config_root.clone();
+                let session = session_path_for_env.clone();
+                let folder = active_folder_for_env.clone();
+                let dest = destination_for_env.clone();
+                let params = param_values_for_env.clone();
+                cx.background_executor().spawn(async move {
+                    gather_context_blocking(
+                        &contexts, &config_root, &session, &folder, &dest, &params,
+                    )
+                }).await
             };
 
-            // Phase 2: Route enriched prompt on success, or show toast on failure.
-            match result {
-                Ok(enriched_prompt) => {
-                    if agent_backend == AgentBackend::Native {
-                        let prompt = enriched_prompt;
-                        workspace.update_in(cx, |workspace, window, cx| {
-                            if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
-                                panel.update(cx, |panel, cx| {
-                                    panel.new_external_thread_with_auto_submit(
-                                        prompt,
-                                        window,
-                                        cx,
-                                    );
-                                });
-                                workspace.focus_panel::<AgentPanel>(window, cx);
-                            }
-                        }).log_err();
-                        return;
-                    }
-
-                    if agent_backend == AgentBackend::CopyOnly {
-                        cx.update(|_window, cx| {
-                            cx.write_to_clipboard(ClipboardItem::new_string(enriched_prompt));
-                        }).log_err();
-                        return;
-                    }
-
-                    // Terminal backend: append completion report instruction if chained
-                    let enriched_prompt = if let Some(marker_path) = &chain_marker {
-                        let mut prompt_with_completion = enriched_prompt;
-                        prompt_with_completion.push_str(
-                            &Self::completion_report_instruction(marker_path),
-                        );
-                        prompt_with_completion
-                    } else {
-                        enriched_prompt
-                    };
-
-                    // Collapse multi-line prompt to single line
-                    // to avoid `zsh: parse error near '\n'` when spawning
-                    // `claude -p "..."`.
-                    let resolved_prompt = enriched_prompt
-                        .lines()
-                        .map(|line| line.trim())
-                        .filter(|line| !line.is_empty())
-                        .collect::<Vec<_>>()
-                        .join(" ");
-
-                    let backend_id = agent_backend.backend_id();
-                    let Some(config) = backends.iter().find(|b| b.id == backend_id) else {
-                        log::warn!("dashboard: no backend config for '{backend_id}'");
-                        return;
-                    };
-
-                    let command = resolve_bin(&config.command);
-                    let escaped = resolved_prompt.replace("'", "'\\''");
-                    let flags = &config.flags;
-                    let prompt_flag = &config.prompt_flag;
-                    let full_command = format!("{command} {flags} {prompt_flag} '{escaped}'");
-
-                    let spawn = SpawnInTerminal {
-                        id: TaskId(format!("automation-{}", entry_id)),
-                        label: entry_label.clone(),
-                        full_label: entry_label.clone(),
-                        command: Some(full_command),
-                        args: vec![],
-                        command_label: entry_label,
-                        cwd: Some(agent_cwd),
-                        use_new_terminal: true,
-                        allow_concurrent_runs: false,
-                        reveal: RevealStrategy::Always,
-                        show_command: true,
-                        show_rerun: true,
-                        ..Default::default()
-                    };
-
-                    workspace.update_in(cx, |workspace, window, cx| {
-                        workspace.spawn_in_terminal(spawn, window, cx).detach();
-                    }).log_err();
-                }
+            let enriched_prompt = match context_result {
+                Ok(ctx) if ctx.is_empty() => fallback_prompt.clone(),
+                Ok(ctx) => format!("{ctx}\n=== End of pre-loaded context ===\n\n{fallback_prompt}"),
                 Err(reason) => {
-                    log::warn!("context-launcher: {reason}");
-
-                    // Capture routing state for the "Run without context" button.
+                    log::warn!("context gathering failed for '{}': {reason}", entry_id);
                     let ws_for_toast = workspace.clone();
                     let fallback = fallback_prompt.clone();
                     let backends_for_toast = backends.clone();
@@ -1323,83 +1233,74 @@ impl Dashboard {
                         workspace.show_toast(
                             Toast::new(
                                 NotificationId::unique::<ContextLauncherToast>(),
-                                format!(
-                                    "Context enrichment failed for '{}': {}",
-                                    entry_label, reason
-                                ),
+                                format!("Context gathering failed for '{}': {}", entry_label, reason),
                             )
                             .on_click(
                                 "Run without context",
                                 move |window, cx| {
                                     if agent_backend == AgentBackend::CopyOnly {
-                                        cx.write_to_clipboard(ClipboardItem::new_string(
-                                            fallback.clone(),
-                                        ));
+                                        cx.write_to_clipboard(ClipboardItem::new_string(fallback.clone()));
                                         return;
                                     }
-
                                     if agent_backend == AgentBackend::Native {
                                         let prompt = fallback.clone();
                                         ws_for_toast.update(cx, |workspace, cx| {
                                             if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                                                 panel.update(cx, |panel, cx| {
-                                                    panel.new_external_thread_with_auto_submit(
-                                                        prompt,
-                                                        window,
-                                                        cx,
-                                                    );
+                                                    panel.new_external_thread_with_auto_submit(prompt, window, cx);
                                                 });
                                                 workspace.focus_panel::<AgentPanel>(window, cx);
                                             }
                                         }).log_err();
                                         return;
                                     }
-
-                                    // Terminal backend
-                                    let resolved = fallback
-                                        .lines()
-                                        .map(|l| l.trim())
-                                        .filter(|l| !l.is_empty())
-                                        .collect::<Vec<_>>()
-                                        .join(" ");
-                                    let backend_id = agent_backend.backend_id();
-                                    let Some(config) =
-                                        backends_for_toast.iter().find(|b| b.id == backend_id)
-                                    else {
-                                        return;
-                                    };
-                                    let command = resolve_bin(&config.command);
-                                    let escaped = resolved.replace("'", "'\\''");
-                                    let full_command = format!(
-                                        "{command} {} {} '{escaped}'",
-                                        config.flags, config.prompt_flag
-                                    );
-
-                                    let spawn = SpawnInTerminal {
-                                        id: TaskId(format!("automation-{}", id_for_toast)),
-                                        label: label_for_toast.clone(),
-                                        full_label: label_for_toast.clone(),
-                                        command: Some(full_command),
-                                        args: vec![],
-                                        command_label: label_for_toast.clone(),
-                                        cwd: Some(cwd_for_toast.clone()),
-                                        use_new_terminal: true,
-                                        allow_concurrent_runs: false,
-                                        reveal: RevealStrategy::Always,
-                                        show_command: true,
-                                        show_rerun: true,
-                                        ..Default::default()
-                                    };
-
-                                    ws_for_toast.update(cx, |workspace, cx| {
-                                        workspace.spawn_in_terminal(spawn, window, cx).detach();
-                                    }).log_err();
+                                    // Terminal fallback
+                                    if let Some(spawn) = build_temp_file_terminal_command(
+                                        &fallback, &id_for_toast, &label_for_toast,
+                                        agent_backend, &backends_for_toast, &cwd_for_toast, &None,
+                                    ) {
+                                        ws_for_toast.update(cx, |workspace, cx| {
+                                            workspace.spawn_in_terminal(spawn, window, cx).detach();
+                                        }).log_err();
+                                    }
                                 },
                             ),
                             cx,
                         );
                     }).log_err();
+                    return;
                 }
+            };
+
+            // Phase 2: Route to backend.
+            if agent_backend == AgentBackend::Native {
+                let prompt = enriched_prompt;
+                workspace.update_in(cx, |workspace, window, cx| {
+                    if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
+                        panel.update(cx, |panel, cx| {
+                            panel.new_external_thread_with_auto_submit(prompt, window, cx);
+                        });
+                        workspace.focus_panel::<AgentPanel>(window, cx);
+                    }
+                }).log_err();
+                return;
+            }
+
+            if agent_backend == AgentBackend::CopyOnly {
+                cx.update(|_window, cx| {
+                    cx.write_to_clipboard(ClipboardItem::new_string(enriched_prompt));
+                }).log_err();
+                return;
+            }
+
+            // Terminal backend: write temp file and spawn
+            if let Some(spawn) = build_temp_file_terminal_command(
+                &enriched_prompt, &entry_id, &entry_label,
+                agent_backend, &backends, &agent_cwd, &chain_marker,
+            ) {
+                workspace.update_in(cx, |workspace, window, cx| {
+                    workspace.spawn_in_terminal(spawn, window, cx).detach();
+                }).log_err();
             }
         })
         .detach();
@@ -1475,20 +1376,17 @@ impl Dashboard {
         // Append completion report instruction
         resolved_prompt.push_str(&Self::completion_report_instruction(&marker_path));
 
-        // Collapse multi-line prompt for shell safety
-        let resolved_prompt = resolved_prompt
-            .lines()
-            .map(|line| line.trim())
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ");
+        // Write prompt to temp file (preserves markdown formatting)
+        let temp_path = std::env::temp_dir().join(format!("postprod_prompt_{}.md", entry.id));
+        if let Err(e) = std::fs::write(&temp_path, &resolved_prompt) {
+            log::error!("failed to write temp prompt file: {e}");
+            return None;
+        }
 
-        // Build CLI command
         let command = resolve_bin(&backend_config.command);
-        let escaped = resolved_prompt.replace('\'', "'\\''");
         let flags = &backend_config.flags;
-        let prompt_flag = &backend_config.prompt_flag;
-        let full_command = format!("{command} {flags} {prompt_flag} '{escaped}'");
+        let temp_escaped = temp_path.display().to_string().replace('\'', "'\\''");
+        let full_command = format!("cat '{temp_escaped}' | {command} {flags}");
         let agent_cwd = self.agent_cwd();
 
         let display_label = if label_prefix.is_empty() {
@@ -2250,6 +2148,7 @@ Rules for the completion report:
         let (automations, automations_error) = load_automations_registry(&self.config_root);
         self.automations = automations;
         self.automations_error = automations_error;
+        self.default_contexts = config::load_default_contexts(&self.config_root);
         cx.notify();
     }
 
@@ -2372,6 +2271,218 @@ Rules for the completion report:
     fn cancel_new_pipeline(&mut self, cx: &mut Context<Self>) {
         self.pending_new_pipeline = None;
         self._pending_pipeline_subscription = None;
+        cx.notify();
+    }
+
+    // ------------------------------------------------------------------
+    // Context entry CRUD (follows pipeline step pattern)
+    // ------------------------------------------------------------------
+
+    fn remove_context_entry(&mut self, automation_id: &str, index: usize, cx: &mut Context<Self>) {
+        if let Some(entry) = self.automations.iter_mut().find(|a| a.id == automation_id) {
+            if index < entry.contexts.len() {
+                entry.contexts.remove(index);
+                let contexts = entry.contexts.clone();
+                self.write_context_entries(automation_id, &contexts, cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn reorder_context_entry(&mut self, automation_id: &str, from: usize, direction: i32, cx: &mut Context<Self>) {
+        if let Some(entry) = self.automations.iter_mut().find(|a| a.id == automation_id) {
+            let to_signed = from as i32 + direction;
+            if to_signed < 0 { return; }
+            let to = to_signed as usize;
+            if from < entry.contexts.len() && to < entry.contexts.len() {
+                entry.contexts.swap(from, to);
+                let contexts = entry.contexts.clone();
+                self.write_context_entries(automation_id, &contexts, cx);
+                cx.notify();
+            }
+        }
+    }
+
+    fn add_context_path_entry(&mut self, automation_id: &str, path: PathBuf, cx: &mut Context<Self>) {
+        let label = path.file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        let new_entry = config::ContextEntry {
+            source_type: "path".to_string(),
+            label,
+            path: Some(path.to_string_lossy().to_string()),
+            script: None,
+            required: true,
+        };
+        if let Some(entry) = self.automations.iter_mut().find(|a| a.id == automation_id) {
+            entry.contexts.push(new_entry);
+            let contexts = entry.contexts.clone();
+            self.write_context_entries(automation_id, &contexts, cx);
+            cx.notify();
+        }
+    }
+
+    fn add_context_script_entry(&mut self, automation_id: &str, script_name: String, cx: &mut Context<Self>) {
+        let label = std::path::Path::new(&script_name)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| script_name.clone());
+        let new_entry = config::ContextEntry {
+            source_type: "script".to_string(),
+            label,
+            path: None,
+            script: Some(script_name),
+            required: false,
+        };
+        if let Some(entry) = self.automations.iter_mut().find(|a| a.id == automation_id) {
+            entry.contexts.push(new_entry);
+            let contexts = entry.contexts.clone();
+            self.write_context_entries(automation_id, &contexts, cx);
+            cx.notify();
+        }
+    }
+
+    fn toggle_skip_default_context(&mut self, automation_id: &str, cx: &mut Context<Self>) {
+        let Some(entry) = self.automations.iter_mut().find(|a| a.id == automation_id) else { return };
+        entry.skip_default_context = !entry.skip_default_context;
+        let new_value = entry.skip_default_context;
+        let Some(source_path) = entry.source_path.clone() else { return };
+
+        cx.background_spawn(async move {
+            let content = match std::fs::read_to_string(&source_path) {
+                Ok(c) => c,
+                Err(e) => { log::warn!("Failed to read {}: {e}", source_path.display()); return; }
+            };
+            let mut doc = match content.parse::<toml_edit::DocumentMut>() {
+                Ok(d) => d,
+                Err(e) => { log::warn!("Failed to parse {}: {e}", source_path.display()); return; }
+            };
+            if new_value {
+                doc.insert("skip_default_context", toml_edit::value(true));
+            } else {
+                doc.remove("skip_default_context");
+            }
+            if let Err(e) = std::fs::write(&source_path, doc.to_string()) {
+                log::warn!("Failed to write {}: {e}", source_path.display());
+            }
+        }).detach();
+        cx.notify();
+    }
+
+    fn write_context_entries(&self, automation_id: &str, contexts: &[config::ContextEntry], cx: &mut Context<Self>) {
+        let entry = match self.automations.iter().find(|a| a.id == automation_id) {
+            Some(e) => e,
+            None => return,
+        };
+        let Some(source_path) = &entry.source_path else { return };
+        let source_path = source_path.clone();
+        let contexts = contexts.to_vec();
+
+        cx.background_spawn(async move {
+            let content = match std::fs::read_to_string(&source_path) {
+                Ok(c) => c,
+                Err(e) => { log::warn!("Failed to read {}: {e}", source_path.display()); return; }
+            };
+            let mut doc = match content.parse::<toml_edit::DocumentMut>() {
+                Ok(d) => d,
+                Err(e) => { log::warn!("Failed to parse {}: {e}", source_path.display()); return; }
+            };
+
+            doc.remove("context");
+            let mut array = toml_edit::ArrayOfTables::new();
+            for ctx in &contexts {
+                let mut table = toml_edit::Table::new();
+                table.insert("source", toml_edit::value(&ctx.source_type));
+                table.insert("label", toml_edit::value(&ctx.label));
+                if let Some(path) = &ctx.path {
+                    table.insert("path", toml_edit::value(path.as_str()));
+                }
+                if let Some(script) = &ctx.script {
+                    table.insert("script", toml_edit::value(script.as_str()));
+                }
+                if !ctx.required {
+                    table.insert("required", toml_edit::value(false));
+                }
+                array.push(table);
+            }
+            if !contexts.is_empty() {
+                doc.insert("context", toml_edit::Item::ArrayOfTables(array));
+            }
+
+            if let Err(e) = std::fs::write(&source_path, doc.to_string()) {
+                log::warn!("Failed to write context entries to {}: {e}", source_path.display());
+            }
+        }).detach();
+    }
+
+    // ------------------------------------------------------------------
+    // "Add Automation" flow (follows pipeline ghost card pattern)
+    // ------------------------------------------------------------------
+
+    fn create_automation_toml(&mut self, name: &str, cx: &mut Context<Self>) -> String {
+        let mut id = name.to_lowercase()
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        let dir = automations_dir_for(&self.config_root);
+        std::fs::create_dir_all(&dir).log_err();
+        let mut path = dir.join(format!("{id}.toml"));
+        let base_id = id.clone();
+        let mut counter = 2u32;
+        while path.exists() {
+            id = format!("{base_id}-{counter}");
+            path = dir.join(format!("{id}.toml"));
+            counter += 1;
+        }
+        let content = format!(
+            "id = \"{id}\"\nlabel = \"{name}\"\ndescription = \"\"\nicon = \"zap\"\nprompt_file = \"\"\n"
+        );
+        std::fs::write(&path, content).log_err();
+        self.reload_automations(cx);
+        id
+    }
+
+    fn start_new_automation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let editor = cx.new(|cx| {
+            let mut ed = Editor::single_line(window, cx);
+            ed.set_placeholder_text("Automation name", window, cx);
+            ed
+        });
+
+        let subscription = cx.subscribe(&editor, |this: &mut Dashboard, editor, event, cx| {
+            if let EditorEvent::Blurred = event {
+                if this.pending_new_automation.is_some() {
+                    let text = editor.read(cx).text(cx).trim().to_string();
+                    this.finish_new_automation(text, cx);
+                }
+            }
+        });
+
+        self.pending_new_automation = Some(editor.clone());
+        self._pending_automation_subscription = Some(subscription);
+
+        editor.update(cx, |ed, cx| {
+            ed.focus_handle(cx).focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn finish_new_automation(&mut self, name: String, cx: &mut Context<Self>) {
+        self.pending_new_automation = None;
+        self._pending_automation_subscription = None;
+
+        if name.is_empty() {
+            cx.notify();
+            return;
+        }
+
+        let id = self.create_automation_toml(&name, cx);
+        self.expanded_automations.insert(id);
+    }
+
+    fn cancel_new_automation(&mut self, cx: &mut Context<Self>) {
+        self.pending_new_automation = None;
+        self._pending_automation_subscription = None;
         cx.notify();
     }
 
@@ -3620,6 +3731,12 @@ Rules for the completion report:
         let disc_id = entry_id.clone();
 
         let param_fields = self.render_entry_params(&entry.id, &entry.params, window, cx);
+        let has_contexts = !entry.contexts.is_empty() || !self.default_contexts.is_empty();
+        let context_rows = if is_expanded {
+            self.render_context_editor(&entry.id, &entry.contexts, entry.skip_default_context, cx)
+        } else {
+            Vec::new()
+        };
         let group_name = SharedString::from(format!("automation-{}", entry_id));
 
         div()
@@ -3795,13 +3912,19 @@ Rules for the completion report:
                             })
                             .when(is_expanded, |el| {
                                 el.child(
-                                    div().w_full().px_3().pb_2().child(
-                                        div().w_full().p_2().rounded_md().bg(editor_bg).child(
-                                            Label::new(entry_prompt)
-                                                .color(Color::Muted)
-                                                .size(LabelSize::XSmall),
+                                    v_flex()
+                                        .w_full()
+                                        .px_3()
+                                        .pb_2()
+                                        .gap_1()
+                                        .children(context_rows)
+                                        .child(
+                                            div().w_full().p_2().rounded_md().bg(editor_bg).child(
+                                                Label::new(entry_prompt)
+                                                    .color(Color::Muted)
+                                                    .size(LabelSize::XSmall),
+                                            ),
                                         ),
-                                    ),
                                 )
                             }),
                     ),
@@ -3815,6 +3938,201 @@ Rules for the completion report:
                     }
                 }).log_err();
             })
+    }
+
+    fn render_context_editor(
+        &self,
+        automation_id: &str,
+        contexts: &[config::ContextEntry],
+        skip_default: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let mut elements = Vec::new();
+        let entity = cx.entity().downgrade();
+        let context_count = contexts.len();
+
+        // "Use default context" toggle
+        let toggle_entity = entity.clone();
+        let toggle_id = automation_id.to_string();
+        let default_label: SharedString = if skip_default { "Default context: off".into() } else { "Default context: on".into() };
+        elements.push(
+            h_flex()
+                .gap_1()
+                .pl_4()
+                .items_center()
+                .child(
+                    ButtonLike::new(format!("toggle-default-ctx-{}", toggle_id))
+                        .style(ButtonStyle::Subtle)
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .child(Icon::new(if skip_default { IconName::XCircle } else { IconName::Check })
+                                    .size(IconSize::XSmall)
+                                    .color(if skip_default { Color::Muted } else { Color::Accent }))
+                                .child(Label::new(default_label).size(LabelSize::XSmall)
+                                    .color(if skip_default { Color::Muted } else { Color::Accent })),
+                        )
+                        .on_click(move |_, _, cx| {
+                            toggle_entity.update(cx, |this, cx| {
+                                this.toggle_skip_default_context(&toggle_id, cx);
+                            }).log_err();
+                        }),
+                )
+                .into_any_element(),
+        );
+
+        // Context entry rows
+        for (i, ctx) in contexts.iter().enumerate() {
+            let badge = if ctx.source_type == "script" { "script" } else { "path" };
+            let label_text = format!("{}  [{}]", ctx.label, badge);
+
+            let up_entity = entity.clone();
+            let down_entity = entity.clone();
+            let remove_entity = entity.clone();
+            let auto_id = automation_id.to_string();
+            let auto_id2 = automation_id.to_string();
+            let auto_id3 = automation_id.to_string();
+
+            let row = h_flex()
+                .gap_1()
+                .pl_4()
+                .items_center()
+                .child(
+                    Label::new(label_text)
+                        .size(LabelSize::XSmall)
+                        .color(if ctx.required { Color::Default } else { Color::Muted }),
+                )
+                .child(div().flex_1())
+                .child(
+                    IconButton::new(format!("ctx-up-{}-{}", automation_id, i), IconName::ArrowUp)
+                        .size(ui::ButtonSize::Compact)
+                        .disabled(i == 0)
+                        .on_click(move |_, _, cx| {
+                            up_entity.update(cx, |this, cx| {
+                                this.reorder_context_entry(&auto_id, i, -1, cx);
+                            }).log_err();
+                        }),
+                )
+                .child(
+                    IconButton::new(format!("ctx-down-{}-{}", automation_id, i), IconName::ArrowDown)
+                        .size(ui::ButtonSize::Compact)
+                        .disabled(i >= context_count - 1)
+                        .on_click(move |_, _, cx| {
+                            down_entity.update(cx, |this, cx| {
+                                this.reorder_context_entry(&auto_id2, i, 1, cx);
+                            }).log_err();
+                        }),
+                )
+                .child(
+                    IconButton::new(format!("ctx-remove-{}-{}", automation_id, i), IconName::Close)
+                        .size(ui::ButtonSize::Compact)
+                        .on_click(move |_, _, cx| {
+                            remove_entity.update(cx, |this, cx| {
+                                this.remove_context_entry(&auto_id3, i, cx);
+                            }).log_err();
+                        }),
+                );
+
+            elements.push(row.into_any_element());
+        }
+
+        // "Add Context" buttons
+        let add_path_entity = entity.clone();
+        let add_path_id = automation_id.to_string();
+        let add_script_entity = entity.clone();
+        let add_script_id = automation_id.to_string();
+        let workspace_for_script = self.workspace.clone();
+        let scripts = config::collect_context_scripts(&self.config_root);
+        let config_root_for_picker = self.config_root.clone();
+
+        elements.push(
+            h_flex()
+                .pl_4()
+                .pt_1()
+                .gap_2()
+                .child(
+                    ButtonLike::new(format!("add-ctx-path-{}", add_path_id))
+                        .style(ButtonStyle::Subtle)
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .child(Icon::new(IconName::Folder).size(IconSize::XSmall).color(Color::Muted))
+                                .child(Label::new("Add File/Folder").size(LabelSize::XSmall).color(Color::Muted)),
+                        )
+                        .on_click(move |_, _, cx| {
+                            let auto_id = add_path_id.clone();
+                            add_path_entity.update(cx, |this, cx| {
+                                let receiver = cx.prompt_for_paths(PathPromptOptions {
+                                    files: true,
+                                    directories: true,
+                                    multiple: false,
+                                    prompt: None,
+                                });
+                                let auto_id = auto_id.clone();
+                                cx.spawn(async move |this, cx| {
+                                    if let Ok(Ok(Some(paths))) = receiver.await {
+                                        if let Some(path) = paths.into_iter().next() {
+                                            this.update(cx, |this, cx| {
+                                                this.add_context_path_entry(&auto_id, path, cx);
+                                            }).log_err();
+                                        }
+                                    }
+                                }).detach();
+                            }).log_err();
+                        }),
+                )
+                .when(!scripts.is_empty(), {
+                    let scripts_entries: Vec<crate::automation_picker::PickerEntry> = scripts
+                        .iter()
+                        .map(|script_path| {
+                            crate::automation_picker::PickerEntry::new_context_script(
+                                script_path.clone(),
+                                Some(config_root_for_picker.clone()),
+                            )
+                        })
+                        .collect();
+                    let auto_id = add_script_id.clone();
+                    let ws = workspace_for_script.clone();
+                    move |el| {
+                        el.child(
+                            ButtonLike::new(format!("add-ctx-script-{}", auto_id))
+                                .style(ButtonStyle::Subtle)
+                                .child(
+                                    h_flex()
+                                        .gap_1()
+                                        .child(Icon::new(IconName::ToolTerminal).size(IconSize::XSmall).color(Color::Muted))
+                                        .child(Label::new("Add Script").size(LabelSize::XSmall).color(Color::Muted)),
+                                )
+                                .on_click({
+                                    let entries = scripts_entries.clone();
+                                    let ws = ws.clone();
+                                    let auto_id = auto_id.clone();
+                                    move |_, window, cx| {
+                                        let Some(workspace) = ws.upgrade() else { return };
+                                        let mode = crate::automation_picker::PickerMode::AddContextScript {
+                                            automation_id: auto_id.clone(),
+                                        };
+                                        workspace.update(cx, |workspace, cx| {
+                                            workspace.toggle_modal(window, cx, |window, cx| {
+                                                crate::automation_picker::AutomationModal::new_with_mode(
+                                                    entries.clone(),
+                                                    mode,
+                                                    None,
+                                                    ws.clone(),
+                                                    window,
+                                                    cx,
+                                                )
+                                            });
+                                        });
+                                    }
+                                }),
+                        )
+                    }
+                })
+                .into_any_element(),
+        );
+
+        elements
     }
 
     fn render_pipeline_step_tree(
@@ -4871,6 +5189,169 @@ impl Item for Dashboard {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Context gathering (runs on background thread)
+// ---------------------------------------------------------------------------
+
+/// Gather all context entries, returning assembled text or an error if a required entry fails.
+fn gather_context_blocking(
+    contexts: &[config::ContextEntry],
+    config_root: &Path,
+    session_path: &str,
+    active_folder: &str,
+    destination_folder: &str,
+    param_values: &HashMap<String, String>,
+) -> Result<String, String> {
+    use std::process::Command;
+
+    let mut output = String::new();
+    let mut total_size: usize = 0;
+    let context_cap = 150 * 1024;
+
+    for entry in contexts {
+        if total_size >= context_cap {
+            output.push_str("\n[... context truncated at 150KB]\n");
+            break;
+        }
+
+        let content = match entry.source_type.as_str() {
+            "path" => {
+                let Some(path_str) = &entry.path else {
+                    if entry.required {
+                        return Err(format!("context '{}': source=path but no path field", entry.label));
+                    }
+                    continue;
+                };
+                let path = Path::new(path_str);
+                match config::read_path_context(path) {
+                    Ok(text) => text,
+                    Err(e) => {
+                        if entry.required {
+                            return Err(format!("context '{}': {e}", entry.label));
+                        }
+                        log::warn!("context '{}': {e} (skipping, not required)", entry.label);
+                        continue;
+                    }
+                }
+            }
+            "script" => {
+                let Some(script_name) = &entry.script else {
+                    if entry.required {
+                        return Err(format!("context '{}': source=script but no script field", entry.label));
+                    }
+                    continue;
+                };
+                let scripts_dir = config_root.join("config/context-scripts");
+                let script_path = match config::resolve_file_by_name(&scripts_dir, script_name) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        if entry.required {
+                            return Err(format!("context '{}': {e}", entry.label));
+                        }
+                        log::warn!("context '{}': {e} (skipping, not required)", entry.label);
+                        continue;
+                    }
+                };
+
+                let result = Command::new("sh")
+                    .arg("-c")
+                    .arg(script_path.to_string_lossy().as_ref())
+                    .env("POSTPROD_ACTIVE_FOLDER", active_folder)
+                    .env("POSTPROD_SESSION_PATH", session_path)
+                    .env("POSTPROD_DESTINATION_FOLDER", destination_folder)
+                    .envs(param_values.iter().map(|(k, v)| {
+                        (format!("POSTPROD_PARAM_{}", k.to_uppercase()), v.as_str())
+                    }))
+                    .output();
+
+                match result {
+                    Ok(out) if out.status.success() => {
+                        String::from_utf8_lossy(&out.stdout).to_string()
+                    }
+                    Ok(out) => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let msg = format!("script exited {}: {}", out.status, stderr.lines().next().unwrap_or(""));
+                        if entry.required {
+                            return Err(format!("context '{}': {msg}", entry.label));
+                        }
+                        log::warn!("context '{}': {msg} (skipping, not required)", entry.label);
+                        continue;
+                    }
+                    Err(e) => {
+                        if entry.required {
+                            return Err(format!("context '{}': failed to run script: {e}", entry.label));
+                        }
+                        log::warn!("context '{}': {e} (skipping, not required)", entry.label);
+                        continue;
+                    }
+                }
+            }
+            other => {
+                log::warn!("context '{}': unknown source type '{other}', skipping", entry.label);
+                continue;
+            }
+        };
+
+        let section = format!("=== Context: {} ===\n{}\n\n", entry.label, content);
+        total_size += section.len();
+        output.push_str(&section);
+    }
+
+    Ok(output)
+}
+
+/// Build a SpawnInTerminal that reads the prompt from a temp file.
+/// Returns None if the backend config is missing.
+fn build_temp_file_terminal_command(
+    prompt: &str,
+    entry_id: &str,
+    entry_label: &str,
+    agent_backend: AgentBackend,
+    backends: &[config::BackendEntry],
+    agent_cwd: &PathBuf,
+    chain_marker: &Option<PathBuf>,
+) -> Option<SpawnInTerminal> {
+    // Append completion instruction if chained
+    let final_prompt = if let Some(marker_path) = chain_marker {
+        let mut p = prompt.to_string();
+        p.push_str(&Dashboard::completion_report_instruction(marker_path));
+        p
+    } else {
+        prompt.to_string()
+    };
+
+    // Write to temp file
+    let temp_path = std::env::temp_dir().join(format!("postprod_prompt_{entry_id}.md"));
+    if let Err(e) = std::fs::write(&temp_path, &final_prompt) {
+        log::error!("failed to write temp prompt file: {e}");
+        return None;
+    }
+
+    let backend_id = agent_backend.backend_id();
+    let config = backends.iter().find(|b| b.id == backend_id)?;
+
+    let command = resolve_bin(&config.command);
+    let flags = &config.flags;
+    let temp_escaped = temp_path.display().to_string().replace('\'', "'\\''");
+    let full_command = format!("cat '{temp_escaped}' | {command} {flags}");
+
+    Some(SpawnInTerminal {
+        id: TaskId(format!("automation-{}", entry_id)),
+        label: entry_label.to_string(),
+        full_label: entry_label.to_string(),
+        command: Some(full_command),
+        args: vec![],
+        command_label: entry_label.to_string(),
+        cwd: Some(agent_cwd.clone()),
+        use_new_terminal: true,
+        allow_concurrent_runs: false,
+        reveal: RevealStrategy::Always,
+        show_command: true,
+        show_rerun: true,
+        ..Default::default()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5011,7 +5492,7 @@ automation = "review"
         )?;
 
         // Verify initial parse
-        let entry = config::load_single_automation(&path)?;
+        let entry = config::load_single_automation(&path, tmp.path())?;
         assert_eq!(entry.steps.len(), 2);
 
         // Modify steps via TOML writer
@@ -5043,7 +5524,7 @@ automation = "review"
         std::fs::write(&path, doc.to_string())?;
 
         // Re-parse and verify
-        let entry = config::load_single_automation(&path)?;
+        let entry = config::load_single_automation(&path, tmp.path())?;
         assert_eq!(entry.steps.len(), 3);
         assert_eq!(entry.steps[0].automation.as_deref(), Some("new-first"));
         assert!(entry.steps[0].group.is_none());
