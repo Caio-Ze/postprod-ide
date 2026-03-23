@@ -7,6 +7,9 @@ use std::path::{Path, PathBuf};
 
 use crate::paths::{agents_toml_path_for, automations_dir_for, tools_config_dir_for};
 
+// Maximum size for context content from a single folder entry or total context.
+const CONTEXT_SIZE_CAP: usize = 150 * 1024;
+
 // ---------------------------------------------------------------------------
 // TOML-driven tool registry
 // ---------------------------------------------------------------------------
@@ -173,14 +176,46 @@ pub(crate) fn load_tools_registry(config_root: &Path) -> (Vec<ToolEntry>, Option
 // Automations — each automation is a separate .toml in config/automations/
 // ---------------------------------------------------------------------------
 
+#[derive(Deserialize, Serialize, Clone)]
+pub(crate) struct ContextEntry {
+    /// "path" or "script"
+    #[serde(rename = "source")]
+    pub(crate) source_type: String,
+
+    pub(crate) label: String,
+
+    /// For source = "path": absolute path to file or folder.
+    #[serde(default)]
+    pub(crate) path: Option<String>,
+
+    /// For source = "script": filename of script in config/context-scripts/.
+    #[serde(default)]
+    pub(crate) script: Option<String>,
+
+    /// If true (default), failure aborts context gathering.
+    #[serde(default = "default_required")]
+    pub(crate) required: bool,
+}
+
+fn default_required() -> bool {
+    true
+}
+
 #[derive(Deserialize, Clone)]
 pub(crate) struct AutomationEntry {
     pub(crate) id: String,
     pub(crate) label: String,
     pub(crate) description: String,
     pub(crate) icon: String,
+
+    /// Filename of the prompt .md file (searched in config/prompts/).
+    #[serde(default)]
+    pub(crate) prompt_file: Option<String>,
+
+    /// Deprecated: inline prompt. Used as transition fallback when prompt_file is absent.
     #[serde(default)]
     pub(crate) prompt: String,
+
     #[serde(default)]
     pub(crate) hidden: bool,
     #[serde(default)]
@@ -190,8 +225,13 @@ pub(crate) struct AutomationEntry {
     #[serde(default, rename = "param")]
     pub(crate) params: Vec<ParamEntry>,
 
+    /// Context entries gathered before the agent runs.
+    #[serde(default, rename = "context")]
+    pub(crate) contexts: Vec<ContextEntry>,
+
+    /// If true, default context entries from config/default-context/ are skipped.
     #[serde(default)]
-    pub(crate) use_context_launcher: bool,
+    pub(crate) skip_default_context: bool,
 
     /// Filesystem path this entry was loaded from (set after deserialization).
     #[serde(skip)]
@@ -272,16 +312,33 @@ impl PipelineStep {
     }
 }
 
-pub(crate) fn load_single_automation(path: &Path) -> Result<AutomationEntry, String> {
+pub(crate) fn load_single_automation(path: &Path, config_root: &Path) -> Result<AutomationEntry, String> {
     let content = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut entry = toml::from_str::<AutomationEntry>(&content).map_err(|e| {
         let filename = path.file_name().unwrap_or_default().to_string_lossy();
         format!("{filename}: {e}")
     })?;
 
+    // Resolve prompt: prompt_file takes precedence, inline prompt is fallback.
+    let filename = path.file_name().unwrap_or_default().to_string_lossy();
+    if let Some(ref prompt_filename) = entry.prompt_file {
+        if !prompt_filename.is_empty() {
+            let prompts_dir = config_root.join("config/prompts");
+            match resolve_file_by_name(&prompts_dir, prompt_filename) {
+                Ok(prompt_path) => {
+                    entry.prompt = std::fs::read_to_string(&prompt_path).map_err(|e| {
+                        format!("{filename}: failed to read prompt file '{}': {e}", prompt_path.display())
+                    })?;
+                }
+                Err(e) => return Err(format!("{filename}: {e}")),
+            }
+        }
+    } else if !entry.prompt.is_empty() {
+        log::warn!("{filename}: inline `prompt` is deprecated — use `prompt_file` instead");
+    }
+
     // Validate pipeline steps — skip invalid ones with a warning
     if entry.is_pipeline() {
-        let filename = path.file_name().unwrap_or_default().to_string_lossy();
         entry.steps.retain(|step| match step.validate() {
             Ok(()) => true,
             Err(e) => {
@@ -292,6 +349,167 @@ pub(crate) fn load_single_automation(path: &Path) -> Result<AutomationEntry, Str
     }
 
     Ok(entry)
+}
+
+/// Search a directory recursively for a file matching the given bare filename.
+/// Returns an error if zero or more than one match is found (ambiguity rejection).
+pub(crate) fn resolve_file_by_name(dir: &Path, filename: &str) -> Result<PathBuf, String> {
+    let matches = collect_files_by_name(dir, filename);
+    match matches.len() {
+        0 => Err(format!("prompt file '{filename}' not found in {}", dir.display())),
+        1 => Ok(matches.into_iter().next().expect("checked len == 1")),
+        n => Err(format!(
+            "prompt file '{filename}' is ambiguous — {n} matches found in {}",
+            dir.display(),
+        )),
+    }
+}
+
+fn collect_files_by_name(dir: &Path, target_name: &str) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return result;
+    };
+    for entry in entries.flatten() {
+        let child = entry.path();
+        if child.is_dir() {
+            result.extend(collect_files_by_name(&child, target_name));
+        } else if child.file_name().is_some_and(|n| n == target_name) {
+            result.push(child);
+        }
+    }
+    result
+}
+
+/// Load default context entries from config/default-context/ folder.
+pub(crate) fn load_default_contexts(config_root: &Path) -> Vec<ContextEntry> {
+    let dir = config_root.join("config/default-context");
+    if !dir.exists() {
+        return Vec::new();
+    }
+    let paths = collect_toml_files(&dir);
+    let mut contexts = Vec::new();
+
+    #[derive(Deserialize)]
+    struct DefaultContextFile {
+        #[serde(default, rename = "context")]
+        contexts: Vec<ContextEntry>,
+    }
+
+    for path in paths {
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        match toml::from_str::<DefaultContextFile>(&content) {
+            Ok(file) => contexts.extend(file.contexts),
+            Err(e) => {
+                let fname = path.file_name().unwrap_or_default().to_string_lossy();
+                log::warn!("default-context/{fname}: {e}");
+            }
+        }
+    }
+    contexts
+}
+
+/// Read a file or folder into a string, respecting the size cap.
+/// For folders, reads all files recursively with filename headers.
+pub(crate) fn read_path_context(path: &Path) -> Result<String, String> {
+    if path.is_file() {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read '{}': {e}", path.display()))?;
+        if content.len() > CONTEXT_SIZE_CAP {
+            let truncated = &content[..CONTEXT_SIZE_CAP];
+            Ok(format!("{truncated}\n[... truncated at 150KB]"))
+        } else {
+            Ok(content)
+        }
+    } else if path.is_dir() {
+        read_folder_context(path)
+    } else {
+        Err(format!("'{}' is not a file or directory", path.display()))
+    }
+}
+
+fn read_folder_context(dir: &Path) -> Result<String, String> {
+    let mut output = String::new();
+    let mut total_size: usize = 0;
+    let mut file_count: usize = 0;
+    let mut truncated = false;
+
+    collect_folder_contents(dir, dir, &mut output, &mut total_size, &mut file_count, &mut truncated);
+
+    if truncated {
+        output.push_str(&format!("\n[... truncated at 150KB, {file_count} files total]"));
+    }
+    Ok(output)
+}
+
+fn collect_folder_contents(
+    base: &Path,
+    dir: &Path,
+    output: &mut String,
+    total_size: &mut usize,
+    file_count: &mut usize,
+    truncated: &mut bool,
+) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut children: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+    children.sort();
+
+    for child in children {
+        if *truncated {
+            return;
+        }
+        if child.is_dir() {
+            collect_folder_contents(base, &child, output, total_size, file_count, truncated);
+        } else if child.is_file() {
+            let Ok(content) = std::fs::read_to_string(&child) else {
+                continue;
+            };
+            let relative = child.strip_prefix(base).unwrap_or(&child);
+            let header = format!("--- {} ---\n", relative.display());
+            let entry_size = header.len() + content.len() + 1;
+
+            if *total_size + entry_size > CONTEXT_SIZE_CAP {
+                *truncated = true;
+                return;
+            }
+
+            output.push_str(&header);
+            output.push_str(&content);
+            output.push('\n');
+            *total_size += entry_size;
+            *file_count += 1;
+        }
+    }
+}
+
+/// Collect executable script files from config/context-scripts/ recursively.
+pub(crate) fn collect_context_scripts(config_root: &Path) -> Vec<PathBuf> {
+    let dir = config_root.join("config/context-scripts");
+    if !dir.exists() {
+        return Vec::new();
+    }
+    collect_scripts_recursive(&dir)
+}
+
+fn collect_scripts_recursive(dir: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return result;
+    };
+    let mut children: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+    children.sort();
+    for child in children {
+        if child.is_dir() {
+            result.extend(collect_scripts_recursive(&child));
+        } else if child.is_file() {
+            result.push(child);
+        }
+    }
+    result
 }
 
 pub(crate) fn load_automations_registry(config_root: &Path) -> (Vec<AutomationEntry>, Option<String>) {
@@ -305,7 +523,7 @@ pub(crate) fn load_automations_registry(config_root: &Path) -> (Vec<AutomationEn
     let mut errors = Vec::new();
 
     for path in paths {
-        match load_single_automation(&path) {
+        match load_single_automation(&path, config_root) {
             Ok(mut entry) => {
                 entry.source_path = Some(path.clone());
                 automations.push(entry);
@@ -610,7 +828,7 @@ icon = "play"
 prompt = "Run delivery for {session_path}"
 "#,
         )?;
-        let auto = load_single_automation(&path)?;
+        let auto = load_single_automation(&path, tmp.path())?;
         assert_eq!(auto.id, "full-delivery");
         assert_eq!(auto.prompt, "Run delivery for {session_path}");
         assert!(!auto.hidden);
@@ -723,7 +941,7 @@ group = 3
 tool = "context-launcher"
 "#,
         )?;
-        let entry = load_single_automation(&path)?;
+        let entry = load_single_automation(&path, tmp.path())?;
         assert!(entry.is_pipeline());
         assert_eq!(entry.steps.len(), 5);
         assert_eq!(entry.prompt, "");
@@ -756,7 +974,7 @@ icon = "zap"
 type = "pipeline"
 "#,
         )?;
-        let entry = load_single_automation(&path)?;
+        let entry = load_single_automation(&path, tmp.path())?;
         assert!(entry.is_pipeline());
         assert!(entry.steps.is_empty());
         Ok(())
@@ -818,7 +1036,7 @@ automation = "also-good"
 tool = "conflict"
 "#,
         )?;
-        let entry = load_single_automation(&path)?;
+        let entry = load_single_automation(&path, tmp.path())?;
         assert_eq!(entry.steps.len(), 1);
         assert_eq!(entry.steps[0].automation.as_deref(), Some("good-step"));
         Ok(())
@@ -838,7 +1056,7 @@ icon = "sparkle"
 prompt = "Do the scan"
 "#,
         )?;
-        let entry = load_single_automation(&path)?;
+        let entry = load_single_automation(&path, tmp.path())?;
         assert!(!entry.is_pipeline());
         assert!(entry.steps.is_empty());
         Ok(())
