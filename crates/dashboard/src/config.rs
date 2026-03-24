@@ -387,26 +387,31 @@ pub(crate) fn load_default_contexts(config_root: &Path) -> Vec<ContextEntry> {
     if !dir.exists() {
         return Vec::new();
     }
-    let paths = collect_toml_files(&dir);
+
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+    paths.sort();
+
     let mut contexts = Vec::new();
-
-    #[derive(Deserialize)]
-    struct DefaultContextFile {
-        #[serde(default, rename = "context")]
-        contexts: Vec<ContextEntry>,
-    }
-
     for path in paths {
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            continue;
-        };
-        match toml::from_str::<DefaultContextFile>(&content) {
-            Ok(file) => contexts.extend(file.contexts),
-            Err(e) => {
-                let fname = path.file_name().unwrap_or_default().to_string_lossy();
-                log::warn!("default-context/{fname}: {e}");
-            }
-        }
+        let label = path.file_stem()
+            .map(|s| s.to_string_lossy().replace(['-', '_'], " "))
+            .unwrap_or_default();
+        contexts.push(ContextEntry {
+            source_type: "path".to_string(),
+            label,
+            path: Some(path.to_string_lossy().to_string()),
+            script: None,
+            required: true,
+        });
     }
     contexts
 }
@@ -1248,19 +1253,13 @@ prompt_file = "does-not-exist.md"
         let tmp = tempfile::tempdir()?;
         let dir = tmp.path().join("config/default-context");
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("git.toml"), r#"
-[[context]]
-source = "script"
-script = "git-status.sh"
-label = "Git status"
-required = false
-"#)?;
+        std::fs::write(dir.join("owner-decisions.md"), "# Owner Notes\nBinding decisions.")?;
 
         let contexts = load_default_contexts(tmp.path());
         assert_eq!(contexts.len(), 1);
-        assert_eq!(contexts[0].source_type, "script");
-        assert_eq!(contexts[0].label, "Git status");
-        assert!(!contexts[0].required);
+        assert_eq!(contexts[0].source_type, "path");
+        assert_eq!(contexts[0].label, "owner decisions");
+        assert!(contexts[0].required);
         Ok(())
     }
 
@@ -1269,18 +1268,8 @@ required = false
         let tmp = tempfile::tempdir()?;
         let dir = tmp.path().join("config/default-context");
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("a.toml"), r#"
-[[context]]
-source = "script"
-script = "a.sh"
-label = "A"
-"#)?;
-        std::fs::write(dir.join("b.toml"), r#"
-[[context]]
-source = "path"
-path = "/tmp/test"
-label = "B"
-"#)?;
+        std::fs::write(dir.join("known-bugs.md"), "# Known Bugs\nNone.")?;
+        std::fs::write(dir.join("tier-protocols.md"), "# Tier Guidelines\nThree tiers.")?;
 
         let contexts = load_default_contexts(tmp.path());
         assert_eq!(contexts.len(), 2);
