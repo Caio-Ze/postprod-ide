@@ -209,6 +209,7 @@ Other entities can then register a callback to handle these events by doing `cx.
 ## Build guidelines
 
 - Use `./script/clippy` instead of `cargo clippy`
+- Always run `cargo build --release -p postprod-ide` in the background after implementation is complete. While the release build runs, update documentation in parallel — don't wait for the build to finish before starting doc updates.
 
 # Pull request hygiene
 
