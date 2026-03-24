@@ -92,6 +92,11 @@ pub struct RunDashboardTool {
     pub tool_id: String,
 }
 
+#[derive(Clone, PartialEq, Deserialize, Default, JsonSchema, Action)]
+pub struct RunDashboardAutomation {
+    pub automation_id: String,
+}
+
 /// Marker type for the context-launcher failure toast notification ID.
 struct ContextLauncherToast;
 
@@ -367,6 +372,8 @@ pub struct Dashboard {
     section_order: Vec<String>,
     // Expanded automation prompt previews (ephemeral)
     expanded_automations: HashSet<String>,
+    // Automations showing the full context CRUD editor (gear toggle)
+    automations_in_context_edit: HashSet<String>,
     // Config parse errors
     tools_error: Option<String>,
     automations_error: Option<String>,
@@ -869,6 +876,7 @@ impl Dashboard {
                 collapsed_sections,
                 section_order,
                 expanded_automations: HashSet::new(),
+                automations_in_context_edit: HashSet::new(),
                 tools_error,
                 automations_error,
                 scroll_handle: ScrollHandle::new(),
@@ -1090,35 +1098,7 @@ impl Dashboard {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Build fallback prompt using dashboard's own variable substitution.
-        // Used when context-launcher is not available or fails.
-        let fallback_prompt = {
-            let mut resolved = if let Some(session) = &self.session_path {
-                prompt.replace("{session_path}", session)
-            } else {
-                prompt.replace("{session_path}", "<no session open>")
-            };
-
-            resolved = if let Some(pa) = &self.active_folder {
-                resolved.replace("{active_folder}", &pa.to_string_lossy())
-            } else {
-                resolved.replace("{active_folder}", "<no active folder selected>")
-            };
-
-            resolved = if let Some(pd) = &self.destination_folder {
-                resolved.replace("{destination_folder}", &pd.to_string_lossy())
-            } else {
-                resolved.replace("{destination_folder}", "<no destination folder selected>")
-            };
-
-            if let Some(values) = self.param_values.get(entry_id) {
-                for (key, value) in values {
-                    resolved = resolved.replace(&format!("{{{key}}}"), value);
-                }
-            }
-
-            resolved
-        };
+        let fallback_prompt = self.resolve_variables(prompt, entry_id);
 
         // Check if this automation has chain config (for terminal backends only)
         let has_chain = self.automations.iter()
@@ -1306,6 +1286,34 @@ impl Dashboard {
         .detach();
     }
 
+    fn resolve_variables(&self, prompt: &str, entry_id: &str) -> String {
+        let mut resolved = if let Some(session) = &self.session_path {
+            prompt.replace("{session_path}", session)
+        } else {
+            prompt.replace("{session_path}", "<no session open>")
+        };
+
+        resolved = if let Some(pa) = &self.active_folder {
+            resolved.replace("{active_folder}", &pa.to_string_lossy())
+        } else {
+            resolved.replace("{active_folder}", "<no active folder selected>")
+        };
+
+        resolved = if let Some(pd) = &self.destination_folder {
+            resolved.replace("{destination_folder}", &pd.to_string_lossy())
+        } else {
+            resolved.replace("{destination_folder}", "<no destination folder selected>")
+        };
+
+        if let Some(values) = self.param_values.get(entry_id) {
+            for (key, value) in values {
+                resolved = resolved.replace(&format!("{{{key}}}"), value);
+            }
+        }
+
+        resolved
+    }
+
     /// Resolves prompt, appends completion instruction, spawns terminal.
     /// Returns (marker_path, terminal_task) for the caller to poll/race.
     /// Both `run_scheduled_automation()` and `run_pipeline()` use this —
@@ -1345,71 +1353,39 @@ impl Dashboard {
             std::fs::create_dir_all(parent).log_err();
         }
 
-        // Variable substitution
-        let mut resolved_prompt = entry.prompt.clone();
-        if let Some(session) = &self.session_path {
-            resolved_prompt = resolved_prompt.replace("{session_path}", session);
-        } else {
-            resolved_prompt = resolved_prompt.replace("{session_path}", "<no session open>");
-        }
-        resolved_prompt = resolved_prompt.replace(
-            "{active_folder}",
-            &active_folder.to_string_lossy(),
-        );
-        if let Some(destination) = &self.destination_folder {
-            resolved_prompt = resolved_prompt.replace(
-                "{destination_folder}",
-                &destination.to_string_lossy(),
-            );
-        } else {
-            resolved_prompt = resolved_prompt.replace(
-                "{destination_folder}",
-                "<no destination folder selected>",
-            );
-        }
-        if let Some(values) = self.param_values.get(&entry.id) {
-            for (key, value) in values {
-                resolved_prompt = resolved_prompt.replace(&format!("{{{key}}}"), value);
-            }
-        }
+        let resolved_prompt = self.resolve_variables(&entry.prompt, &entry.id);
 
-        // Append completion report instruction
-        resolved_prompt.push_str(&Self::completion_report_instruction(&marker_path));
-
-        // Write prompt to temp file (preserves markdown formatting)
-        let temp_path = std::env::temp_dir().join(format!("postprod_prompt_{}.md", entry.id));
-        if let Err(e) = std::fs::write(&temp_path, &resolved_prompt) {
-            log::error!("failed to write temp prompt file: {e}");
-            return None;
-        }
+        // Collect context entries (default + per-automation)
+        let all_contexts = {
+            let mut contexts = if !entry.skip_default_context {
+                self.default_contexts.clone()
+            } else {
+                Vec::new()
+            };
+            contexts.extend(entry.contexts.clone());
+            contexts
+        };
+        let config_root = self.config_root.clone();
+        let session_for_env = self.session_path.clone().unwrap_or_default();
+        let folder_for_env = active_folder.to_string_lossy().to_string();
+        let dest_for_env = self.destination_folder.as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let params_for_env = self.param_values.get(&entry.id).cloned().unwrap_or_default();
 
         let command = resolve_bin(&backend_config.command);
-        let flags = &backend_config.flags;
-        let temp_escaped = temp_path.display().to_string().replace('\'', "'\\''");
-        let full_command = format!("cat '{temp_escaped}' | {command} {flags}");
+        let flags = backend_config.flags;
         let agent_cwd = self.agent_cwd();
+        let entry_id = entry.id;
+        let entry_label = entry.label;
 
         let display_label = if label_prefix.is_empty() {
-            entry.label.clone()
+            entry_label
         } else {
-            format!("[{label_prefix}] {}", entry.label)
+            format!("[{label_prefix}] {}", entry_label)
         };
 
-        let spawn = SpawnInTerminal {
-            id: TaskId(format!("automation-{}", entry.id)),
-            label: display_label.clone(),
-            full_label: display_label.clone(),
-            command: Some(full_command),
-            args: vec![],
-            command_label: display_label,
-            cwd: Some(agent_cwd),
-            use_new_terminal: true,
-            allow_concurrent_runs: false,
-            reveal,
-            show_command: false,
-            show_rerun: true,
-            ..Default::default()
-        };
+        let completion_instruction = Self::completion_report_instruction(&marker_path);
 
         let workspace = self.workspace.clone();
         let window_handle = self.window_handle;
@@ -1417,6 +1393,57 @@ impl Dashboard {
         let (tx, rx) = oneshot::channel();
 
         cx.spawn(async move |_this, cx: &mut AsyncApp| -> anyhow::Result<()> {
+            // Gather context on background thread
+            let context_text = if all_contexts.is_empty() {
+                String::new()
+            } else {
+                match cx.background_executor().spawn(async move {
+                    gather_context_blocking(
+                        &all_contexts, &config_root, &session_for_env,
+                        &folder_for_env, &dest_for_env, &params_for_env,
+                    )
+                }).await {
+                    Ok(text) => text,
+                    Err(reason) => {
+                        log::warn!("context gathering failed for pipeline step '{entry_id}': {reason}");
+                        String::new()
+                    }
+                }
+            };
+
+            // Build enriched prompt with context + completion instruction
+            let enriched_prompt = if context_text.is_empty() {
+                format!("{resolved_prompt}{completion_instruction}")
+            } else {
+                format!("{context_text}\n=== End of pre-loaded context ===\n\n{resolved_prompt}{completion_instruction}")
+            };
+
+            // Write prompt to temp file
+            let temp_path = std::env::temp_dir().join(format!("postprod_prompt_{entry_id}.md"));
+            if let Err(e) = std::fs::write(&temp_path, &enriched_prompt) {
+                log::error!("failed to write temp prompt file: {e}");
+                return Ok(());
+            }
+
+            let temp_escaped = temp_path.display().to_string().replace('\'', "'\\''");
+            let full_command = format!("cat '{temp_escaped}' | {command} {flags}");
+
+            let spawn = SpawnInTerminal {
+                id: TaskId(format!("automation-{entry_id}")),
+                label: display_label.clone(),
+                full_label: display_label.clone(),
+                command: Some(full_command),
+                args: vec![],
+                command_label: display_label,
+                cwd: Some(agent_cwd),
+                use_new_terminal: true,
+                allow_concurrent_runs: false,
+                reveal,
+                show_command: false,
+                show_rerun: true,
+                ..Default::default()
+            };
+
             let Some(window_handle) = window_handle else {
                 log::warn!("spawn_automation_in_terminal: window handle not yet available");
                 return Ok(());
@@ -2367,6 +2394,13 @@ Rules for the completion report:
                 log::warn!("Failed to write {}: {e}", source_path.display());
             }
         }).detach();
+        cx.notify();
+    }
+
+    fn toggle_context_edit_mode(&mut self, automation_id: &str, cx: &mut Context<Self>) {
+        if !self.automations_in_context_edit.remove(automation_id) {
+            self.automations_in_context_edit.insert(automation_id.to_string());
+        }
         cx.notify();
     }
 
@@ -3733,7 +3767,11 @@ Rules for the completion report:
 
         let param_fields = self.render_entry_params(&entry.id, &entry.params, window, cx);
         let context_rows = if is_expanded {
-            self.render_context_editor(&entry.id, &entry.contexts, entry.skip_default_context, cx)
+            if self.automations_in_context_edit.contains(&entry.id) {
+                self.render_context_editor(&entry.id, &entry.contexts, entry.skip_default_context, cx)
+            } else {
+                self.render_context_summary(&entry.id, &entry.contexts, entry.skip_default_context, cx)
+            }
         } else {
             Vec::new()
         };
@@ -3940,6 +3978,68 @@ Rules for the completion report:
             })
     }
 
+    fn render_context_summary(
+        &self,
+        automation_id: &str,
+        contexts: &[config::ContextEntry],
+        skip_default: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let mut elements = Vec::new();
+
+        if contexts.is_empty() && !skip_default && self.default_contexts.is_empty() {
+            return elements;
+        }
+
+        let entity = cx.entity().downgrade();
+        let gear_id = automation_id.to_string();
+
+        let mut row = h_flex()
+            .gap_1()
+            .pl_4()
+            .items_center()
+            .flex_wrap();
+
+        if !skip_default && !self.default_contexts.is_empty() {
+            row = row.child(
+                div()
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_sm()
+                    .bg(cx.theme().colors().element_background)
+                    .child(Label::new("defaults").size(LabelSize::XSmall).color(Color::Muted)),
+            );
+        }
+
+        for ctx in contexts {
+            let badge = if ctx.source_type == "script" { "script" } else { "path" };
+            let label_text = format!("{}  [{}]", ctx.label, badge);
+            row = row.child(
+                div()
+                    .px_1p5()
+                    .py_0p5()
+                    .rounded_sm()
+                    .bg(cx.theme().colors().element_background)
+                    .child(Label::new(label_text).size(LabelSize::XSmall).color(Color::Muted)),
+            );
+        }
+
+        // Gear icon to switch to edit mode
+        row = row.child(
+            ButtonLike::new(format!("ctx-edit-gear-{gear_id}"))
+                .style(ButtonStyle::Subtle)
+                .child(Icon::new(IconName::Settings).size(IconSize::XSmall).color(Color::Muted))
+                .on_click(move |_, _, cx| {
+                    entity.update(cx, |this, cx| {
+                        this.toggle_context_edit_mode(&gear_id, cx);
+                    }).log_err();
+                }),
+        );
+
+        elements.push(row.into_any_element());
+        elements
+    }
+
     fn render_context_editor(
         &self,
         automation_id: &str,
@@ -4040,6 +4140,9 @@ Rules for the completion report:
         let add_path_entity = entity;
         let add_path_id = automation_id.to_string();
         let add_script_id = automation_id.to_string();
+        let automation_source_path = self.automations.iter()
+            .find(|a| a.id == automation_id)
+            .and_then(|a| a.source_path.clone());
         let workspace_for_script = self.workspace.clone();
         let scripts = config::collect_context_scripts(&self.config_root);
         let config_root_for_picker = self.config_root.clone();
@@ -4056,7 +4159,7 @@ Rules for the completion report:
                             h_flex()
                                 .gap_1()
                                 .child(Icon::new(IconName::Folder).size(IconSize::XSmall).color(Color::Muted))
-                                .child(Label::new("Add File/Folder").size(LabelSize::XSmall).color(Color::Muted)),
+                                .child(Label::new("Add prompt or context file").size(LabelSize::XSmall).color(Color::Muted)),
                         )
                         .on_click(move |_, _, cx| {
                             let auto_id = add_path_id.clone();
@@ -4080,7 +4183,7 @@ Rules for the completion report:
                             }).log_err();
                         }),
                 )
-                .when(!scripts.is_empty(), {
+                .when(!scripts.is_empty() && automation_source_path.is_some(), {
                     let scripts_entries: Vec<crate::automation_picker::PickerEntry> = scripts
                         .iter()
                         .map(|script_path| {
@@ -4091,6 +4194,7 @@ Rules for the completion report:
                         })
                         .collect();
                     let auto_id = add_script_id;
+                    let source_path = automation_source_path.expect("checked above");
                     let ws = workspace_for_script;
                     move |el| {
                         el.child(
@@ -4103,18 +4207,20 @@ Rules for the completion report:
                                         .child(Label::new("Add Script").size(LabelSize::XSmall).color(Color::Muted)),
                                 )
                                 .on_click({
-                                    let entries = scripts_entries;
+                                    let scripts_entries = scripts_entries;
+                                    let auto_id = auto_id.clone();
+                                    let source_path = source_path;
                                     let ws = ws;
-                                    let auto_id = auto_id;
                                     move |_, window, cx| {
                                         let Some(workspace) = ws.upgrade() else { return };
                                         let mode = crate::automation_picker::PickerMode::AddContextScript {
                                             automation_id: auto_id.clone(),
+                                            source_path: source_path.clone(),
                                         };
                                         workspace.update(cx, |workspace, cx| {
                                             workspace.toggle_modal(window, cx, |window, cx| {
                                                 crate::automation_picker::AutomationModal::new_with_mode(
-                                                    entries.clone(),
+                                                    scripts_entries.clone(),
                                                     mode,
                                                     None,
                                                     ws.clone(),
@@ -4128,6 +4234,31 @@ Rules for the completion report:
                         )
                     }
                 })
+                .into_any_element(),
+        );
+
+        // Gear icon to collapse back to summary
+        let done_entity = cx.entity().downgrade();
+        let done_id = automation_id.to_string();
+        elements.push(
+            h_flex()
+                .pl_4()
+                .pt_0p5()
+                .child(
+                    ButtonLike::new(format!("ctx-done-gear-{}", done_id))
+                        .style(ButtonStyle::Subtle)
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .child(Icon::new(IconName::Check).size(IconSize::XSmall).color(Color::Accent))
+                                .child(Label::new("Done").size(LabelSize::XSmall).color(Color::Accent)),
+                        )
+                        .on_click(move |_, _, cx| {
+                            done_entity.update(cx, |this, cx| {
+                                this.toggle_context_edit_mode(&done_id, cx);
+                            }).log_err();
+                        }),
+                )
                 .into_any_element(),
         );
 
@@ -5185,6 +5316,14 @@ impl Render for Dashboard {
                             );
                         }).log_err();
                     }
+                }
+            }))
+            .on_action(cx.listener(|this, action: &RunDashboardAutomation, window, cx| {
+                if let Some(entry) = this.automations.iter().find(|a| a.id == action.automation_id) {
+                    let id = entry.id.clone();
+                    let label = entry.label.clone();
+                    let prompt = entry.prompt.clone();
+                    this.run_automation(&id, &label, &prompt, window, cx);
                 }
             }))
             .size_full()
