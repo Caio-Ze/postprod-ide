@@ -56,3 +56,6 @@ crates/docs_preprocessor/actions.json
 
 # Local workspace files (contain internal project paths and proprietary repo references)
 *.code-workspace
+
+# Agent rules (local per-machine, not shared)
+.rules
