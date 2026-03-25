@@ -47,6 +47,7 @@
     "active_language_button": true
   },
   "project_panel": {
+    "dock": "left",
     "entry_spacing": "comfortable",
     "button": true
   },
