@@ -60,3 +60,4 @@ crates/docs_preprocessor/actions.json
 
 # Agent rules (local per-machine, not shared)
 .rules
+CLAUDE.md
