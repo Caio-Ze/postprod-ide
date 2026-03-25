@@ -60,8 +60,8 @@ use std::{
 };
 use theme_settings::ThemeSettings;
 use ui::{
-    Color, ContextMenu, ContextMenuEntry, DecoratedIcon, Divider, Icon, IconDecoration,
-    IconDecorationKind, IndentGuideColors, IndentGuideLayout, Indicator, KeyBinding, Label,
+    Color, ContextMenu, ContextMenuEntry, DecoratedIcon, Icon, IconDecoration,
+    IconDecorationKind, IndentGuideColors, IndentGuideLayout, Indicator, Label,
     LabelSize, ListItem, ListItemSpacing, ScrollAxes, ScrollableHandle, Scrollbars,
     StickyCandidate, Tooltip, WithScrollbar, prelude::*, v_flex,
 };
