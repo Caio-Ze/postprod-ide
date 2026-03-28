@@ -5449,7 +5449,8 @@ fn gather_context_blocking(
                     }
                     continue;
                 };
-                let path = Path::new(path_str);
+                let expanded = config::expand_tilde(path_str);
+                let path = Path::new(&expanded);
                 match config::read_path_context(path) {
                     Ok(text) => text,
                     Err(e) => {
@@ -5469,7 +5470,7 @@ fn gather_context_blocking(
                     continue;
                 };
                 let scripts_dir = config_root.join("config/context-scripts");
-                let script_path = match config::resolve_file_by_name(&scripts_dir, script_name) {
+                let script_path = match config::resolve_file_path(&scripts_dir, script_name) {
                     Ok(p) => p,
                     Err(e) => {
                         if entry.required {
