@@ -324,7 +324,7 @@ pub(crate) fn load_single_automation(path: &Path, config_root: &Path) -> Result<
     if let Some(ref prompt_filename) = entry.prompt_file {
         if !prompt_filename.is_empty() {
             let prompts_dir = config_root.join("config/prompts");
-            match resolve_file_by_name(&prompts_dir, prompt_filename) {
+            match resolve_file_path(&prompts_dir, prompt_filename) {
                 Ok(prompt_path) => {
                     entry.prompt = std::fs::read_to_string(&prompt_path).map_err(|e| {
                         format!("{filename}: failed to read prompt file '{}': {e}", prompt_path.display())
@@ -379,6 +379,34 @@ fn collect_files_by_name(dir: &Path, target_name: &str) -> Vec<PathBuf> {
         }
     }
     result
+}
+
+/// Expand leading `~` to the user's home directory.
+/// Returns the string unchanged if no `~` prefix or if home dir cannot be determined.
+pub(crate) fn expand_tilde(path_str: &str) -> String {
+    if path_str.starts_with('~') {
+        match dirs::home_dir() {
+            Some(home) => path_str.replacen('~', &home.to_string_lossy(), 1),
+            None => path_str.to_string(),
+        }
+    } else {
+        path_str.to_string()
+    }
+}
+
+/// Resolve a file by path or by name search in a default directory.
+/// - If `path_spec` contains '/', treat as a path (expand ~ if needed)
+/// - Otherwise, search `default_dir` recursively for a matching filename
+pub(crate) fn resolve_file_path(default_dir: &Path, path_spec: &str) -> Result<PathBuf, String> {
+    if path_spec.contains('/') {
+        let expanded = expand_tilde(path_spec);
+        let p = PathBuf::from(&expanded);
+        if p.exists() {
+            return Ok(p);
+        }
+        return Err(format!("file '{}' does not exist", expanded));
+    }
+    resolve_file_by_name(default_dir, path_spec)
 }
 
 /// Load default context entries from config/default-context/ folder.
@@ -1114,6 +1142,70 @@ prompt = "Do the scan"
     fn test_resolve_file_by_name_nonexistent_dir() {
         let result = resolve_file_by_name(Path::new("/nonexistent/dir"), "file.md");
         assert!(result.is_err());
+    }
+
+    // ---------------------------------------------------------------
+    // expand_tilde + resolve_file_path
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn test_expand_tilde_with_home() {
+        let result = expand_tilde("~/foo/bar.md");
+        assert!(!result.starts_with('~'), "tilde should be expanded");
+        assert!(result.ends_with("/foo/bar.md"));
+    }
+
+    #[test]
+    fn test_expand_tilde_no_prefix() {
+        assert_eq!(expand_tilde("/abs/path"), "/abs/path");
+    }
+
+    #[test]
+    fn test_expand_tilde_empty() {
+        assert_eq!(expand_tilde(""), "");
+    }
+
+    #[test]
+    fn test_resolve_file_path_bare_filename() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        std::fs::write(tmp.path().join("hello.md"), "content")?;
+        let result = resolve_file_path(tmp.path(), "hello.md");
+        assert!(result.is_ok());
+        assert_eq!(result?.file_name().unwrap(), "hello.md");
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_file_path_absolute() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let file = tmp.path().join("target.md");
+        std::fs::write(&file, "content")?;
+        let result = resolve_file_path(Path::new("/unused"), &file.to_string_lossy());
+        assert!(result.is_ok());
+        assert_eq!(result?, file);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_file_path_tilde() -> Result<(), Box<dyn std::error::Error>> {
+        // Create a file in the home directory's tmp area to test tilde expansion
+        let home = dirs::home_dir().expect("home dir must exist for this test");
+        let test_file = home.join(".postprod-test-resolve-tilde.tmp");
+        std::fs::write(&test_file, "tilde test")?;
+
+        let result = resolve_file_path(Path::new("/unused"), "~/.postprod-test-resolve-tilde.tmp");
+        std::fs::remove_file(&test_file).ok();
+
+        assert!(result.is_ok());
+        assert_eq!(result?, test_file);
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_file_path_missing() {
+        let result = resolve_file_path(Path::new("/unused"), "/no/such/file.md");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("does not exist"));
     }
 
     #[test]

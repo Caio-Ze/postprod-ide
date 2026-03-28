@@ -4570,6 +4570,7 @@ version = "0.1.0"
 dependencies = [
  "agent_ui",
  "anyhow",
+ "dirs 4.0.0",
  "editor",
  "futures 0.3.31",
  "fuzzy",
