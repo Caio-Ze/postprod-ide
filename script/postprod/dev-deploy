@@ -1,41 +1,52 @@
 #!/usr/bin/env bash
-# Build PostProd IDE in release mode.
+# Build PostProd IDE.
 #
 # The workspace (~~/PostProd_IDE/) is a version-controlled repo that you
 # manage and ship directly. This script does not touch it.
 #
 # Usage:
-#   ./script/dev-deploy              # build release binary
-#   ./script/dev-deploy --run        # build + launch
+#   ./script/postprod/dev-deploy              # fast build (release-fast profile)
+#   ./script/postprod/dev-deploy --run        # fast build + launch
+#   ./script/postprod/dev-deploy --release    # full release build (LTO, slow)
+#   ./script/postprod/dev-deploy --release --run
+#
+# Profiles:
+#   release-fast (default) — no LTO, 16 codegen units, full debug symbols.
+#                            Fast to compile, good enough to test everything.
+#   release                — thin LTO, 1 codegen unit, limited debug.
+#                            Slower build, smaller/faster binary. Use for distribution.
 #
 # Fresh install simulation:
 #   1. Delete ~/PostProd_IDE/
-#   2. ./script/dev-deploy --run
+#   2. ./script/postprod/dev-deploy --run
 #   3. Clone your config repo into ~/PostProd_IDE/
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 
 run_after=false
+profile="release-fast"
+target_dir="release-fast"
 for arg in "$@"; do
     case "$arg" in
         --run) run_after=true ;;
+        --release) profile="release"; target_dir="release" ;;
         *) echo "Unknown flag: $arg"; exit 1 ;;
     esac
 done
 
-echo "==> Building postprod-ide (release)..."
-cargo build --release -p postprod-ide --manifest-path "$REPO_ROOT/Cargo.toml"
+echo "==> Building postprod-ide (profile: $profile)..."
+cargo build --profile "$profile" -p postprod-ide --manifest-path "$REPO_ROOT/Cargo.toml"
 
 echo ""
 echo "==> Build complete."
-echo "    Binary: $REPO_ROOT/target/release/postprod-ide"
+echo "    Binary: $REPO_ROOT/target/$target_dir/postprod-ide"
 
 if [[ "$run_after" == true ]]; then
     echo ""
     echo "==> Launching postprod-ide..."
-    exec "$REPO_ROOT/target/release/postprod-ide"
+    exec "$REPO_ROOT/target/$target_dir/postprod-ide"
 else
     echo ""
-    echo "    Run: ./script/dev-deploy --run"
+    echo "    Run: ./script/postprod/dev-deploy --run"
 fi
