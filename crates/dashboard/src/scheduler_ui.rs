@@ -26,7 +26,7 @@ pub(crate) const SCHEDULE_INTERVALS: &[&str] = &[
     "Every month",
 ];
 
-pub(crate) fn cron_from_interval_and_hour(interval: &str, hour: u32) -> String {
+pub(crate) fn cron_from_interval_and_hour(interval: &str, hour: u32, day: Option<u32>) -> String {
     let h = hour % 24;
     match interval {
         "Every hour" => "0 * * * *".to_string(),
@@ -44,8 +44,8 @@ pub(crate) fn cron_from_interval_and_hour(interval: &str, hour: u32) -> String {
         }
         "Every 12 hours" => format!("0 {},{} * * *", h, (h + 12) % 24),
         "Every day" => format!("0 {} * * *", h),
-        "Every week" => format!("0 {} * * 1", h), // Monday
-        "Every month" => format!("0 {} 1 * *", h), // 1st of month
+        "Every week" => format!("0 {} * * {}", h, day.unwrap_or(1) % 7),
+        "Every month" => format!("0 {} {} * *", h, day.unwrap_or(1).clamp(1, 31)),
         _ => format!("0 {} * * *", h), // fallback to daily
     }
 }
@@ -99,13 +99,53 @@ pub(crate) fn format_hour_ampm(hour: u32) -> String {
     }
 }
 
+pub(crate) fn dow_from_cron(cron: &str) -> u32 {
+    let parts: Vec<&str> = cron.split_whitespace().collect();
+    if parts.len() < 5 {
+        return 1;
+    }
+    parts[4].parse().unwrap_or(1)
+}
+
+pub(crate) fn dom_from_cron(cron: &str) -> u32 {
+    let parts: Vec<&str> = cron.split_whitespace().collect();
+    if parts.len() < 4 {
+        return 1;
+    }
+    parts[2].parse().unwrap_or(1)
+}
+
+pub(crate) const DAY_OF_WEEK_LABELS: &[&str] = &[
+    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+];
+
+pub(crate) fn format_dom(day: u32) -> String {
+    match day {
+        1 | 21 | 31 => format!("{day}st"),
+        2 | 22 => format!("{day}nd"),
+        3 | 23 => format!("{day}rd"),
+        _ => format!("{day}th"),
+    }
+}
+
 pub(crate) fn schedule_summary(cron: &str) -> String {
     let interval = interval_from_cron(cron);
     let hour = hour_from_cron(cron);
     if interval == "Every hour" {
         return "Every hour".to_string();
     }
-    format!("{} at {}", interval, format_hour_ampm(hour))
+    match interval {
+        "Every week" => {
+            let dow = dow_from_cron(cron) as usize;
+            let day_name = DAY_OF_WEEK_LABELS.get(dow).unwrap_or(&"Monday");
+            format!("Every {} at {}", day_name, format_hour_ampm(hour))
+        }
+        "Every month" => {
+            let dom = dom_from_cron(cron);
+            format!("Every month on the {} at {}", format_dom(dom), format_hour_ampm(hour))
+        }
+        _ => format!("{} at {}", interval, format_hour_ampm(hour)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,8 +300,17 @@ impl Dashboard {
     ) -> impl IntoElement {
         let current_interval = interval_from_cron(cron);
         let current_hour = hour_from_cron(cron);
+        let current_dow = dow_from_cron(cron);
+        let current_dom = dom_from_cron(cron);
 
         let entity = cx.entity().downgrade();
+
+        // Determine which day value to preserve when other controls change
+        let current_day: Option<u32> = match current_interval {
+            "Every week" => Some(current_dow),
+            "Every month" => Some(current_dom),
+            _ => None,
+        };
 
         // Interval dropdown
         let interval_hour = current_hour;
@@ -273,12 +322,18 @@ impl Dashboard {
                     let entity = entity.clone();
                     let auto_id = auto_id.clone();
                     let interval_str = interval.to_string();
+                    // When switching intervals, use sensible day defaults
+                    let day_for_interval: Option<u32> = match interval {
+                        "Every week" => Some(current_day.unwrap_or(1)),
+                        "Every month" => Some(current_day.unwrap_or(1)),
+                        _ => None,
+                    };
                     menu = menu.entry(
                         interval.to_string(),
                         None,
                         move |_window, cx: &mut App| {
                             entity.update(cx, |this: &mut Dashboard, cx| {
-                                this.update_schedule_cron(&auto_id, &interval_str, interval_hour, cx);
+                                this.update_schedule_cron(&auto_id, &interval_str, interval_hour, day_for_interval, cx);
                             }).log_err();
                         },
                     );
@@ -291,6 +346,8 @@ impl Dashboard {
         let time_menu = ContextMenu::build(window, cx, {
             let auto_id = automation_id.to_string();
             let interval = current_interval.to_string();
+            let day = current_day;
+            let entity = entity.clone();
             move |mut menu, _window, _cx| {
                 for hour in 0..24u32 {
                     let entity = entity.clone();
@@ -302,7 +359,7 @@ impl Dashboard {
                         None,
                         move |_window, cx: &mut App| {
                             entity.update(cx, |this: &mut Dashboard, cx| {
-                                this.update_schedule_cron(&auto_id, &interval, hour, cx);
+                                this.update_schedule_cron(&auto_id, &interval, hour, day, cx);
                             }).log_err();
                         },
                     );
@@ -312,6 +369,71 @@ impl Dashboard {
         });
 
         let show_time = current_interval != "Every hour";
+        let show_dow = current_interval == "Every week";
+        let show_dom = current_interval == "Every month";
+
+        // Day-of-week dropdown (for weekly)
+        let dow_dropdown = if show_dow {
+            let dow_menu = ContextMenu::build(window, cx, {
+                let auto_id = automation_id.to_string();
+                let interval = current_interval.to_string();
+                let entity = entity.clone();
+                move |mut menu, _window, _cx| {
+                    for (idx, &day_name) in DAY_OF_WEEK_LABELS.iter().enumerate() {
+                        let entity = entity.clone();
+                        let auto_id = auto_id.clone();
+                        let interval = interval.clone();
+                        let dow = idx as u32;
+                        menu = menu.entry(
+                            day_name.to_string(),
+                            None,
+                            move |_window, cx: &mut App| {
+                                entity.update(cx, |this: &mut Dashboard, cx| {
+                                    this.update_schedule_cron(&auto_id, &interval, interval_hour, Some(dow), cx);
+                                }).log_err();
+                            },
+                        );
+                    }
+                    menu
+                }
+            });
+            let dow_label = DAY_OF_WEEK_LABELS.get(current_dow as usize).unwrap_or(&"Monday");
+            Some((dow_menu, dow_label.to_string()))
+        } else {
+            None
+        };
+
+        // Day-of-month dropdown (for monthly)
+        let dom_dropdown = if show_dom {
+            let dom_menu = ContextMenu::build(window, cx, {
+                let auto_id = automation_id.to_string();
+                let interval = current_interval.to_string();
+                let entity = entity.clone();
+                move |mut menu, _window, _cx| {
+                    for day in 1..=31u32 {
+                        let entity = entity.clone();
+                        let auto_id = auto_id.clone();
+                        let interval = interval.clone();
+                        let label = format_dom(day);
+                        menu = menu.entry(
+                            label,
+                            None,
+                            move |_window, cx: &mut App| {
+                                entity.update(cx, |this: &mut Dashboard, cx| {
+                                    this.update_schedule_cron(&auto_id, &interval, interval_hour, Some(day), cx);
+                                }).log_err();
+                            },
+                        );
+                    }
+                    menu
+                }
+            });
+            Some((dom_menu, format_dom(current_dom)))
+        } else {
+            None
+        };
+
+        let auto_id_for_ids = automation_id.to_string();
 
         h_flex()
             .w_full()
@@ -327,13 +449,45 @@ impl Dashboard {
             )
             .child(
                 DropdownMenu::new(
-                    SharedString::from(format!("sched-interval-{}", automation_id)),
+                    SharedString::from(format!("sched-interval-{}", auto_id_for_ids)),
                     current_interval.to_string(),
                     interval_menu,
                 )
                 .trigger_size(ButtonSize::None)
                 .style(DropdownStyle::Outlined),
             )
+            .when_some(dow_dropdown, |el, (menu, label)| {
+                el.child(
+                    Label::new("on")
+                        .color(Color::Muted)
+                        .size(LabelSize::XSmall),
+                )
+                .child(
+                    DropdownMenu::new(
+                        SharedString::from(format!("sched-dow-{}", auto_id_for_ids)),
+                        label,
+                        menu,
+                    )
+                    .trigger_size(ButtonSize::None)
+                    .style(DropdownStyle::Outlined),
+                )
+            })
+            .when_some(dom_dropdown, |el, (menu, label)| {
+                el.child(
+                    Label::new("on the")
+                        .color(Color::Muted)
+                        .size(LabelSize::XSmall),
+                )
+                .child(
+                    DropdownMenu::new(
+                        SharedString::from(format!("sched-dom-{}", auto_id_for_ids)),
+                        label,
+                        menu,
+                    )
+                    .trigger_size(ButtonSize::None)
+                    .style(DropdownStyle::Outlined),
+                )
+            })
             .when(show_time, |el| {
                 el.child(
                     Label::new("at")
@@ -342,7 +496,7 @@ impl Dashboard {
                 )
                 .child(
                     DropdownMenu::new(
-                        SharedString::from(format!("sched-time-{}", automation_id)),
+                        SharedString::from(format!("sched-time-{}", auto_id_for_ids)),
                         format_hour_ampm(current_hour),
                         time_menu,
                     )
@@ -359,31 +513,43 @@ mod tests {
 
     #[test]
     fn test_cron_from_interval_daily() {
-        let cron = cron_from_interval_and_hour("Every day", 3);
+        let cron = cron_from_interval_and_hour("Every day", 3, None);
         assert_eq!(cron, "0 3 * * *");
     }
 
     #[test]
     fn test_cron_from_interval_hourly() {
-        let cron = cron_from_interval_and_hour("Every hour", 0);
+        let cron = cron_from_interval_and_hour("Every hour", 0, None);
         assert_eq!(cron, "0 * * * *");
     }
 
     #[test]
     fn test_cron_from_interval_weekly() {
-        let cron = cron_from_interval_and_hour("Every week", 9);
+        let cron = cron_from_interval_and_hour("Every week", 9, None);
         assert_eq!(cron, "0 9 * * 1");
     }
 
     #[test]
+    fn test_cron_from_interval_weekly_with_day() {
+        let cron = cron_from_interval_and_hour("Every week", 9, Some(3));
+        assert_eq!(cron, "0 9 * * 3"); // Wednesday
+    }
+
+    #[test]
     fn test_cron_from_interval_monthly() {
-        let cron = cron_from_interval_and_hour("Every month", 14);
+        let cron = cron_from_interval_and_hour("Every month", 14, None);
         assert_eq!(cron, "0 14 1 * *");
     }
 
     #[test]
+    fn test_cron_from_interval_monthly_with_day() {
+        let cron = cron_from_interval_and_hour("Every month", 14, Some(15));
+        assert_eq!(cron, "0 14 15 * *"); // 15th of month
+    }
+
+    #[test]
     fn test_cron_from_interval_12_hours() {
-        let cron = cron_from_interval_and_hour("Every 12 hours", 3);
+        let cron = cron_from_interval_and_hour("Every 12 hours", 3, None);
         assert_eq!(cron, "0 3,15 * * *");
     }
 
@@ -427,14 +593,42 @@ mod tests {
     fn test_schedule_summary() {
         assert_eq!(schedule_summary("0 3 * * *"), "Every day at 3:00 AM");
         assert_eq!(schedule_summary("0 * * * *"), "Every hour");
-        assert_eq!(schedule_summary("0 14 1 * *"), "Every month at 2:00 PM");
+        assert_eq!(schedule_summary("0 14 1 * *"), "Every month on the 1st at 2:00 PM");
+        assert_eq!(schedule_summary("0 9 * * 3"), "Every Wednesday at 9:00 AM");
+        assert_eq!(schedule_summary("0 9 * * 0"), "Every Sunday at 9:00 AM");
+        assert_eq!(schedule_summary("0 14 15 * *"), "Every month on the 15th at 2:00 PM");
+    }
+
+    #[test]
+    fn test_dow_from_cron() {
+        assert_eq!(dow_from_cron("0 9 * * 3"), 3); // Wednesday
+        assert_eq!(dow_from_cron("0 9 * * 0"), 0); // Sunday
+        assert_eq!(dow_from_cron("0 9 * * 1"), 1); // Monday (default)
+    }
+
+    #[test]
+    fn test_dom_from_cron() {
+        assert_eq!(dom_from_cron("0 14 15 * *"), 15);
+        assert_eq!(dom_from_cron("0 14 1 * *"), 1);
+    }
+
+    #[test]
+    fn test_format_dom() {
+        assert_eq!(format_dom(1), "1st");
+        assert_eq!(format_dom(2), "2nd");
+        assert_eq!(format_dom(3), "3rd");
+        assert_eq!(format_dom(4), "4th");
+        assert_eq!(format_dom(11), "11th");
+        assert_eq!(format_dom(21), "21st");
+        assert_eq!(format_dom(22), "22nd");
+        assert_eq!(format_dom(31), "31st");
     }
 
     #[test]
     fn test_cron_round_trip() {
         for &interval in SCHEDULE_INTERVALS {
             for hour in [0, 3, 12, 23] {
-                let cron = cron_from_interval_and_hour(interval, hour);
+                let cron = cron_from_interval_and_hour(interval, hour, None);
                 let recovered_interval = interval_from_cron(&cron);
                 assert_eq!(
                     recovered_interval, interval,
@@ -448,6 +642,24 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_cron_round_trip_with_day() {
+        // Weekly with specific days
+        for dow in 0..7u32 {
+            let cron = cron_from_interval_and_hour("Every week", 9, Some(dow));
+            assert_eq!(interval_from_cron(&cron), "Every week");
+            assert_eq!(hour_from_cron(&cron), 9);
+            assert_eq!(dow_from_cron(&cron), dow);
+        }
+        // Monthly with specific days
+        for dom in [1, 5, 15, 28, 31] {
+            let cron = cron_from_interval_and_hour("Every month", 14, Some(dom));
+            assert_eq!(interval_from_cron(&cron), "Every month");
+            assert_eq!(hour_from_cron(&cron), 14);
+            assert_eq!(dom_from_cron(&cron), dom);
         }
     }
 }

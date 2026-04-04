@@ -2060,6 +2060,7 @@ Rules for the completion report:
         automation_id: &str,
         interval: &str,
         hour: u32,
+        day: Option<u32>,
         cx: &mut Context<Self>,
     ) {
         let entry = match self.automations.iter_mut().find(|a| a.id == automation_id) {
@@ -2067,7 +2068,7 @@ Rules for the completion report:
             None => return,
         };
 
-        let cron = scheduler_ui::cron_from_interval_and_hour(interval, hour);
+        let cron = scheduler_ui::cron_from_interval_and_hour(interval, hour, day);
 
         let schedule = entry.schedule.get_or_insert_with(ScheduleConfig::default);
         schedule.cron = cron;
