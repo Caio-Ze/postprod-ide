@@ -10,7 +10,6 @@ use ui::{
 };
 use util::ResultExt as _;
 
-use gpui::px;
 
 // ---------------------------------------------------------------------------
 // Schedule helpers (pure functions, no Dashboard access)
@@ -316,7 +315,7 @@ impl Dashboard {
 
         h_flex()
             .w_full()
-            .pl(px(52.))
+            .pl(DynamicSpacing::Base48.rems(cx))
             .pr_2()
             .pb_2()
             .gap_2()
