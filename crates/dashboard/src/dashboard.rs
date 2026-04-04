@@ -3778,7 +3778,7 @@ Rules for the completion report:
         let has_params = !entry.params.is_empty();
         let is_expanded = self.expanded_automations.contains(&entry.id);
 
-        let (accent, accent_bg) = self.agent_backend.card_accent(cx);
+        let (accent, _) = self.agent_backend.card_accent(cx);
         let icon_tint_bg = cx.theme().colors().element_background;
         let editor_bg = cx.theme().colors().editor_background;
 
@@ -4531,7 +4531,7 @@ Rules for the completion report:
         let is_expanded = self.expanded_automations.contains(&entry.id);
 
         let accent = cx.theme().colors().text_accent;
-        let accent_bg = accent.opacity(0.15);
+        let icon_tint_bg = cx.theme().colors().element_background;
 
         let entity = cx.entity().downgrade();
 
@@ -4717,7 +4717,7 @@ Rules for the completion report:
             accent,
             icon,
             Color::Accent,
-            accent_bg,
+            icon_tint_bg,
             v_flex()
                 .flex_1()
                 .child(Label::new(entry_label))
@@ -4794,7 +4794,7 @@ Rules for the completion report:
         // Ghost card for pending new pipeline
         let ghost_card = self.pending_new_pipeline.clone().map(|editor| {
             let accent = cx.theme().colors().text_accent;
-            let accent_bg = accent.opacity(0.15);
+            let icon_tint_bg = cx.theme().colors().element_background;
             let border_color = cx.theme().colors().border;
             let confirm_entity = cx.entity().downgrade();
             let cancel_entity = cx.entity().downgrade();
@@ -4804,7 +4804,7 @@ Rules for the completion report:
                 accent,
                 IconName::PlayFilled,
                 Color::Accent,
-                accent_bg,
+                icon_tint_bg,
                 div()
                     .flex_1()
                     .border_1()
@@ -5052,7 +5052,7 @@ Rules for the completion report:
     fn render_new_automation_ghost(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let editor = self.pending_new_automation.clone()?;
         let accent = cx.theme().colors().text_accent;
-        let accent_bg = accent.opacity(0.15);
+        let icon_tint_bg = cx.theme().colors().element_background;
         let border_color = cx.theme().colors().border;
         let confirm_entity = cx.entity().downgrade();
         let cancel_entity = cx.entity().downgrade();
@@ -5063,7 +5063,7 @@ Rules for the completion report:
                 accent,
                 IconName::Sparkle,
                 Color::Accent,
-                accent_bg,
+                icon_tint_bg,
                 div()
                     .flex_1()
                     .border_1()
