@@ -17,7 +17,7 @@ use crate::config::{AutomationEntry, ToolEntry};
 use crate::hotkeys::{GlobalHotkeyManagerHandle, ResolvedHotkeyEntry};
 use crate::paths::{resolve_agent_tools_path, resolve_runtime_path, state_dir_for};
 use crate::persistence::read_background_tools;
-use crate::{Dashboard, RunDashboardAutomation, RunDashboardTool, resolve_tool_command};
+use crate::{Dashboard, RunDashboardTool, resolve_tool_command};
 
 use task::{RevealStrategy, SpawnInTerminal, TaskId};
 use util::ResultExt as _;
@@ -549,12 +549,30 @@ impl PickerDelegate for AutomationPickerDelegate {
                         spawn_tool_from_picker(tool, &config_root, &self.workspace, window, cx);
                     }
                     PickerEntryKind::Automation(auto) => {
-                        window.dispatch_action(
-                            Box::new(RunDashboardAutomation {
-                                automation_id: auto.id.clone(),
-                            }),
-                            cx,
-                        );
+                        let auto_id = auto.id.clone();
+                        if let Some(workspace) = self.workspace.upgrade() {
+                            workspace.update(cx, |workspace, cx| {
+                                let dashboard = workspace
+                                    .panes()
+                                    .iter()
+                                    .flat_map(|pane| pane.read(cx).items())
+                                    .find_map(|item| item.downcast::<Dashboard>());
+                                if let Some(dashboard) = dashboard {
+                                    dashboard.update(cx, |d, cx| {
+                                        if let Some(entry) =
+                                            d.automations.iter().find(|a| a.id == auto_id)
+                                        {
+                                            let id = entry.id.clone();
+                                            let label = entry.label.clone();
+                                            let prompt = entry.prompt.clone();
+                                            d.run_automation(
+                                                &id, &label, &prompt, window, cx,
+                                            );
+                                        }
+                                    });
+                                }
+                            });
+                        }
                     }
                     PickerEntryKind::ContextScript(_) => {}
                 }
