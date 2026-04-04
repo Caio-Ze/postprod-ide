@@ -3719,6 +3719,82 @@ Rules for the completion report:
             .collect()
     }
 
+    /// Shared card layout used by automation, pipeline, and tool cards.
+    ///
+    /// Builds the outer container (background, border, hover, rounded corners),
+    /// the left accent strip, icon container, title + description column,
+    /// and places `right_side` at the end of the header row.  Any additional
+    /// content (params, schedule, expansion) is appended from `extra_content`.
+    ///
+    /// The caller chains `.on_click()` / `.group()` on the returned `Div`.
+    fn render_card_shell(
+        element_id: impl Into<SharedString>,
+        accent: gpui::Hsla,
+        icon: IconName,
+        icon_color: Color,
+        icon_tint_bg: gpui::Hsla,
+        title: SharedString,
+        description: SharedString,
+        card_bg: gpui::Hsla,
+        hover_bg: gpui::Hsla,
+        right_side: Div,
+        extra_content: Div,
+    ) -> gpui::Stateful<Div> {
+        div()
+            .id(element_id.into())
+            .w_full()
+            .rounded_lg()
+            .border_1()
+            .border_color(accent.opacity(0.5))
+            .bg(card_bg)
+            .overflow_hidden()
+            .cursor_pointer()
+            .hover(move |style| style.bg(hover_bg))
+            .child(
+                h_flex()
+                    .w_full()
+                    .child(div().w(px(3.)).h_full().flex_shrink_0().bg(accent))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .p_2()
+                                    .gap_3()
+                                    .items_center()
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .size(px(36.))
+                                            .rounded(px(8.))
+                                            .bg(icon_tint_bg)
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                Icon::new(icon)
+                                                    .size(IconSize::Medium)
+                                                    .color(icon_color),
+                                            ),
+                                    )
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .child(Label::new(title))
+                                            .child(
+                                                Label::new(description)
+                                                    .color(Color::Muted)
+                                                    .size(LabelSize::XSmall),
+                                            ),
+                                    )
+                                    .child(right_side),
+                            )
+                            .child(extra_content),
+                    ),
+            )
+    }
+
     fn render_automation_card(
         &mut self,
         entry: &AutomationEntry,
@@ -3777,205 +3853,163 @@ Rules for the completion report:
         };
         let group_name = SharedString::from(format!("automation-{}", entry_id));
 
-        div()
-            .id(SharedString::from(format!(
-                "automation-card-{}-{}",
-                entry_id, idx
-            )))
-            .group(group_name)
-            .w_full()
-            .rounded_lg()
-            .border_1()
-            .border_color(accent.opacity(0.5))
-            .bg(card_bg)
-            .overflow_hidden()
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover_bg))
+        // Right-side: badge + action buttons with mouse-down propagation prevention
+        let right_side = h_flex()
+            .gap_2()
+            .items_center()
+            .child(
+                Label::new(badge_label)
+                    .color(badge_color)
+                    .size(LabelSize::XSmall),
+            )
             .child(
                 h_flex()
-                    .w_full()
-                    .child(div().w(px(3.)).h_full().flex_shrink_0().bg(accent))
+                    .gap_1()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        |_, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        },
+                    )
                     .child(
-                        v_flex()
-                            .flex_1()
-                            .child(
-                                h_flex()
-                                    .flex_1()
-                                    .p_2()
-                                    .gap_3()
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .size(px(36.))
-                                            .rounded(px(8.))
-                                            .bg(icon_tint_bg)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                Icon::new(icon)
-                                                    .size(IconSize::Medium)
-                                                    .color(icon_color),
-                                            ),
-                                    )
-                                    .child(
-                                        v_flex().flex_1().child(Label::new(entry_label)).child(
-                                            Label::new(entry_description)
-                                                .color(Color::Muted)
-                                                .size(LabelSize::XSmall),
-                                        ),
-                                    )
-                                    .child(
-                                        Label::new(badge_label)
-                                            .color(badge_color)
-                                            .size(LabelSize::XSmall),
-                                    )
-                                    // Wrapper stops mouse_down propagation to prevent the card's
-                                    // window-level click tracking from interfering with child buttons.
-                                    .child(
-                                        h_flex()
-                                            .gap_1()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                |_, window, cx| {
-                                                    window.prevent_default();
-                                                    cx.stop_propagation();
-                                                },
-                                            )
-                                            .child(
-                                                IconButton::new(
-                                                    format!("sched-toggle-{}", sched_id),
-                                                    IconName::CountdownTimer,
-                                                )
-                                                .icon_size(IconSize::Small)
-                                                .icon_color(if is_scheduled { Color::Accent } else { Color::Muted })
-                                                .tooltip(Tooltip::text(if is_scheduled { "Disable schedule" } else { "Enable schedule" }))
-                                                .on_click(
-                                                    move |_, _window, cx| {
-                                                        sched_entity
-                                                            .update(cx, |this, cx| {
-                                                                this.toggle_schedule(&sched_id, cx);
-                                                            })
-                                                            .log_err();
-                                                    },
-                                                ),
-                                            )
-                                            .child(
-                                                Disclosure::new(
-                                                    SharedString::from(format!(
-                                                        "disc-auto-{}",
-                                                        disc_id
-                                                    )),
-                                                    is_expanded,
-                                                )
-                                                .on_click(
-                                                    move |_, _, cx| {
-                                                        disc_entity
-                                                            .update(cx, |this, cx| {
-                                                                this.toggle_automation_expanded(
-                                                                    &disc_id, cx,
-                                                                );
-                                                            })
-                                                            .log_err();
-                                                    },
-                                                ),
-                                            )
-                                            .child(
-                                                IconButton::new(
-                                                    format!("edit-automation-{}", edit_id),
-                                                    IconName::FileToml,
-                                                )
-                                                .icon_size(IconSize::Small)
-                                                .icon_color(Color::Muted)
-                                                .tooltip(Tooltip::text("Edit"))
-                                                .on_click(
-                                                    move |_, window, cx| {
-                                                        edit_entity
-                                                            .update(cx, |this, cx| {
-                                                                let path = this.automations.iter()
-                                                                    .find(|a| a.id == edit_id)
-                                                                    .and_then(|a| a.source_path.clone())
-                                                                    .unwrap_or_else(|| automations_dir_for(&this.config_root)
-                                                                        .join(format!("{}.toml", edit_id)));
-                                                                let workspace =
-                                                                    this.workspace.clone();
-                                                                cx.spawn_in(
+                        IconButton::new(
+                            format!("sched-toggle-{}", sched_id),
+                            IconName::CountdownTimer,
+                        )
+                        .icon_size(IconSize::Small)
+                        .icon_color(if is_scheduled { Color::Accent } else { Color::Muted })
+                        .tooltip(Tooltip::text(if is_scheduled { "Disable schedule" } else { "Enable schedule" }))
+                        .on_click(
+                            move |_, _window, cx| {
+                                sched_entity
+                                    .update(cx, |this, cx| {
+                                        this.toggle_schedule(&sched_id, cx);
+                                    })
+                                    .log_err();
+                            },
+                        ),
+                    )
+                    .child(
+                        Disclosure::new(
+                            SharedString::from(format!("disc-auto-{}", disc_id)),
+                            is_expanded,
+                        )
+                        .on_click(
+                            move |_, _, cx| {
+                                disc_entity
+                                    .update(cx, |this, cx| {
+                                        this.toggle_automation_expanded(&disc_id, cx);
+                                    })
+                                    .log_err();
+                            },
+                        ),
+                    )
+                    .child(
+                        IconButton::new(
+                            format!("edit-automation-{}", edit_id),
+                            IconName::FileToml,
+                        )
+                        .icon_size(IconSize::Small)
+                        .icon_color(Color::Muted)
+                        .tooltip(Tooltip::text("Edit"))
+                        .on_click(
+                            move |_, window, cx| {
+                                edit_entity
+                                    .update(cx, |this, cx| {
+                                        let path = this.automations.iter()
+                                            .find(|a| a.id == edit_id)
+                                            .and_then(|a| a.source_path.clone())
+                                            .unwrap_or_else(|| automations_dir_for(&this.config_root)
+                                                .join(format!("{}.toml", edit_id)));
+                                        let workspace = this.workspace.clone();
+                                        cx.spawn_in(
+                                            window,
+                                            async move |_this, cx| {
+                                                workspace
+                                                    .update_in(
+                                                        cx,
+                                                        |workspace, window, cx| {
+                                                            workspace
+                                                                .open_abs_path(
+                                                                    path,
+                                                                    OpenOptions::default(),
                                                                     window,
-                                                                    async move |_this, cx| {
-                                                                        workspace
-                                                                            .update_in(
-                                                                                cx,
-                                                                                |workspace,
-                                                                                 window,
-                                                                                 cx| {
-                                                                                    workspace
-                                                                                        .open_abs_path(
-                                                                                            path,
-                                                                                            OpenOptions::default(),
-                                                                                            window,
-                                                                                            cx,
-                                                                                        )
-                                                                                        .detach();
-                                                                                },
-                                                                            )
-                                                                            .log_err();
-                                                                    },
+                                                                    cx,
                                                                 )
                                                                 .detach();
-                                                            })
-                                                            .log_err();
-                                                    },
-                                                ),
-                                            ),
-                                    ),
-                            )
-                            .when(has_params, |el| {
-                                el.child(
-                                    h_flex()
-                                        .w_full()
-                                        .pl(px(52.))
-                                        .pr_2()
-                                        .pb_1()
-                                        .gap_2()
-                                        .flex_wrap()
-                                        .children(param_fields),
-                                )
-                            })
-                            .when(is_scheduled, {
-                                let sched_controls = self.render_schedule_controls(
-                                    &entry_id, &schedule_cron, window, cx,
-                                );
-                                move |el| el.child(sched_controls)
-                            })
-                            .when(is_expanded, |el| {
-                                el.child(
-                                    v_flex()
-                                        .w_full()
-                                        .px_3()
-                                        .pb_2()
-                                        .gap_1()
-                                        .children(context_rows)
-                                        .child(
-                                            div().w_full().p_2().rounded_md().bg(editor_bg).child(
-                                                Label::new(entry_prompt)
-                                                    .color(Color::Muted)
-                                                    .size(LabelSize::XSmall),
-                                            ),
-                                        ),
-                                )
-                            }),
+                                                        },
+                                                    )
+                                                    .log_err();
+                                            },
+                                        )
+                                        .detach();
+                                    })
+                                    .log_err();
+                            },
+                        ),
                     ),
-            )
-            .on_click(move |_, window, cx| {
-                click_entity.update(cx, |this, cx| {
-                    if this.expanded_automations.contains(click_id.as_str()) {
-                        this.toggle_automation_expanded(&click_id, cx);
-                    } else {
-                        this.run_automation(&click_id, &click_label, &click_prompt, window, cx);
-                    }
-                }).log_err();
+            );
+
+        // Below-header: params, schedule controls, expansion content
+        let sched_controls = self.render_schedule_controls(
+            &entry_id, &schedule_cron, window, cx,
+        );
+        let extra_content = div()
+            .when(has_params, |el| {
+                el.child(
+                    h_flex()
+                        .w_full()
+                        .pl(px(52.))
+                        .pr_2()
+                        .pb_1()
+                        .gap_2()
+                        .flex_wrap()
+                        .children(param_fields),
+                )
             })
+            .when(is_scheduled, move |el| el.child(sched_controls))
+            .when(is_expanded, |el| {
+                el.child(
+                    v_flex()
+                        .w_full()
+                        .px_3()
+                        .pb_2()
+                        .gap_1()
+                        .children(context_rows)
+                        .child(
+                            div().w_full().p_2().rounded_md().bg(editor_bg).child(
+                                Label::new(entry_prompt)
+                                    .color(Color::Muted)
+                                    .size(LabelSize::XSmall),
+                            ),
+                        ),
+                )
+            });
+
+        Self::render_card_shell(
+            format!("automation-card-{}-{}", entry_id, idx),
+            accent,
+            icon,
+            icon_color,
+            icon_tint_bg,
+            entry_label,
+            entry_description,
+            card_bg,
+            hover_bg,
+            right_side,
+            extra_content,
+        )
+        .group(group_name)
+        .on_click(move |_, window, cx| {
+            click_entity.update(cx, |this, cx| {
+                if this.expanded_automations.contains(click_id.as_str()) {
+                    this.toggle_automation_expanded(&click_id, cx);
+                } else {
+                    this.run_automation(&click_id, &click_label, &click_prompt, window, cx);
+                }
+            }).log_err();
+        })
     }
 
     fn render_context_summary(
@@ -4551,191 +4585,161 @@ Rules for the completion report:
         let active_folder = self.active_folder.clone()
             .unwrap_or_else(|| self.config_root.clone());
 
-        div()
-            .id(SharedString::from(format!("pipeline-card-{}-{}", entry_id, idx)))
-            .w_full()
-            .rounded_lg()
-            .border_1()
-            .border_color(accent.opacity(0.5))
-            .bg(card_bg)
-            .overflow_hidden()
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover_bg))
+        // Right-side: status badge + action buttons
+        let right_side = h_flex()
+            .gap_2()
+            .items_center()
+            .child(
+                Label::new(if is_running {
+                    SharedString::from("running")
+                } else {
+                    SharedString::from(format!("{} steps", entry.steps.len()))
+                })
+                .color(if is_running { Color::Accent } else { Color::Muted })
+                .size(LabelSize::XSmall),
+            )
             .child(
                 h_flex()
-                    .w_full()
-                    .child(div().w(px(3.)).h_full().flex_shrink_0().bg(accent))
+                    .gap_1()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        |_, window, cx| {
+                            window.prevent_default();
+                            cx.stop_propagation();
+                        },
+                    )
                     .child(
-                        v_flex()
-                            .flex_1()
-                            .child(
-                                h_flex()
-                                    .flex_1()
-                                    .p_2()
-                                    .gap_3()
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .size(px(36.))
-                                            .rounded(px(8.))
-                                            .bg(accent_bg)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                Icon::new(icon)
-                                                    .size(IconSize::Medium)
-                                                    .color(Color::Accent),
-                                            ),
-                                    )
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .child(Label::new(entry_label))
-                                            .child(
-                                                Label::new(entry_description)
-                                                    .color(Color::Muted)
-                                                    .size(LabelSize::XSmall),
-                                            ),
-                                    )
-                                    .child(
-                                        Label::new(if is_running {
-                                            SharedString::from("running")
-                                        } else {
-                                            SharedString::from(format!("{} steps", entry.steps.len()))
-                                        })
-                                        .color(if is_running { Color::Accent } else { Color::Muted })
-                                        .size(LabelSize::XSmall),
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .gap_1()
-                                            .on_mouse_down(
-                                                MouseButton::Left,
-                                                |_, window, cx| {
-                                                    window.prevent_default();
-                                                    cx.stop_propagation();
-                                                },
-                                            )
-                                            .child(
-                                                Disclosure::new(
-                                                    SharedString::from(format!("disc-pipeline-{}", disc_id)),
-                                                    is_expanded,
-                                                )
-                                                .on_click(move |_, _, cx| {
-                                                    disc_entity.update(cx, |this, cx| {
-                                                        if this.expanded_automations.contains(&disc_id) {
-                                                            this.expanded_automations.remove(&disc_id);
-                                                        } else {
-                                                            this.expanded_automations.insert(disc_id.clone());
-                                                        }
-                                                        cx.notify();
-                                                    }).log_err();
-                                                }),
-                                            )
-                                            .child(if is_running {
-                                                IconButton::new(
-                                                    format!("stop-pipeline-{}", stop_id),
-                                                    IconName::Stop,
-                                                )
-                                                .tooltip(Tooltip::text("Stop pipeline"))
-                                                .on_click(move |_, _, cx| {
-                                                    stop_entity.update(cx, |this, cx| {
-                                                        if let Some(flag) = this.pipeline_cancel_flags.get(&stop_id) {
-                                                            flag.store(true, Ordering::Relaxed);
-                                                        }
-                                                        cx.notify();
-                                                    }).log_err();
-                                                })
-                                            } else {
-                                                IconButton::new(
-                                                    format!("run-pipeline-{}", run_id),
-                                                    IconName::PlayFilled,
-                                                )
-                                                .disabled(!has_steps)
-                                                .tooltip(Tooltip::text(if !has_steps {
-                                                    "No steps to run"
-                                                } else {
-                                                    "Run pipeline"
-                                                }))
-                                                .on_click(move |_, _, cx| {
-                                                    run_entity.update(cx, |this, cx| {
-                                                        this.run_pipeline(
-                                                            &run_entry,
-                                                            &active_folder,
-                                                            0,
-                                                            RevealStrategy::Always,
-                                                            cx,
-                                                        );
-                                                    }).log_err();
-                                                })
-                                            })
-                                            .child(
-                                                IconButton::new(
-                                                    format!("edit-pipeline-{}", edit_id),
-                                                    if is_editing { IconName::Check } else { IconName::Settings },
-                                                )
-                                                .disabled(is_running)
-                                                .tooltip(Tooltip::text(if is_running {
-                                                    "Cannot edit while running"
-                                                } else if is_editing {
-                                                    "Done editing"
-                                                } else {
-                                                    "Edit pipeline"
-                                                }))
-                                                .on_click(move |_, _, cx| {
-                                                    edit_entity.update(cx, |this, cx| {
-                                                        if this.pipelines_in_edit_mode.contains(&edit_id) {
-                                                            this.pipelines_in_edit_mode.remove(&edit_id);
-                                                            this.pipelines_pending_delete.remove(&edit_id);
-                                                        } else {
-                                                            this.pipelines_in_edit_mode.insert(edit_id.clone());
-                                                            this.expanded_automations.insert(edit_id.clone());
-                                                        }
-                                                        cx.notify();
-                                                    }).log_err();
-                                                }),
-                                            )
-                                            .when(is_editing, |el| {
-                                                el.child(
-                                                    IconButton::new(
-                                                        format!("delete-pipeline-{}", delete_id),
-                                                        IconName::Trash,
-                                                    )
-                                                    .icon_color(if is_pending_delete { Color::Error } else { Color::Default })
-                                                    .tooltip(Tooltip::text(if is_pending_delete {
-                                                        "Click again to confirm delete"
-                                                    } else {
-                                                        "Delete pipeline"
-                                                    }))
-                                                    .on_click(move |_, _, cx| {
-                                                        delete_entity.update(cx, |this, cx| {
-                                                            if this.pipelines_pending_delete.contains(&delete_id) {
-                                                                this.pipelines_pending_delete.remove(&delete_id);
-                                                                this.delete_pipeline_toml(&delete_id, cx);
-                                                            } else {
-                                                                this.pipelines_pending_delete.insert(delete_id.clone());
-                                                                cx.notify();
-                                                            }
-                                                        }).log_err();
-                                                    }),
-                                                )
-                                            }),
-                                    ),
+                        Disclosure::new(
+                            SharedString::from(format!("disc-pipeline-{}", disc_id)),
+                            is_expanded,
+                        )
+                        .on_click(move |_, _, cx| {
+                            disc_entity.update(cx, |this, cx| {
+                                if this.expanded_automations.contains(&disc_id) {
+                                    this.expanded_automations.remove(&disc_id);
+                                } else {
+                                    this.expanded_automations.insert(disc_id.clone());
+                                }
+                                cx.notify();
+                            }).log_err();
+                        }),
+                    )
+                    .child(if is_running {
+                        IconButton::new(
+                            format!("stop-pipeline-{}", stop_id),
+                            IconName::Stop,
+                        )
+                        .tooltip(Tooltip::text("Stop pipeline"))
+                        .on_click(move |_, _, cx| {
+                            stop_entity.update(cx, |this, cx| {
+                                if let Some(flag) = this.pipeline_cancel_flags.get(&stop_id) {
+                                    flag.store(true, Ordering::Relaxed);
+                                }
+                                cx.notify();
+                            }).log_err();
+                        })
+                    } else {
+                        IconButton::new(
+                            format!("run-pipeline-{}", run_id),
+                            IconName::PlayFilled,
+                        )
+                        .disabled(!has_steps)
+                        .tooltip(Tooltip::text(if !has_steps {
+                            "No steps to run"
+                        } else {
+                            "Run pipeline"
+                        }))
+                        .on_click(move |_, _, cx| {
+                            run_entity.update(cx, |this, cx| {
+                                this.run_pipeline(
+                                    &run_entry,
+                                    &active_folder,
+                                    0,
+                                    RevealStrategy::Always,
+                                    cx,
+                                );
+                            }).log_err();
+                        })
+                    })
+                    .child(
+                        IconButton::new(
+                            format!("edit-pipeline-{}", edit_id),
+                            if is_editing { IconName::Check } else { IconName::Settings },
+                        )
+                        .disabled(is_running)
+                        .tooltip(Tooltip::text(if is_running {
+                            "Cannot edit while running"
+                        } else if is_editing {
+                            "Done editing"
+                        } else {
+                            "Edit pipeline"
+                        }))
+                        .on_click(move |_, _, cx| {
+                            edit_entity.update(cx, |this, cx| {
+                                if this.pipelines_in_edit_mode.contains(&edit_id) {
+                                    this.pipelines_in_edit_mode.remove(&edit_id);
+                                    this.pipelines_pending_delete.remove(&edit_id);
+                                } else {
+                                    this.pipelines_in_edit_mode.insert(edit_id.clone());
+                                    this.expanded_automations.insert(edit_id.clone());
+                                }
+                                cx.notify();
+                            }).log_err();
+                        }),
+                    )
+                    .when(is_editing, |el| {
+                        el.child(
+                            IconButton::new(
+                                format!("delete-pipeline-{}", delete_id),
+                                IconName::Trash,
                             )
-                            .when(is_expanded && !step_tree.is_empty(), |el| {
-                                el.child(
-                                    v_flex()
-                                        .px_2()
-                                        .pb_2()
-                                        .gap_px()
-                                        .children(step_tree),
-                                )
+                            .icon_color(if is_pending_delete { Color::Error } else { Color::Default })
+                            .tooltip(Tooltip::text(if is_pending_delete {
+                                "Click again to confirm delete"
+                            } else {
+                                "Delete pipeline"
+                            }))
+                            .on_click(move |_, _, cx| {
+                                delete_entity.update(cx, |this, cx| {
+                                    if this.pipelines_pending_delete.contains(&delete_id) {
+                                        this.pipelines_pending_delete.remove(&delete_id);
+                                        this.delete_pipeline_toml(&delete_id, cx);
+                                    } else {
+                                        this.pipelines_pending_delete.insert(delete_id.clone());
+                                        cx.notify();
+                                    }
+                                }).log_err();
                             }),
-                    ),
-            )
-            .into_any_element()
+                        )
+                    }),
+            );
+
+        // Below-header: step tree when expanded
+        let extra_content = div()
+            .when(is_expanded && !step_tree.is_empty(), |el| {
+                el.child(
+                    v_flex()
+                        .px_2()
+                        .pb_2()
+                        .gap_px()
+                        .children(step_tree),
+                )
+            });
+
+        Self::render_card_shell(
+            format!("pipeline-card-{}-{}", entry_id, idx),
+            accent,
+            icon,
+            Color::Accent,
+            accent_bg,
+            entry_label,
+            entry_description,
+            card_bg,
+            hover_bg,
+            right_side,
+            extra_content,
+        )
+        .into_any_element()
     }
 
     fn render_pipelines_section(
