@@ -2,18 +2,17 @@
 
 An automation platform built as a [Zed](https://github.com/zed-industries/zed) fork. Adds a TOML-driven dashboard for running tools, dispatching AI agents, and chaining multi-step workflows — all configurable without rebuilding.
 
-![PostProd IDE Dashboard](assets/PostProd_ide/images/dashboard-overview.png)
-
 ## What it does
 
 Every `.toml` file in a config directory becomes a dashboard card — a tool that runs a binary, an automation that dispatches a prompt to an AI agent, or a pipeline that chains multiple steps together. Edit a TOML, and the dashboard picks it up within seconds.
 
 - **Tools** — run compiled binaries with parameters, session context, and background/terminal modes
-- **Automations** — route prompts to Claude, Gemini, or the built-in agent panel with interpolated context
-- **Pipelines** — chain automations and tools into multi-step workflows with group-based parallel execution
+- **Automations** — route prompts to Claude, Gemini, or Zed's native agent panel with interpolated context
+- **Pipelines** — chain automations and tools into multi-step workflows with group-based parallel execution (multiple agents can run simultaneously within a pipeline step)
 - **Scheduler** — cron-based triggers with completion tracking and chain firing
 - **Global hotkeys** — system-wide keyboard shortcuts via macOS `CGEventTap`
-- **Per-folder configs** — each workspace folder carries its own tools, automations, and agent backends
+- **Per-folder configs** — each workspace folder carries its own tools, automations, agent backends, and settings profile
+- **Settings profiles** — switching config folders automatically activates a Zed settings profile (theme, fonts, panel layout, UI) per workspace
 - **Parameter system** — user-editable fields (text, select, path) interpolated into prompts and persisted across sessions
 
 ## Architecture
@@ -35,7 +34,7 @@ The app ships clean — no tools, no automations baked in. Domain content comes 
     skills/                      # agent skill files
 ```
 
-The fork adds two crates (`crates/dashboard/` and `crates/postprod_scheduler/`) with minimal glue across upstream files. This keeps rebases against upstream Zed manageable.
+The fork adds two crates (`crates/dashboard/` and `crates/postprod_scheduler/`) with minimal glue across upstream files. Currently 17 overlap files with upstream — this keeps rebases against upstream Zed manageable.
 
 ## PostProd Tools
 
