@@ -3713,16 +3713,13 @@ Rules for the completion report:
         extra_content: Div,
         cx: &App,
     ) -> gpui::Stateful<Div> {
-        let card_bg = cx.theme().colors().elevated_surface_background;
         let hover_bg = cx.theme().colors().ghost_element_hover;
 
         div()
             .id(element_id.into())
             .w_full()
-            .rounded_lg()
-            .border_1()
+            .elevation_2(cx)
             .border_color(accent.opacity(0.5))
-            .bg(card_bg)
             .overflow_hidden()
             .cursor_pointer()
             .hover(move |style| style.bg(hover_bg))
