@@ -3315,9 +3315,15 @@ Rules for the completion report:
                                     .size(IconSize::XSmall)
                                     .color(Color::Muted),
                             )
-                            .child(Label::new(tool_label).size(LabelSize::XSmall))
+                            .child(
+                                Label::new(tool_label)
+                                    .size(LabelSize::XSmall)
+                                    .truncate(),
+                            )
                             .child(div().flex_grow())
-                            .child(action_buttons),
+                            .child(
+                                div().flex_shrink_0().child(action_buttons),
+                            ),
                     )
                     .tooltip(Tooltip::text(tool_description))
                     .on_click(click_handler)
