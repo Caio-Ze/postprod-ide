@@ -1090,7 +1090,7 @@ impl Dashboard {
 
 
 
-    fn run_automation(
+    pub(crate) fn run_automation(
         &self,
         entry_id: &str,
         entry_label: &str,
