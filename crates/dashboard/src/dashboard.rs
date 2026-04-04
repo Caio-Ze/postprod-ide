@@ -3080,7 +3080,7 @@ Rules for the completion report:
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
         let accent_color = cx.theme().colors().text_accent;
-        let icon_tint_bg = cx.theme().status().info_background.opacity(0.15);
+        let icon_tint_bg = cx.theme().colors().element_background;
 
         let tools_owned: Vec<ToolEntry> = tools.to_vec();
         tools_owned
@@ -3779,7 +3779,7 @@ Rules for the completion report:
         let is_expanded = self.expanded_automations.contains(&entry.id);
 
         let (accent, accent_bg) = self.agent_backend.card_accent(cx);
-        let icon_tint_bg = accent_bg.opacity(0.15);
+        let icon_tint_bg = cx.theme().colors().element_background;
         let editor_bg = cx.theme().colors().editor_background;
 
         let is_scheduled = entry.schedule.as_ref().is_some_and(|s| s.enabled);
@@ -4554,8 +4554,12 @@ Rules for the completion report:
         let delete_id = entry_id.clone();
 
         // Expand/collapse
-        let disc_entity = entity;
+        let disc_entity = entity.clone();
         let disc_id = entry_id.clone();
+
+        // Card body click → expand/collapse
+        let click_entity = entity;
+        let click_id = entry_id.clone();
 
         // Step tree (built before the element tree to avoid borrow issues)
         let step_tree = if is_editing {
@@ -4726,6 +4730,11 @@ Rules for the completion report:
             extra_content,
             cx,
         )
+        .on_click(move |_, _window, cx| {
+            click_entity.update(cx, |this, cx| {
+                this.toggle_automation_expanded(&click_id, cx);
+            }).log_err();
+        })
         .into_any_element()
     }
 
