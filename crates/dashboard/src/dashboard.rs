@@ -393,6 +393,7 @@ pub struct Dashboard {
     pipelines_in_edit_mode: HashSet<String>,
     pipeline_cancel_flags: HashMap<String, Arc<AtomicBool>>,
     pipelines_pending_delete: HashSet<String>,
+    automations_pending_delete: HashSet<String>,
     // Pipeline creation
     pending_new_pipeline: Option<Entity<Editor>>,
     _pending_pipeline_subscription: Option<Subscription>,
@@ -891,6 +892,7 @@ impl Dashboard {
                 pipelines_in_edit_mode: HashSet::new(),
                 pipeline_cancel_flags: HashMap::new(),
                 pipelines_pending_delete: HashSet::new(),
+                automations_pending_delete: HashSet::new(),
                 pending_new_pipeline: None,
                 _pending_pipeline_subscription: None,
                 pending_new_automation: None,
@@ -2522,6 +2524,17 @@ Rules for the completion report:
         cx.notify();
     }
 
+    fn delete_automation_toml(&mut self, automation_id: &str, cx: &mut Context<Self>) {
+        if let Some(path) = self.automations.iter()
+            .find(|a| a.id == automation_id)
+            .and_then(|a| a.source_path.clone())
+        {
+            std::fs::remove_file(&path).log_err();
+            self.automations_pending_delete.remove(automation_id);
+            self.reload_automations(cx);
+        }
+    }
+
     fn delete_pipeline_toml(&mut self, pipeline_id: &str, cx: &mut Context<Self>) {
         if let Some(path) = self.automations.iter()
             .find(|a| a.id == pipeline_id)
@@ -3809,6 +3822,13 @@ Rules for the completion report:
         let sched_entity = entity.clone();
         let sched_id = entry_id.clone();
 
+        let gear_entity = entity.clone();
+        let gear_id = entry_id.clone();
+
+        let delete_entity = entity.clone();
+        let delete_id = entry_id.clone();
+        let is_pending_delete = self.automations_pending_delete.contains(&entry.id);
+
         let disc_entity = entity;
         let disc_id = entry_id.clone();
 
@@ -3880,6 +3900,54 @@ Rules for the completion report:
                         ),
                     )
                     .child(
+                        IconButton::new(
+                            format!("gear-automation-{}", gear_id),
+                            IconName::Settings,
+                        )
+                        .icon_size(IconSize::Small)
+                        .icon_color(Color::Muted)
+                        .tooltip(Tooltip::text("Settings"))
+                        .on_click(
+                            move |_, _, cx| {
+                                gear_entity
+                                    .update(cx, |this, cx| {
+                                        // Expand the card and toggle context edit mode
+                                        this.expanded_automations.insert(gear_id.clone());
+                                        this.toggle_context_edit_mode(&gear_id, cx);
+                                    })
+                                    .log_err();
+                            },
+                        ),
+                    )
+                    .child(
+                        IconButton::new(
+                            format!("delete-automation-{}", delete_id),
+                            IconName::Trash,
+                        )
+                        .icon_size(IconSize::Small)
+                        .icon_color(if is_pending_delete { Color::Error } else { Color::Muted })
+                        .tooltip(Tooltip::text(if is_pending_delete {
+                            "Click again to confirm delete"
+                        } else {
+                            "Delete automation"
+                        }))
+                        .on_click(
+                            move |_, _, cx| {
+                                delete_entity
+                                    .update(cx, |this, cx| {
+                                        if this.automations_pending_delete.contains(&delete_id) {
+                                            this.automations_pending_delete.remove(&delete_id);
+                                            this.delete_automation_toml(&delete_id, cx);
+                                        } else {
+                                            this.automations_pending_delete.insert(delete_id.clone());
+                                            cx.notify();
+                                        }
+                                    })
+                                    .log_err();
+                            },
+                        ),
+                    )
+                    .child(
                         Disclosure::new(
                             SharedString::from(format!("disc-auto-{}", disc_id)),
                             is_expanded,
@@ -3901,7 +3969,7 @@ Rules for the completion report:
                         )
                         .icon_size(IconSize::Small)
                         .icon_color(Color::Muted)
-                        .tooltip(Tooltip::text("Edit"))
+                        .tooltip(Tooltip::text("Edit TOML"))
                         .on_click(
                             move |_, window, cx| {
                                 edit_entity
