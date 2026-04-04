@@ -4860,7 +4860,7 @@ Rules for the completion report:
             .w_full()
             .gap_1()
             .child(header)
-            .child(v_flex().w_full().gap_2().children(cards))
+            .child(v_flex().w_full().gap(DynamicSpacing::Base06.rems(cx)).children(cards))
             .when_some(ghost_card, |el, card| el.child(card))
             .child(new_pipeline_button)
     }
@@ -5043,7 +5043,7 @@ Rules for the completion report:
                     v_flex()
                         .id("automations-content-anim")
                         .w_full()
-                        .gap_1()
+                        .gap(DynamicSpacing::Base06.rems(cx))
                         .children(meta_cards)
                         .when(has_both, |el| {
                             el.child(
