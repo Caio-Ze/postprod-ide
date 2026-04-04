@@ -3101,6 +3101,7 @@ Rules for the completion report:
                 });
 
                 // Action buttons last (impl IntoElement captures cx lifetime)
+                let param_pl = DynamicSpacing::Base48.rems(cx);
                 let action_buttons =
                     self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
 
@@ -3110,7 +3111,7 @@ Rules for the completion report:
                             h_flex()
                                 .px_2()
                                 .pb_2()
-                                .pl(px(50.))
+                                .pl(param_pl)
                                 .gap_2()
                                 .flex_wrap()
                                 .children(param_fields),
@@ -3203,6 +3204,7 @@ Rules for the completion report:
                     });
 
                 // Action buttons last (impl IntoElement captures cx lifetime)
+                let param_pl = DynamicSpacing::Base40.rems(cx);
                 let action_buttons =
                     self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
 
@@ -3264,7 +3266,7 @@ Rules for the completion report:
                             h_flex()
                                 .px_2()
                                 .pb_2()
-                                .pl(px(44.))
+                                .pl(param_pl)
                                 .gap_2()
                                 .flex_wrap()
                                 .children(param_fields),
@@ -3456,7 +3458,7 @@ Rules for the completion report:
                         h_flex()
                             .w_full()
                             .flex_wrap()
-                            .gap(px(8.))
+                            .gap(DynamicSpacing::Base08.rems(cx))
                             .children(cards)
                             .into_any_element(),
                     );
@@ -3467,7 +3469,7 @@ Rules for the completion report:
                         h_flex()
                             .w_full()
                             .flex_wrap()
-                            .gap(px(8.))
+                            .gap(DynamicSpacing::Base08.rems(cx))
                             .children(cards)
                             .into_any_element(),
                     );
@@ -3736,8 +3738,8 @@ Rules for the completion report:
                             .child(
                                 h_flex()
                                     .flex_1()
-                                    .p_2()
-                                    .gap_3()
+                                    .p(DynamicSpacing::Base08.rems(cx))
+                                    .gap(DynamicSpacing::Base12.rems(cx))
                                     .items_center()
                                     .child(
                                         div()
@@ -3938,6 +3940,7 @@ Rules for the completion report:
             );
 
         // Below-header: params, schedule controls, expansion content
+        let param_pl = DynamicSpacing::Base48.rems(cx);
         let sched_controls = self.render_schedule_controls(
             &entry_id, &schedule_cron, window, cx,
         );
@@ -3946,7 +3949,7 @@ Rules for the completion report:
                 el.child(
                     h_flex()
                         .w_full()
-                        .pl(px(52.))
+                        .pl(param_pl)
                         .pr_2()
                         .pb_1()
                         .gap_2()
