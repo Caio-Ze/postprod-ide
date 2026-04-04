@@ -3449,7 +3449,7 @@ Rules for the completion report:
                 if !featured.is_empty() {
                     let cards = self.build_featured_cards(&featured, window, cx);
                     section_elements.push(
-                        v_flex().w_full().gap_2().children(cards).into_any_element(),
+                        v_flex().w_full().gap(DynamicSpacing::Base06.rems(cx)).children(cards).into_any_element(),
                     );
                 }
                 if !standard.is_empty() {
