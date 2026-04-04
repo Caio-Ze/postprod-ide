@@ -3079,9 +3079,7 @@ Rules for the completion report:
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        let hover_bg = cx.theme().colors().ghost_element_hover;
         let accent_color = cx.theme().colors().text_accent;
-        let card_bg = cx.theme().colors().elevated_surface_background;
         let icon_tint_bg = cx.theme().status().info_background.opacity(0.15);
 
         let tools_owned: Vec<ToolEntry> = tools.to_vec();
@@ -3113,56 +3111,7 @@ Rules for the completion report:
                 let action_buttons =
                     self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
 
-                div()
-                    .id(SharedString::from(format!("featured-{}", tool.id)))
-                    .group(group_name)
-                    .w_full()
-                    .rounded_lg()
-                    .border_1()
-                    .border_color(accent_color)
-                    .bg(card_bg)
-                    .overflow_hidden()
-                    .cursor_pointer()
-                    .hover(move |style| style.bg(hover_bg))
-                    .drag_over::<ExternalPaths>(|style, _, _, cx| {
-                        style.bg(cx.theme().colors().drop_target_background)
-                    })
-                    .on_drop(featured_drop)
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .child(div().w(px(3.)).h_full().flex_shrink_0().bg(accent_color))
-                            .child(
-                                h_flex()
-                                    .flex_1()
-                                    .p_2()
-                                    .gap_3()
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .size(px(36.))
-                                            .rounded(px(8.))
-                                            .bg(icon_tint_bg)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                Icon::new(tool_icon)
-                                                    .size(IconSize::Medium)
-                                                    .color(Color::Accent),
-                                            ),
-                                    )
-                                    .child(
-                                        v_flex().flex_1().child(Label::new(tool_label)).child(
-                                            Label::new(tool_description)
-                                                .color(Color::Muted)
-                                                .size(LabelSize::XSmall),
-                                        ),
-                                    )
-                                    .child(action_buttons),
-                            ),
-                    )
+                let extra_content = div()
                     .when(has_params, |el| {
                         el.child(
                             h_flex()
@@ -3173,9 +3122,33 @@ Rules for the completion report:
                                 .flex_wrap()
                                 .children(param_fields),
                         )
-                    })
-                    .on_click(click_handler)
-                    .into_any_element()
+                    });
+
+                Self::render_card_shell(
+                    format!("featured-{}", tool.id),
+                    accent_color,
+                    tool_icon,
+                    Color::Accent,
+                    icon_tint_bg,
+                    v_flex()
+                        .flex_1()
+                        .child(Label::new(tool_label))
+                        .child(
+                            Label::new(tool_description)
+                                .color(Color::Muted)
+                                .size(LabelSize::XSmall),
+                        ),
+                    h_flex().child(action_buttons),
+                    extra_content,
+                    cx,
+                )
+                .group(group_name)
+                .drag_over::<ExternalPaths>(|style, _, _, cx| {
+                    style.bg(cx.theme().colors().drop_target_background)
+                })
+                .on_drop(featured_drop)
+                .on_click(click_handler)
+                .into_any_element()
             })
             .collect()
     }
@@ -3722,24 +3695,27 @@ Rules for the completion report:
     /// Shared card layout used by automation, pipeline, and tool cards.
     ///
     /// Builds the outer container (background, border, hover, rounded corners),
-    /// the left accent strip, icon container, title + description column,
-    /// and places `right_side` at the end of the header row.  Any additional
-    /// content (params, schedule, expansion) is appended from `extra_content`.
+    /// the left accent strip, icon container, and places `content` and
+    /// `right_side` in the header row.  Any additional content (params,
+    /// schedule, expansion) is appended from `extra_content`.
     ///
-    /// The caller chains `.on_click()` / `.group()` on the returned `Div`.
+    /// Background and hover colors are looked up from the theme — callers
+    /// don't need to pass them.  Chain `.on_click()` / `.group()` on the
+    /// returned `Div`.
     fn render_card_shell(
         element_id: impl Into<SharedString>,
         accent: gpui::Hsla,
         icon: IconName,
         icon_color: Color,
         icon_tint_bg: gpui::Hsla,
-        title: SharedString,
-        description: SharedString,
-        card_bg: gpui::Hsla,
-        hover_bg: gpui::Hsla,
+        content: impl IntoElement,
         right_side: Div,
         extra_content: Div,
+        cx: &App,
     ) -> gpui::Stateful<Div> {
+        let card_bg = cx.theme().colors().elevated_surface_background;
+        let hover_bg = cx.theme().colors().ghost_element_hover;
+
         div()
             .id(element_id.into())
             .w_full()
@@ -3778,16 +3754,7 @@ Rules for the completion report:
                                                     .color(icon_color),
                                             ),
                                     )
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .child(Label::new(title))
-                                            .child(
-                                                Label::new(description)
-                                                    .color(Color::Muted)
-                                                    .size(LabelSize::XSmall),
-                                            ),
-                                    )
+                                    .child(content)
                                     .child(right_side),
                             )
                             .child(extra_content),
@@ -3815,8 +3782,6 @@ Rules for the completion report:
         let is_expanded = self.expanded_automations.contains(&entry.id);
 
         let (accent, accent_bg) = self.agent_backend.card_accent(cx);
-        let card_bg = cx.theme().colors().elevated_surface_background;
-        let hover_bg = cx.theme().colors().ghost_element_hover;
         let icon_tint_bg = accent_bg.opacity(0.15);
         let editor_bg = cx.theme().colors().editor_background;
 
@@ -3993,12 +3958,17 @@ Rules for the completion report:
             icon,
             icon_color,
             icon_tint_bg,
-            entry_label,
-            entry_description,
-            card_bg,
-            hover_bg,
+            v_flex()
+                .flex_1()
+                .child(Label::new(entry_label))
+                .child(
+                    Label::new(entry_description)
+                        .color(Color::Muted)
+                        .size(LabelSize::XSmall),
+                ),
             right_side,
             extra_content,
+            cx,
         )
         .group(group_name)
         .on_click(move |_, window, cx| {
@@ -4546,8 +4516,6 @@ Rules for the completion report:
         let has_steps = !entry.steps.is_empty();
         let is_expanded = self.expanded_automations.contains(&entry.id);
 
-        let card_bg = cx.theme().colors().elevated_surface_background;
-        let hover_bg = cx.theme().colors().ghost_element_hover;
         let accent = cx.theme().colors().text_accent;
         let accent_bg = accent.opacity(0.15);
 
@@ -4732,12 +4700,17 @@ Rules for the completion report:
             icon,
             Color::Accent,
             accent_bg,
-            entry_label,
-            entry_description,
-            card_bg,
-            hover_bg,
+            v_flex()
+                .flex_1()
+                .child(Label::new(entry_label))
+                .child(
+                    Label::new(entry_description)
+                        .color(Color::Muted)
+                        .size(LabelSize::XSmall),
+                ),
             right_side,
             extra_content,
+            cx,
         )
         .into_any_element()
     }
@@ -4799,68 +4772,40 @@ Rules for the completion report:
         let ghost_card = self.pending_new_pipeline.clone().map(|editor| {
             let accent = cx.theme().colors().text_accent;
             let accent_bg = accent.opacity(0.15);
-            let card_bg = cx.theme().colors().elevated_surface_background;
             let border_color = cx.theme().colors().border;
             let confirm_entity = cx.entity().downgrade();
             let cancel_entity = cx.entity().downgrade();
 
-            div()
-                .id("new-pipeline-ghost")
-                .w_full()
-                .rounded_lg()
-                .border_1()
-                .border_color(accent.opacity(0.5))
-                .bg(card_bg)
-                .overflow_hidden()
-                .child(
-                    h_flex()
-                        .w_full()
-                        .child(div().w(px(3.)).h_full().flex_shrink_0().bg(accent))
-                        .child(
-                            h_flex()
-                                .flex_1()
-                                .p_2()
-                                .gap_3()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .size(px(36.))
-                                        .rounded(px(8.))
-                                        .bg(accent_bg)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(
-                                            Icon::new(IconName::PlayFilled)
-                                                .size(IconSize::Medium)
-                                                .color(Color::Accent),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .border_1()
-                                        .border_color(border_color)
-                                        .rounded_sm()
-                                        .px_1()
-                                        .child(editor),
-                                ),
-                        ),
-                )
-                .on_action(move |_: &menu::Confirm, _, cx| {
-                    confirm_entity.update(cx, |this, cx| {
-                        if let Some(editor) = &this.pending_new_pipeline {
-                            let text = editor.read(cx).text(cx).trim().to_string();
-                            this.finish_new_pipeline(text, cx);
-                        }
-                    }).log_err();
-                })
-                .on_action(move |_: &menu::Cancel, _, cx| {
-                    cancel_entity.update(cx, |this, cx| {
-                        this.cancel_new_pipeline(cx);
-                    }).log_err();
-                })
+            Self::render_card_shell(
+                "new-pipeline-ghost",
+                accent,
+                IconName::PlayFilled,
+                Color::Accent,
+                accent_bg,
+                div()
+                    .flex_1()
+                    .border_1()
+                    .border_color(border_color)
+                    .rounded_sm()
+                    .px_1()
+                    .child(editor),
+                div(),
+                div(),
+                cx,
+            )
+            .on_action(move |_: &menu::Confirm, _, cx| {
+                confirm_entity.update(cx, |this, cx| {
+                    if let Some(editor) = &this.pending_new_pipeline {
+                        let text = editor.read(cx).text(cx).trim().to_string();
+                        this.finish_new_pipeline(text, cx);
+                    }
+                }).log_err();
+            })
+            .on_action(move |_: &menu::Cancel, _, cx| {
+                cancel_entity.update(cx, |this, cx| {
+                    this.cancel_new_pipeline(cx);
+                }).log_err();
+            })
         });
 
         // [+ New Pipeline] button
@@ -5085,70 +5030,42 @@ Rules for the completion report:
         let editor = self.pending_new_automation.clone()?;
         let accent = cx.theme().colors().text_accent;
         let accent_bg = accent.opacity(0.15);
-        let card_bg = cx.theme().colors().elevated_surface_background;
         let border_color = cx.theme().colors().border;
         let confirm_entity = cx.entity().downgrade();
         let cancel_entity = cx.entity().downgrade();
 
         Some(
-            div()
-                .id("new-automation-ghost")
-                .w_full()
-                .rounded_lg()
-                .border_1()
-                .border_color(accent.opacity(0.5))
-                .bg(card_bg)
-                .overflow_hidden()
-                .child(
-                    h_flex()
-                        .w_full()
-                        .child(div().w(px(3.)).h_full().flex_shrink_0().bg(accent))
-                        .child(
-                            h_flex()
-                                .flex_1()
-                                .p_2()
-                                .gap_3()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .flex_shrink_0()
-                                        .size(px(36.))
-                                        .rounded(px(8.))
-                                        .bg(accent_bg)
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .child(
-                                            Icon::new(IconName::Sparkle)
-                                                .size(IconSize::Medium)
-                                                .color(Color::Accent),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex_1()
-                                        .border_1()
-                                        .border_color(border_color)
-                                        .rounded_sm()
-                                        .px_1()
-                                        .child(editor),
-                                ),
-                        ),
-                )
-                .on_action(move |_: &menu::Confirm, _, cx| {
-                    confirm_entity.update(cx, |this, cx| {
-                        if let Some(editor) = &this.pending_new_automation {
-                            let text = editor.read(cx).text(cx).trim().to_string();
-                            this.finish_new_automation(text, cx);
-                        }
-                    }).log_err();
-                })
-                .on_action(move |_: &menu::Cancel, _, cx| {
-                    cancel_entity.update(cx, |this, cx| {
-                        this.cancel_new_automation(cx);
-                    }).log_err();
-                })
-                .into_any_element(),
+            Self::render_card_shell(
+                "new-automation-ghost",
+                accent,
+                IconName::Sparkle,
+                Color::Accent,
+                accent_bg,
+                div()
+                    .flex_1()
+                    .border_1()
+                    .border_color(border_color)
+                    .rounded_sm()
+                    .px_1()
+                    .child(editor),
+                div(),
+                div(),
+                cx,
+            )
+            .on_action(move |_: &menu::Confirm, _, cx| {
+                confirm_entity.update(cx, |this, cx| {
+                    if let Some(editor) = &this.pending_new_automation {
+                        let text = editor.read(cx).text(cx).trim().to_string();
+                        this.finish_new_automation(text, cx);
+                    }
+                }).log_err();
+            })
+            .on_action(move |_: &menu::Cancel, _, cx| {
+                cancel_entity.update(cx, |this, cx| {
+                    this.cancel_new_automation(cx);
+                }).log_err();
+            })
+            .into_any_element(),
         )
     }
 
