@@ -2733,29 +2733,24 @@ Rules for the completion report:
         });
 
         let border_hsla = icon_color.color(cx);
-        let card_bg = cx.theme().colors().elevated_surface_background;
 
         let label_el = h_flex()
-            .gap_2()
+            .gap_1()
             .items_center()
             .child(
                 Icon::new(IconName::Folder)
                     .color(icon_color)
-                    .size(IconSize::Small),
+                    .size(IconSize::XSmall),
             )
             .child(
-                v_flex()
-                    .items_start()
-                    .child(
-                        Label::new(SharedString::from(tag.to_string()))
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
-                    )
-                    .child(
-                        Label::new(display_name)
-                            .color(name_color)
-                            .size(LabelSize::Small),
-                    ),
+                Label::new(SharedString::from(format!("{}:", tag)))
+                    .size(LabelSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(
+                Label::new(display_name)
+                    .color(name_color)
+                    .size(LabelSize::Small),
             );
 
         let trigger = ButtonLike::new(SharedString::from(format!("{}-trigger", id)))
@@ -2767,7 +2762,7 @@ Rules for the completion report:
             )
             .style(ButtonStyle::Transparent)
             .full_width()
-            .height(px(56.).into());
+            .height(px(32.).into());
 
         let drop_external = cx.listener(move |this, paths: &ExternalPaths, _window, cx| {
             if let Some(dir) = paths.paths().iter().find(|p| p.is_dir()) {
@@ -2783,11 +2778,9 @@ Rules for the completion report:
         div()
             .id(SharedString::from(format!("{}-drop", id)))
             .w_full()
-            .rounded_lg()
-            .border_1()
-            .border_l_3()
+            .rounded_md()
+            .border_l_2()
             .border_color(border_hsla)
-            .bg(card_bg)
             .drag_over::<ExternalPaths>(|style, _, _, cx| {
                 style.bg(cx.theme().colors().drop_target_background)
             })
