@@ -3791,8 +3791,11 @@ Rules for the completion report:
 
         let click_entity = entity.clone();
         let click_id = entry_id.clone();
-        let click_label = entry_label.clone();
-        let click_prompt = entry_prompt.clone();
+
+        let run_entity = entity.clone();
+        let run_id = entry_id.clone();
+        let run_label = entry_label.clone();
+        let run_prompt = entry_prompt.clone();
 
         let edit_entity = entity.clone();
         let edit_id = entry_id.clone();
@@ -3833,6 +3836,24 @@ Rules for the completion report:
                             window.prevent_default();
                             cx.stop_propagation();
                         },
+                    )
+                    .child(
+                        IconButton::new(
+                            format!("run-automation-{}", run_id),
+                            IconName::PlayFilled,
+                        )
+                        .icon_size(IconSize::Small)
+                        .icon_color(Color::Muted)
+                        .tooltip(Tooltip::text("Run automation"))
+                        .on_click(
+                            move |_, window, cx| {
+                                run_entity
+                                    .update(cx, |this, cx| {
+                                        this.run_automation(&run_id, &run_label, &run_prompt, window, cx);
+                                    })
+                                    .log_err();
+                            },
+                        ),
                     )
                     .child(
                         IconButton::new(
@@ -3968,13 +3989,9 @@ Rules for the completion report:
             cx,
         )
         .group(group_name)
-        .on_click(move |_, window, cx| {
+        .on_click(move |_, _window, cx| {
             click_entity.update(cx, |this, cx| {
-                if this.expanded_automations.contains(click_id.as_str()) {
-                    this.toggle_automation_expanded(&click_id, cx);
-                } else {
-                    this.run_automation(&click_id, &click_label, &click_prompt, window, cx);
-                }
+                this.toggle_automation_expanded(&click_id, cx);
             }).log_err();
         })
     }
