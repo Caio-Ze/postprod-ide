@@ -3132,11 +3132,13 @@ Rules for the completion report:
                     icon_tint_bg,
                     v_flex()
                         .flex_1()
+                        .overflow_hidden()
                         .child(Label::new(tool_label))
                         .child(
                             Label::new(tool_description)
                                 .color(Color::Muted)
-                                .size(LabelSize::XSmall),
+                                .size(LabelSize::XSmall)
+                                .truncate(),
                         ),
                     h_flex().child(action_buttons),
                     extra_content,
@@ -3752,7 +3754,7 @@ Rules for the completion report:
                                             ),
                                     )
                                     .child(content)
-                                    .child(right_side),
+                                    .child(right_side.flex_shrink_0()),
                             )
                             .child(extra_content),
                     ),
@@ -3978,11 +3980,13 @@ Rules for the completion report:
             icon_tint_bg,
             v_flex()
                 .flex_1()
+                .overflow_hidden()
                 .child(Label::new(entry_label))
                 .child(
                     Label::new(entry_description)
                         .color(Color::Muted)
-                        .size(LabelSize::XSmall),
+                        .size(LabelSize::XSmall)
+                        .truncate(),
                 ),
             right_side,
             extra_content,
@@ -4720,11 +4724,13 @@ Rules for the completion report:
             icon_tint_bg,
             v_flex()
                 .flex_1()
+                .overflow_hidden()
                 .child(Label::new(entry_label))
                 .child(
                     Label::new(entry_description)
                         .color(Color::Muted)
-                        .size(LabelSize::XSmall),
+                        .size(LabelSize::XSmall)
+                        .truncate(),
                 ),
             right_side,
             extra_content,
