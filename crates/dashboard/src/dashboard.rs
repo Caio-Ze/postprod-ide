@@ -500,7 +500,10 @@ impl Dashboard {
         let recent_destinations = read_recent_destinations(&config_root);
         let (automations, automations_error) = load_automations_registry(&config_root);
         let (tools, tools_error) = load_tools_registry(&config_root);
-        let (backends, agent_launchers, _agents_error) = load_agents_config(&config_root);
+        let (backends, agent_launchers, _agents_error, config_profile) = load_agents_config(&config_root);
+        if let Some(profile_name) = config_profile {
+            cx.set_global(settings::ActiveSettingsProfileName(profile_name));
+        }
         let default_contexts = config::load_default_contexts(&config_root);
         let background_tools = read_background_tools(&config_root);
         let collapsed_sections = read_collapsed_sections(&config_root);
@@ -736,7 +739,7 @@ impl Dashboard {
                     let Ok(config_root) = config_root else { break };
                     let loaded_from = config_root.clone();
 
-                    let (backends, agent_launchers, _err) = cx
+                    let (backends, agent_launchers, _err, _profile) = cx
                         .background_executor()
                         .spawn(async move { load_agents_config(&config_root) })
                         .await;
@@ -1039,7 +1042,7 @@ impl Dashboard {
         // Immediate reload of all config
         let (tools, tools_error) = load_tools_registry(&self.config_root);
         let (automations, automations_error) = load_automations_registry(&self.config_root);
-        let (backends, agent_launchers, _) = load_agents_config(&self.config_root);
+        let (backends, agent_launchers, _, config_profile) = load_agents_config(&self.config_root);
 
         self.tools = tools;
         self.tools_error = tools_error;
@@ -1048,6 +1051,11 @@ impl Dashboard {
         self.default_contexts = config::load_default_contexts(&self.config_root);
         self.backends = backends;
         self.agent_launchers = agent_launchers;
+
+        // Apply settings profile if defined in AGENTS.toml
+        if let Some(profile_name) = config_profile {
+            cx.set_global(settings::ActiveSettingsProfileName(profile_name));
+        }
 
         // Reload per-folder state
         self.active_folder = read_active_folder(&self.config_root);

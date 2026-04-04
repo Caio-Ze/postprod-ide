@@ -4478,6 +4478,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "settings",
  "smol",
  "task",
  "tempfile",

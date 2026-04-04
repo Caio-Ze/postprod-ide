@@ -28,6 +28,7 @@ postprod_scheduler.workspace = true
 project.workspace = true
 schemars.workspace = true
 serde.workspace = true
+settings.workspace = true
 serde_json.workspace = true
 smol.workspace = true
 task.workspace = true

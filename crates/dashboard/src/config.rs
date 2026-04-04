@@ -638,11 +638,13 @@ struct AgentsFile {
     backend: Vec<BackendEntry>,
     #[serde(default)]
     agent: Vec<AgentEntry>,
+    #[serde(default)]
+    profile: Option<String>,
 }
 
-fn load_toml_agents(path: &Path) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>) {
+fn load_toml_agents(path: &Path) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>, Option<String>) {
     let Ok(content) = std::fs::read_to_string(path) else {
-        return (Vec::new(), builtin_agent_launchers(), None);
+        return (Vec::new(), builtin_agent_launchers(), None, None);
     };
     match toml::from_str::<AgentsFile>(&content) {
         Ok(file) => {
@@ -651,18 +653,18 @@ fn load_toml_agents(path: &Path) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<
             } else {
                 file.agent
             };
-            (file.backend, agents, None)
+            (file.backend, agents, None, file.profile)
         }
         Err(e) => {
             let filename = path.file_name().unwrap_or_default().to_string_lossy();
             let err = format!("{filename}: {e}");
             log::error!("config: {err}");
-            (Vec::new(), builtin_agent_launchers(), Some(err))
+            (Vec::new(), builtin_agent_launchers(), Some(err), None)
         }
     }
 }
 
-pub(crate) fn load_agents_config(config_root: &Path) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>) {
+pub(crate) fn load_agents_config(config_root: &Path) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>, Option<String>) {
     load_toml_agents(&agents_toml_path_for(config_root))
 }
 
