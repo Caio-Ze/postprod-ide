@@ -213,6 +213,19 @@ pub fn ensure_dashboard(
         .any(|item| item.downcast::<Dashboard>().is_some());
 
     if has_dashboard {
+        // Dashboard exists (restored from persistence). Apply settings profile
+        // for the current config_root — the constructor only runs on first creation.
+        let config_root = workspace
+            .root_paths(cx)
+            .into_iter()
+            .find(|path| folder_has_dashboard_config(path))
+            .map(|arc_path| arc_path.to_path_buf())
+            .unwrap_or_else(suite_root);
+        let (_, _, _, config_profile) = load_agents_config(&config_root);
+        if let Some(profile_name) = config_profile {
+            log::info!("dashboard: ensure_dashboard — applying profile '{}' for {}", profile_name, config_root.display());
+            cx.set_global(settings::ActiveSettingsProfileName(profile_name));
+        }
         return;
     }
 
@@ -501,8 +514,9 @@ impl Dashboard {
         let (automations, automations_error) = load_automations_registry(&config_root);
         let (tools, tools_error) = load_tools_registry(&config_root);
         let (backends, agent_launchers, _agents_error, config_profile) = load_agents_config(&config_root);
-        if let Some(profile_name) = config_profile {
-            cx.set_global(settings::ActiveSettingsProfileName(profile_name));
+        if let Some(ref profile_name) = config_profile {
+            log::info!("dashboard: initial load — applying settings profile '{}'", profile_name);
+            cx.set_global(settings::ActiveSettingsProfileName(profile_name.clone()));
         }
         let default_contexts = config::load_default_contexts(&config_root);
         let background_tools = read_background_tools(&config_root);
@@ -1053,8 +1067,11 @@ impl Dashboard {
         self.agent_launchers = agent_launchers;
 
         // Apply settings profile if defined in AGENTS.toml
-        if let Some(profile_name) = config_profile {
-            cx.set_global(settings::ActiveSettingsProfileName(profile_name));
+        if let Some(ref profile_name) = config_profile {
+            log::info!("dashboard: applying settings profile '{}' from AGENTS.toml", profile_name);
+            cx.set_global(settings::ActiveSettingsProfileName(profile_name.clone()));
+        } else {
+            log::info!("dashboard: no profile field in AGENTS.toml for {}", self.config_root.display());
         }
 
         // Reload per-folder state
