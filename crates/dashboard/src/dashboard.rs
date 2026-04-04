@@ -3255,14 +3255,16 @@ Rules for the completion report:
                             .child(
                                 v_flex()
                                     .flex_1()
+                                    .overflow_hidden()
                                     .child(Label::new(tool_label).size(LabelSize::Small))
                                     .child(
                                         Label::new(tool_description)
                                             .color(Color::Muted)
-                                            .size(LabelSize::Small),
+                                            .size(LabelSize::Small)
+                                            .truncate(),
                                     ),
                             )
-                            .child(action_buttons),
+                            .child(h_flex().flex_shrink_0().child(action_buttons)),
                     )
                     .when(has_params, |el| {
                         el.child(
