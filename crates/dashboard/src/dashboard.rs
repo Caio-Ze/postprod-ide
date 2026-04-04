@@ -2908,7 +2908,7 @@ Rules for the completion report:
             .child(
                 Label::new(title.to_string())
                     .color(Color::Muted)
-                    .size(LabelSize::XSmall),
+                    .size(LabelSize::Small),
             )
             .child(Divider::horizontal().color(DividerColor::BorderVariant))
     }
@@ -2940,7 +2940,7 @@ Rules for the completion report:
             .child(
                 Label::new(title.to_string())
                     .color(Color::Muted)
-                    .size(LabelSize::XSmall),
+                    .size(LabelSize::Small),
             )
     }
 
@@ -3137,7 +3137,7 @@ Rules for the completion report:
                         .child(
                             Label::new(tool_description)
                                 .color(Color::Muted)
-                                .size(LabelSize::XSmall)
+                                .size(LabelSize::Small)
                                 .truncate(),
                         ),
                     h_flex().child(action_buttons),
@@ -3259,7 +3259,7 @@ Rules for the completion report:
                                     .child(
                                         Label::new(tool_description)
                                             .color(Color::Muted)
-                                            .size(LabelSize::XSmall),
+                                            .size(LabelSize::Small),
                                     ),
                             )
                             .child(action_buttons),
@@ -3390,7 +3390,7 @@ Rules for the completion report:
             .child(
                 Label::new("TOOLS")
                     .color(Color::Muted)
-                    .size(LabelSize::XSmall),
+                    .size(LabelSize::Small),
             )
             .child(Divider::horizontal().color(DividerColor::BorderVariant))
             .child(edit_btn);
@@ -3520,7 +3520,7 @@ Rules for the completion report:
             .map(|param| {
                 let label_el = Label::new(format!("{}:", param.label))
                     .color(Color::Muted)
-                    .size(LabelSize::XSmall);
+                    .size(LabelSize::Small);
 
                 match param.param_type {
                     ParamType::Text => {
@@ -3571,7 +3571,7 @@ Rules for the completion report:
                             .child(label_el)
                             .child(
                                 Label::new(display_text)
-                                    .size(LabelSize::XSmall)
+                                    .size(LabelSize::Small)
                                     .color(Color::Muted),
                             )
                             .child(
@@ -3966,7 +3966,7 @@ Rules for the completion report:
                             div().w_full().p_2().rounded_md().bg(editor_bg).child(
                                 Label::new(entry_prompt)
                                     .color(Color::Muted)
-                                    .size(LabelSize::XSmall),
+                                    .size(LabelSize::Small),
                             ),
                         ),
                 )
@@ -3985,7 +3985,7 @@ Rules for the completion report:
                 .child(
                     Label::new(entry_description)
                         .color(Color::Muted)
-                        .size(LabelSize::XSmall)
+                        .size(LabelSize::Small)
                         .truncate(),
                 ),
             right_side,
@@ -4729,7 +4729,7 @@ Rules for the completion report:
                 .child(
                     Label::new(entry_description)
                         .color(Color::Muted)
-                        .size(LabelSize::XSmall)
+                        .size(LabelSize::Small)
                         .truncate(),
                 ),
             right_side,
@@ -4781,7 +4781,7 @@ Rules for the completion report:
             .child(
                 Label::new("PIPELINES")
                     .color(Color::Muted)
-                    .size(LabelSize::XSmall),
+                    .size(LabelSize::Small),
             )
             .child(Divider::horizontal().color(DividerColor::BorderVariant));
 
@@ -4891,7 +4891,7 @@ Rules for the completion report:
             .child(
                 Label::new("AUTOMATIONS")
                     .color(Color::Muted)
-                    .size(LabelSize::XSmall),
+                    .size(LabelSize::Small),
             )
             .child(Divider::horizontal().color(DividerColor::BorderVariant))
             .child({
