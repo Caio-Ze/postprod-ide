@@ -408,7 +408,6 @@ impl Dashboard {
             let dom_menu = ContextMenu::build(window, cx, {
                 let auto_id = automation_id.to_string();
                 let interval = current_interval.to_string();
-                let entity = entity.clone();
                 move |mut menu, _window, _cx| {
                     for day in 1..=31u32 {
                         let entity = entity.clone();
