@@ -4822,13 +4822,34 @@ Rules for the completion report:
             return v_flex().w_full().gap_1().child(header);
         }
 
-        let cards: Vec<gpui::AnyElement> = pipelines
-            .iter()
-            .enumerate()
-            .map(|(idx, entry)| {
-                self.render_pipeline_card(entry, idx, window, cx)
-            })
-            .collect();
+        let grouped = group_by_section(
+            &pipelines,
+            |a| a.section.as_deref(),
+            |a| a.order,
+            |a| &a.label,
+            &self.section_order,
+        );
+
+        let mut cards: Vec<gpui::AnyElement> = Vec::new();
+        let mut card_idx = 0;
+        for (section_name, section_pipelines) in &grouped {
+            let collapse_key = format!("section-pipe-{}", section_name);
+            cards.push(
+                self.sub_section_header(section_name, &collapse_key, cx)
+                    .into_any_element(),
+            );
+
+            if !self.collapsed_sections.contains(&collapse_key) {
+                for entry in section_pipelines {
+                    cards.push(
+                        self.render_pipeline_card(entry, card_idx, window, cx)
+                    );
+                    card_idx += 1;
+                }
+            } else {
+                card_idx += section_pipelines.len();
+            }
+        }
 
         // Ghost card for pending new pipeline
         let ghost_card = self.pending_new_pipeline.clone().map(|editor| {
