@@ -4527,7 +4527,7 @@ Rules for the completion report:
         &mut self,
         entry: &AutomationEntry,
         idx: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let entry_id = entry.id.clone();
@@ -4540,6 +4540,11 @@ Rules for the completion report:
 
         let accent = cx.theme().colors().text_accent;
         let icon_tint_bg = cx.theme().colors().element_background;
+
+        let is_scheduled = entry.schedule.as_ref().is_some_and(|s| s.enabled);
+        let schedule_cron = entry.schedule.as_ref()
+            .map(|s| s.cron.clone())
+            .unwrap_or_default();
 
         let entity = cx.entity().downgrade();
 
@@ -4560,6 +4565,10 @@ Rules for the completion report:
         // Delete
         let delete_entity = entity.clone();
         let delete_id = entry_id.clone();
+
+        // Schedule toggle
+        let sched_entity = entity.clone();
+        let sched_id = entry_id.clone();
 
         // Expand/collapse
         let disc_entity = entity.clone();
@@ -4657,6 +4666,22 @@ Rules for the completion report:
                     })
                     .child(
                         IconButton::new(
+                            format!("sched-toggle-pipeline-{}", sched_id),
+                            IconName::CountdownTimer,
+                        )
+                        .icon_size(IconSize::Small)
+                        .icon_color(if is_scheduled { Color::Accent } else { Color::Muted })
+                        .tooltip(Tooltip::text(if is_scheduled { "Disable schedule" } else { "Enable schedule" }))
+                        .on_click(move |_, _window, cx| {
+                            sched_entity
+                                .update(cx, |this, cx| {
+                                    this.toggle_schedule(&sched_id, cx);
+                                })
+                                .log_err();
+                        }),
+                    )
+                    .child(
+                        IconButton::new(
                             format!("edit-pipeline-{}", edit_id),
                             if is_editing { IconName::Check } else { IconName::Settings },
                         )
@@ -4708,8 +4733,12 @@ Rules for the completion report:
                     }),
             );
 
-        // Below-header: step tree when expanded
+        // Below-header: schedule controls + step tree when expanded
+        let sched_controls = self.render_schedule_controls(
+            &entry_id, &schedule_cron, window, cx,
+        );
         let extra_content = div()
+            .when(is_scheduled, move |el| el.child(sched_controls))
             .when(is_expanded && !step_tree.is_empty(), |el| {
                 el.child(
                     v_flex()
