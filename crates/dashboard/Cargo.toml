@@ -12,6 +12,7 @@ workspace = true
 path = "src/dashboard.rs"
 
 [dependencies]
+agent_settings.workspace = true
 agent_ui.workspace = true
 anyhow.workspace = true
 dirs.workspace = true
