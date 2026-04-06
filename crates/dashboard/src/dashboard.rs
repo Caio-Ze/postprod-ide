@@ -1,4 +1,5 @@
 mod automation_picker;
+pub(crate) mod card;
 mod config;
 mod hotkeys;
 mod paths;
@@ -37,6 +38,7 @@ use gpui::{
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
+use settings::{RegisterSetting, Settings, update_settings_file};
 use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
 use ui::{
     ButtonLike, ButtonStyle, Callout, ContextMenu, Disclosure, Divider, DividerColor,
@@ -78,6 +80,32 @@ actions!(
         ToggleFocus
     ]
 );
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, RegisterSetting)]
+struct DashboardSettings {
+    pub button: bool,
+    pub dock: DockPosition,
+    pub default_width: Pixels,
+    pub starts_open: bool,
+}
+
+impl Settings for DashboardSettings {
+    fn from_settings(content: &settings::SettingsContent) -> Self {
+        let panel = content.dashboard_panel.as_ref();
+        Self {
+            button: panel.and_then(|p| p.button).unwrap_or(true),
+            dock: panel.and_then(|p| p.dock).unwrap_or(DockPosition::Right),
+            default_width: panel
+                .and_then(|p| p.default_width.map(px))
+                .unwrap_or(px(360.)),
+            starts_open: true,
+        }
+    }
+}
 
 /// Run a dashboard tool by its `tool_id`. Users can bind keyboard shortcuts
 /// to specific tools by adding entries like:
@@ -5355,24 +5383,38 @@ impl Panel for Dashboard {
         DASHBOARD_PANEL_KEY
     }
 
-    fn position(&self, _window: &Window, _cx: &App) -> DockPosition {
-        DockPosition::Right
+    fn position(&self, _window: &Window, cx: &App) -> DockPosition {
+        DashboardSettings::get_global(cx).dock
     }
 
     fn position_is_valid(&self, position: DockPosition) -> bool {
         matches!(position, DockPosition::Left | DockPosition::Right | DockPosition::Bottom)
     }
 
-    fn set_position(&mut self, _position: DockPosition, _window: &mut Window, _cx: &mut Context<Self>) {
-        // Position is fixed to Right for now; settings-based position comes in a later step.
+    fn set_position(&mut self, position: DockPosition, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(fs) = self
+            .workspace
+            .upgrade()
+            .map(|w| w.read(cx).app_state().fs.clone())
+        else {
+            return;
+        };
+        update_settings_file(fs, cx, move |settings, _| {
+            settings
+                .dashboard_panel
+                .get_or_insert_default()
+                .dock = Some(position);
+        });
     }
 
-    fn default_size(&self, _window: &Window, _cx: &App) -> Pixels {
-        px(360.)
+    fn default_size(&self, _window: &Window, cx: &App) -> Pixels {
+        DashboardSettings::get_global(cx).default_width
     }
 
-    fn icon(&self, _window: &Window, _cx: &App) -> Option<IconName> {
-        Some(IconName::AudioOn)
+    fn icon(&self, _window: &Window, cx: &App) -> Option<IconName> {
+        DashboardSettings::get_global(cx)
+            .button
+            .then_some(IconName::AudioOn)
     }
 
     fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
@@ -5383,8 +5425,8 @@ impl Panel for Dashboard {
         Box::new(ToggleFocus)
     }
 
-    fn starts_open(&self, _window: &Window, _cx: &App) -> bool {
-        true
+    fn starts_open(&self, _window: &Window, cx: &App) -> bool {
+        DashboardSettings::get_global(cx).starts_open
     }
 
     fn activation_priority(&self) -> u32 {
