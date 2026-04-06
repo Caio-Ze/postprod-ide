@@ -131,6 +131,9 @@ pub struct SettingsContent {
     /// Configuration for the collab panel visual settings.
     pub collaboration_panel: Option<PanelSettingsContent>,
 
+    /// Configuration for the dashboard panel (PostProd).
+    pub dashboard_panel: Option<PanelSettingsContent>,
+
     pub debugger: Option<DebuggerSettingsContent>,
 
     /// Configuration for Diagnostics-related features.
