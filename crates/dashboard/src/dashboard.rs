@@ -2,6 +2,7 @@ mod automation_picker;
 #[allow(unused)]
 pub(crate) mod card;
 mod config;
+mod folder_bar;
 mod hotkeys;
 mod paths;
 pub(crate) mod persistence;
@@ -32,7 +33,7 @@ use agent_ui::AgentPanel;
 use menu;
 use editor::{Editor, EditorEvent};
 use gpui::{
-    Action, AnyWindowHandle, App, AsyncApp, ClipboardItem, Context, Corner, Entity, EventEmitter,
+    Action, AnyWindowHandle, App, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, IntoElement, MouseButton,
     ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription,
     WeakEntity, Window, actions,
@@ -42,9 +43,9 @@ use serde::Deserialize;
 use settings::{RegisterSetting, Settings, update_settings_file};
 use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
 use ui::{
-    ButtonLike, ButtonStyle, Callout, ContextMenu, Disclosure, Divider, DividerColor,
+    ButtonLike, ButtonStyle, ContextMenu, Disclosure, Divider, DividerColor,
     DropdownMenu, DropdownStyle, Headline, HeadlineSize, Icon, IconButton, IconName, IconSize,
-    Indicator, Label, LabelSize, PopoverMenu,
+    Indicator, Label, LabelSize,
     ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip, WithScrollbar as _,
     prelude::*,
 };
@@ -2524,39 +2525,41 @@ Rules for the completion report:
         }
     }
 
-    fn render_session_status(&self, _cx: &App) -> AnyElement {
-        match &self.session_name {
-            Some(name) => {
-                let callout = Callout::new()
-                    .severity(Severity::Success)
-                    .icon(IconName::Check)
-                    .title(format!("Session: {}", name));
-                if let Some(path) = &self.session_path {
-                    callout.description(path.clone()).into_any_element()
-                } else {
-                    callout.into_any_element()
-                }
-            }
-            None => div().into_any_element(),
-        }
+    fn render_session_status(&self, cx: &App) -> AnyElement {
+        folder_bar::render_session_status(&self.session_name, &self.session_path, cx)
     }
 
     fn render_folder_row(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let entity = cx.entity();
-
-        let active_current = self.active_folder.clone();
-        let active_recent = self.recent_folders.clone();
-        let dest_current = self.destination_folder.clone();
-        let dest_recent = self.recent_destinations.clone();
         let config_root = self.config_root.clone();
 
-        let active_dropdown = Self::build_folder_dropdown(
-            "active-folder",
-            "Active Folder",
-            FolderTarget::Active,
-            &active_current,
-            &active_recent,
-            Color::Accent,
+        let active_drop_ext = cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+            if let Some(dir) = paths.paths().iter().find(|p| p.is_dir()) {
+                this.set_folder(FolderTarget::Active, dir.clone(), cx);
+            }
+        });
+        let active_drop_sel = cx.listener(|this, sel: &DraggedSelection, _window, cx| {
+            if let Some(dir) = this.resolve_dragged_directory(sel, cx) {
+                this.set_folder(FolderTarget::Active, dir, cx);
+            }
+        });
+        let dest_drop_ext = cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+            if let Some(dir) = paths.paths().iter().find(|p| p.is_dir()) {
+                this.set_folder(FolderTarget::Destination, dir.clone(), cx);
+            }
+        });
+        let dest_drop_sel = cx.listener(|this, sel: &DraggedSelection, _window, cx| {
+            if let Some(dir) = this.resolve_dragged_directory(sel, cx) {
+                this.set_folder(FolderTarget::Destination, dir, cx);
+            }
+        });
+
+        folder_bar::render_folder_row(
+            &self.active_folder,
+            &self.recent_folders,
+            &self.destination_folder,
+            &self.recent_destinations,
+            // on_active_select
             {
                 let entity = entity.clone();
                 let config_root = config_root.clone();
@@ -2569,6 +2572,7 @@ Rules for the completion report:
                     });
                 }
             },
+            // on_active_browse
             {
                 let entity = entity.clone();
                 move |_window, cx: &mut App| {
@@ -2577,19 +2581,10 @@ Rules for the completion report:
                     });
                 }
             },
-            window,
-            cx,
-        );
-
-        let dest_dropdown = Self::build_folder_dropdown(
-            "destination",
-            "Destination",
-            FolderTarget::Destination,
-            &dest_current,
-            &dest_recent,
-            Color::Success,
+            // on_dest_select
             {
                 let entity = entity.clone();
+                let config_root = config_root.clone();
                 move |path, _window, cx: &mut App| {
                     write_destination_folder(&config_root, &path);
                     entity.update(cx, |this, cx| {
@@ -2599,171 +2594,23 @@ Rules for the completion report:
                     });
                 }
             },
+            // on_dest_browse
             {
+                let entity = entity;
                 move |_window, cx: &mut App| {
                     entity.update(cx, |this, cx| {
                         this.pick_destination_folder(cx);
                     });
                 }
             },
+            // drag-drop handlers (created via cx.listener above)
+            move |paths, window, cx| active_drop_ext(paths, window, cx),
+            move |sel, window, cx| active_drop_sel(sel, window, cx),
+            move |paths, window, cx| dest_drop_ext(paths, window, cx),
+            move |sel, window, cx| dest_drop_sel(sel, window, cx),
             window,
             cx,
-        );
-
-        h_flex()
-            .w_full()
-            .gap_2()
-            .items_center()
-            .child(div().flex_1().child(active_dropdown))
-            .child(
-                Label::new("\u{2192}")
-                    .color(Color::Muted)
-                    .size(LabelSize::Small),
-            )
-            .child(div().flex_1().child(dest_dropdown))
-            .into_any_element()
-    }
-
-    fn build_folder_dropdown(
-        id: &str,
-        tag: &str,
-        target: FolderTarget,
-        current: &Option<PathBuf>,
-        recent: &[PathBuf],
-        icon_color: Color,
-        on_select: impl Fn(PathBuf, &mut Window, &mut App) + 'static + Clone,
-        on_browse: impl Fn(&mut Window, &mut App) + 'static,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let display_name: SharedString = match current {
-            Some(p) => p
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string()
-                .into(),
-            None => "(none)".into(),
-        };
-        let name_color = if current.is_some() {
-            Color::Default
-        } else {
-            Color::Muted
-        };
-
-        let menu = ContextMenu::build(window, cx, {
-            let current = current.clone();
-            let recent = recent.to_vec();
-            move |mut menu, _window, _cx| {
-                menu = menu.header("Recent");
-                if recent.is_empty() {
-                    menu = menu.entry(
-                        "No recent folders",
-                        None,
-                        |_window: &mut Window, _cx: &mut App| {},
-                    );
-                } else {
-                    for folder in &recent {
-                        let is_current = current.as_deref() == Some(folder.as_path());
-                        let components: Vec<_> = folder.components().collect();
-                        let short_path: SharedString = if components.len() <= 5 {
-                            folder.to_string_lossy().to_string()
-                        } else {
-                            let tail: PathBuf = components[components.len() - 5..].iter().collect();
-                            format!("\u{2026}/{}", tail.to_string_lossy())
-                        }
-                        .into();
-                        let path = folder.clone();
-                        let handler = on_select.clone();
-                        menu = menu.toggleable_entry(
-                            short_path,
-                            is_current,
-                            IconPosition::Start,
-                            None,
-                            move |window: &mut Window, cx: &mut App| {
-                                handler(path.clone(), window, cx);
-                            },
-                        );
-                    }
-                }
-                menu = menu.separator();
-                let browse_handler = on_browse;
-                menu = menu.entry(
-                    "Browse\u{2026}",
-                    None,
-                    move |window: &mut Window, cx: &mut App| {
-                        browse_handler(window, cx);
-                    },
-                );
-                menu
-            }
-        });
-
-        let border_hsla = icon_color.color(cx);
-
-        let label_el = h_flex()
-            .gap_1()
-            .items_center()
-            .child(
-                Icon::new(IconName::Folder)
-                    .color(icon_color)
-                    .size(IconSize::XSmall),
-            )
-            .child(
-                Label::new(SharedString::from(format!("{}:", tag)))
-                    .size(LabelSize::Small)
-                    .color(Color::Muted),
-            )
-            .child(
-                Label::new(display_name)
-                    .color(name_color)
-                    .size(LabelSize::Small),
-            );
-
-        let trigger = ButtonLike::new(SharedString::from(format!("{}-trigger", id)))
-            .child(label_el)
-            .child(
-                Icon::new(IconName::ChevronUpDown)
-                    .size(IconSize::XSmall)
-                    .color(Color::Muted),
-            )
-            .style(ButtonStyle::Transparent)
-            .full_width()
-            .height(px(32.).into());
-
-        let drop_external = cx.listener(move |this, paths: &ExternalPaths, _window, cx| {
-            if let Some(dir) = paths.paths().iter().find(|p| p.is_dir()) {
-                this.set_folder(target, dir.clone(), cx);
-            }
-        });
-        let drop_selection = cx.listener(move |this, selection: &DraggedSelection, _window, cx| {
-            if let Some(dir) = this.resolve_dragged_directory(selection, cx) {
-                this.set_folder(target, dir, cx);
-            }
-        });
-
-        div()
-            .id(SharedString::from(format!("{}-drop", id)))
-            .w_full()
-            .rounded_md()
-            .border_l_2()
-            .border_color(border_hsla)
-            .drag_over::<ExternalPaths>(|style, _, _, cx| {
-                style.bg(cx.theme().colors().drop_target_background)
-            })
-            .drag_over::<DraggedSelection>(|style, _, _, cx| {
-                style.bg(cx.theme().colors().drop_target_background)
-            })
-            .on_drop(drop_external)
-            .on_drop(drop_selection)
-            .child(
-                PopoverMenu::new(SharedString::from(format!("{}-popover", id)))
-                    .full_width(true)
-                    .menu(move |_window, _cx| Some(menu.clone()))
-                    .trigger(trigger)
-                    .attach(Corner::BottomLeft),
-            )
-            .into_any_element()
+        )
     }
 
     fn render_delivery_status(&self, cx: &mut Context<Self>) -> impl IntoElement {
