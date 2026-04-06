@@ -34,6 +34,7 @@ pub use hotkeys::init_global_hotkeys;
 use hotkeys::GlobalShortcutModal;
 use card::CardRenderContext;
 
+use agent_settings::AgentProfileId;
 use agent_ui::AgentPanel;
 use menu;
 use editor::{Editor, EditorEvent};
@@ -1094,18 +1095,19 @@ impl Dashboard {
         let entry_id = entry_id.to_string();
         let entry_label = entry_label.to_string();
 
-        // Collect context entries (default + per-automation)
-        let contexts = {
+        // Collect context entries (default + per-automation) and per-automation profile
+        let (contexts, automation_profile) = {
             let entry = self.automations.iter().find(|a| a.id == entry_id);
             let mut all_contexts = if entry.is_some_and(|e| !e.skip_default_context) {
                 self.default_contexts.clone()
             } else {
                 Vec::new()
             };
+            let profile = entry.and_then(|e| e.profile.clone());
             if let Some(e) = entry {
                 all_contexts.extend(e.contexts.clone());
             }
-            all_contexts
+            (all_contexts, profile)
         };
         let config_root = self.config_root.clone();
         let session_path_for_env = self.session_path.clone().unwrap_or_default();
@@ -1172,6 +1174,7 @@ impl Dashboard {
                     let cwd_for_toast = agent_cwd.clone();
                     let id_for_toast = entry_id.clone();
                     let label_for_toast = entry_label.clone();
+                    let profile_for_toast = automation_profile.clone();
 
                     workspace.update_in(cx, |workspace, _window, cx| {
                         workspace.show_toast(
@@ -1188,10 +1191,21 @@ impl Dashboard {
                                     }
                                     if agent_backend == AgentBackend::Native {
                                         let prompt = fallback.clone();
+                                        let profile = profile_for_toast.clone();
                                         ws_for_toast.update(cx, |workspace, cx| {
                                             if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                                                 panel.update(cx, |panel, cx| {
                                                     panel.new_external_thread_with_auto_submit(prompt, window, cx);
+                                                    if let Some(profile_name) = &profile {
+                                                        let profile_id = AgentProfileId(profile_name.as_str().into());
+                                                        if let Some(cv) = panel.active_conversation_view() {
+                                                            if let Some(thread) = cv.read(cx).as_native_thread(cx) {
+                                                                thread.update(cx, |thread, cx| {
+                                                                    thread.set_profile(profile_id, cx);
+                                                                });
+                                                            }
+                                                        }
+                                                    }
                                                 });
                                                 workspace.focus_panel::<AgentPanel>(window, cx);
                                             }
@@ -1223,6 +1237,16 @@ impl Dashboard {
                     if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                         panel.update(cx, |panel, cx| {
                             panel.new_external_thread_with_auto_submit(prompt, window, cx);
+                            if let Some(profile_name) = &automation_profile {
+                                let profile_id = AgentProfileId(profile_name.as_str().into());
+                                if let Some(cv) = panel.active_conversation_view() {
+                                    if let Some(thread) = cv.read(cx).as_native_thread(cx) {
+                                        thread.update(cx, |thread, cx| {
+                                            thread.set_profile(profile_id, cx);
+                                        });
+                                    }
+                                }
+                            }
                         });
                         workspace.focus_panel::<AgentPanel>(window, cx);
                     }

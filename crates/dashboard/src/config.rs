@@ -243,6 +243,10 @@ pub(crate) struct AutomationEntry {
     #[serde(default)]
     pub(crate) chain: Option<ChainConfig>,
 
+    /// Agent profile to activate when running via native agent backend.
+    #[serde(default)]
+    pub(crate) profile: Option<String>,
+
     #[serde(default, rename = "type")]
     pub(crate) entry_type: Option<String>,
 
