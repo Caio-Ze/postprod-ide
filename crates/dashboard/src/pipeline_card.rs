@@ -7,8 +7,8 @@
 
 use gpui::{AnyElement, App, IntoElement, MouseButton, ParentElement, SharedString, Styled, WeakEntity};
 use ui::{
-    ButtonLike, ButtonStyle, Color, Disclosure, IconButton, IconName, IconSize, Icon,
-    Label, LabelSize, Tooltip, prelude::*,
+    ButtonLike, ButtonStyle, Color, Disclosure, DynamicSpacing, IconButton, IconName, IconSize,
+    Icon, Label, LabelSize, Tooltip, prelude::*,
 };
 use util::ResultExt as _;
 use workspace::Workspace;
@@ -34,6 +34,7 @@ pub fn render_pipeline_step_tree(
     steps: &[PipelineStep],
     tools: &[ToolEntry],
     automations: &[AutomationEntry],
+    cx: &App,
 ) -> Vec<AnyElement> {
     let groups = collect_step_groups(steps);
     let mut elements = Vec::new();
@@ -83,7 +84,10 @@ pub fn render_pipeline_step_tree(
 
             let text_color = if is_broken { Color::Error } else { Color::Muted };
 
-            let mut row = h_flex().gap_2().pl_4().child(
+            let mut row = h_flex()
+                .gap(DynamicSpacing::Base08.rems(cx))
+                .pl(DynamicSpacing::Base16.rems(cx))
+                .child(
                 Label::new(label_text)
                     .size(LabelSize::XSmall)
                     .color(text_color),
@@ -118,6 +122,7 @@ pub fn render_pipeline_edit_steps(
     entity: WeakEntity<Dashboard>,
     workspace: WeakEntity<Workspace>,
     config_root: PathBuf,
+    cx: &App,
 ) -> Vec<AnyElement> {
     let mut elements = Vec::new();
     let step_count = entry.steps.len();
@@ -149,8 +154,8 @@ pub fn render_pipeline_edit_steps(
         let pipeline_id3 = entry.id.clone();
 
         let row = h_flex()
-            .gap_1()
-            .pl_4()
+            .gap(DynamicSpacing::Base04.rems(cx))
+            .pl(DynamicSpacing::Base16.rems(cx))
             .items_center()
             .child(
                 Label::new(label_text)
@@ -207,14 +212,14 @@ pub fn render_pipeline_edit_steps(
     let picker_config_root = config_root;
     elements.push(
         h_flex()
-            .pl_4()
-            .pt_1()
+            .pl(DynamicSpacing::Base16.rems(cx))
+            .pt(DynamicSpacing::Base04.rems(cx))
             .child(
                 ButtonLike::new(format!("add-step-{}", add_pipeline_id))
                     .style(ButtonStyle::Subtle)
                     .child(
                         h_flex()
-                            .gap_1()
+                            .gap(DynamicSpacing::Base04.rems(cx))
                             .child(
                                 Icon::new(IconName::Plus)
                                     .size(IconSize::XSmall)
@@ -505,7 +510,13 @@ pub fn render_pipeline_card(
             div()
                 .when(is_scheduled, move |el| el.child(schedule_controls))
                 .when(is_expanded && !step_tree.is_empty(), |el| {
-                    el.child(v_flex().px_2().pb_2().gap_px().children(step_tree))
+                    el.child(
+                        v_flex()
+                            .px(DynamicSpacing::Base08.rems(cx))
+                            .pb(DynamicSpacing::Base08.rems(cx))
+                            .gap(DynamicSpacing::Base01.rems(cx))
+                            .children(step_tree),
+                    )
                 }),
         )
     } else {
