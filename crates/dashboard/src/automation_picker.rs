@@ -129,10 +129,7 @@ pub(crate) fn build_picker_entries(workspace: &Workspace, cx: &App) -> Vec<Picke
     let mut entries: Vec<PickerEntry> = Vec::new();
 
     let dashboard_data = workspace
-        .panes()
-        .iter()
-        .flat_map(|pane| pane.read(cx).items())
-        .find_map(|item| item.downcast::<Dashboard>())
+        .panel::<Dashboard>(cx)
         .map(|d| {
             let d = d.read(cx);
             (d.tools.clone(), d.automations.clone(), d.config_root.clone())
@@ -552,12 +549,7 @@ impl PickerDelegate for AutomationPickerDelegate {
                         let auto_id = auto.id.clone();
                         if let Some(workspace) = self.workspace.upgrade() {
                             workspace.update(cx, |workspace, cx| {
-                                let dashboard = workspace
-                                    .panes()
-                                    .iter()
-                                    .flat_map(|pane| pane.read(cx).items())
-                                    .find_map(|item| item.downcast::<Dashboard>());
-                                if let Some(dashboard) = dashboard {
+                                if let Some(dashboard) = workspace.panel::<Dashboard>(cx) {
                                     dashboard.update(cx, |d, cx| {
                                         if let Some(entry) =
                                             d.automations.iter().find(|a| a.id == auto_id)
