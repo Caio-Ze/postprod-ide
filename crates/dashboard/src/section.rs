@@ -6,8 +6,8 @@
 
 use std::collections::HashSet;
 
-use gpui::{IntoElement, ParentElement, SharedString, Styled, WeakEntity};
-use ui::{Color, Disclosure, Divider, DividerColor, Label, LabelSize, prelude::*};
+use gpui::{App, IntoElement, ParentElement, SharedString, Styled, WeakEntity};
+use ui::{Color, Disclosure, Divider, DividerColor, DynamicSpacing, Label, LabelSize, prelude::*};
 
 use util::ResultExt as _;
 
@@ -23,14 +23,15 @@ pub fn section_header(
     section_id: &str,
     collapsed_sections: &HashSet<String>,
     entity: WeakEntity<Dashboard>,
+    cx: &App,
 ) -> impl IntoElement {
     let is_open = !collapsed_sections.contains(section_id);
     let id_for_toggle = section_id.to_string();
 
     h_flex()
-        .px_1()
-        .mb_2()
-        .gap_2()
+        .px(DynamicSpacing::Base04.rems(cx))
+        .mb(DynamicSpacing::Base08.rems(cx))
+        .gap(DynamicSpacing::Base08.rems(cx))
         .items_center()
         .child(
             Disclosure::new(SharedString::from(format!("disc-{}", section_id)), is_open)
@@ -58,15 +59,16 @@ pub fn sub_section_header(
     section_id: &str,
     collapsed_sections: &HashSet<String>,
     entity: WeakEntity<Dashboard>,
+    cx: &App,
 ) -> impl IntoElement {
     let is_open = !collapsed_sections.contains(section_id);
     let id_for_toggle = section_id.to_string();
 
     h_flex()
-        .pl_2()
-        .mt_1()
-        .mb_1()
-        .gap_1p5()
+        .pl(DynamicSpacing::Base08.rems(cx))
+        .mt(DynamicSpacing::Base04.rems(cx))
+        .mb(DynamicSpacing::Base04.rems(cx))
+        .gap(DynamicSpacing::Base06.rems(cx))
         .items_center()
         .child(
             Disclosure::new(SharedString::from(format!("disc-{}", section_id)), is_open)

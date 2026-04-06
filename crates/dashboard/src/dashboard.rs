@@ -2847,7 +2847,7 @@ Rules for the completion report:
         section_id: &str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        section::section_header(title, section_id, &self.collapsed_sections, cx.entity().downgrade())
+        section::section_header(title, section_id, &self.collapsed_sections, cx.entity().downgrade(), cx)
     }
 
     fn sub_section_header(
@@ -2856,7 +2856,7 @@ Rules for the completion report:
         section_id: &str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        section::sub_section_header(title, section_id, &self.collapsed_sections, cx.entity().downgrade())
+        section::sub_section_header(title, section_id, &self.collapsed_sections, cx.entity().downgrade(), cx)
     }
 
     /// Build a click handler closure for running a tool (background or terminal).
