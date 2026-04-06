@@ -31,7 +31,9 @@ pub(crate) fn render_session_status(
     match session_name {
         Some(name) => {
             let mut label_content = v_flex()
+                .flex_1()
                 .overflow_hidden()
+                .min_w(px(60.))
                 .child(Label::new(format!("Session: {}", name)).truncate());
             if let Some(path) = session_path {
                 label_content = label_content.child(
@@ -197,11 +199,14 @@ fn build_folder_dropdown(
     let border_hsla = icon_color.color(cx);
 
     let label_content = v_flex()
+        .flex_1()
         .overflow_hidden()
+        .min_w(px(60.))
         .child(
             Label::new(SharedString::from(format!("{}:", tag)))
                 .size(LabelSize::Small)
-                .color(Color::Muted),
+                .color(Color::Muted)
+                .truncate(),
         )
         .child(Label::new(display_name).color(name_color).size(LabelSize::Small).truncate());
 
