@@ -5,6 +5,7 @@ mod config;
 mod folder_bar;
 mod hotkeys;
 mod paths;
+mod pipeline_card;
 pub(crate) mod persistence;
 mod scheduler_ui;
 mod section;
@@ -12,7 +13,7 @@ mod tool_card;
 
 use config::{
     AgentEntry, AutomationEntry, BackendEntry, FolderTarget, ParamEntry, ParamType, PipelineStep,
-    ScheduleConfig, ToolEntry, ToolSource, ToolTier, icon_for_automation,
+    ScheduleConfig, ToolEntry, ToolSource, ToolTier,
     load_agents_config, load_automations_registry, load_tools_registry,
 };
 use paths::{
@@ -35,7 +36,7 @@ use menu;
 use editor::{Editor, EditorEvent};
 use gpui::{
     Action, AnyWindowHandle, App, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
-    ExternalPaths, FocusHandle, Focusable, IntoElement, MouseButton,
+    ExternalPaths, FocusHandle, Focusable, IntoElement,
     ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription,
     WeakEntity, Window, actions,
 };
@@ -3725,238 +3726,6 @@ Rules for the completion report:
         elements
     }
 
-    fn render_pipeline_step_tree(
-        &self,
-        steps: &[PipelineStep],
-        _cx: &mut Context<Self>,
-    ) -> Vec<gpui::AnyElement> {
-        let groups = collect_step_groups(steps);
-        let mut elements = Vec::new();
-        let mut display_num: u32 = 0;
-
-        for group in &groups {
-            display_num += 1;
-            let is_parallel = group.len() > 1;
-
-            for (sub_idx, step) in group.iter().enumerate() {
-                let target_id = step.target_id().unwrap_or("unknown");
-
-                // Resolve display name from automations/tools registry
-                let (display_name, is_tool_step) = if step.is_tool() {
-                    let name = self.tools.iter()
-                        .find(|t| t.id == target_id)
-                        .map(|t| t.label.clone())
-                        .unwrap_or_else(|| format!("missing: {target_id}"));
-                    (name, true)
-                } else {
-                    let name = self.automations.iter()
-                        .find(|a| a.id == target_id)
-                        .map(|a| a.label.clone())
-                        .unwrap_or_else(|| format!("missing: {target_id}"));
-                    (name, false)
-                };
-
-                let is_broken = if step.is_tool() {
-                    !self.tools.iter().any(|t| t.id == target_id)
-                } else {
-                    !self.automations.iter().any(|a| a.id == target_id)
-                };
-
-                let label_text = if is_parallel {
-                    let suffix = (b'a' + sub_idx as u8) as char;
-                    format!("{display_num}{suffix}. {display_name}")
-                } else {
-                    format!("{display_num}. {display_name}")
-                };
-
-                let label_text = if is_tool_step {
-                    format!("{label_text} (tool)")
-                } else {
-                    label_text
-                };
-
-                let text_color = if is_broken { Color::Error } else { Color::Muted };
-
-                let mut row = h_flex()
-                    .gap_2()
-                    .pl_4()
-                    .child(
-                        Label::new(label_text)
-                            .size(LabelSize::XSmall)
-                            .color(text_color),
-                    );
-
-                if is_parallel && sub_idx == 0 {
-                    row = row.child(
-                        Label::new("┐")
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
-                    );
-                } else if is_parallel && sub_idx == group.len() - 1 {
-                    row = row.child(
-                        Label::new("┘")
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
-                    );
-                } else if is_parallel {
-                    row = row.child(
-                        Label::new("│")
-                            .size(LabelSize::XSmall)
-                            .color(Color::Muted),
-                    );
-                }
-
-                elements.push(row.into_any_element());
-            }
-        }
-        elements
-    }
-
-    fn render_pipeline_edit_steps(
-        &self,
-        entry: &AutomationEntry,
-        cx: &mut Context<Self>,
-    ) -> Vec<gpui::AnyElement> {
-        let mut elements = Vec::new();
-        let entity = cx.entity().downgrade();
-        let step_count = entry.steps.len();
-
-        for (i, step) in entry.steps.iter().enumerate() {
-            let target_id = step.target_id().unwrap_or("unknown");
-            let display_name = if step.is_tool() {
-                self.tools.iter()
-                    .find(|t| t.id == target_id)
-                    .map(|t| t.label.clone())
-                    .unwrap_or_else(|| format!("missing: {target_id}"))
-            } else {
-                self.automations.iter()
-                    .find(|a| a.id == target_id)
-                    .map(|a| a.label.clone())
-                    .unwrap_or_else(|| format!("missing: {target_id}"))
-            };
-
-            let suffix = if step.is_tool() { " (tool)" } else { "" };
-            let label_text = format!("{}. {display_name}{suffix}", i + 1);
-
-            let up_entity = entity.clone();
-            let down_entity = entity.clone();
-            let remove_entity = entity.clone();
-            let pipeline_id = entry.id.clone();
-            let pipeline_id2 = entry.id.clone();
-            let pipeline_id3 = entry.id.clone();
-
-            let row = h_flex()
-                .gap_1()
-                .pl_4()
-                .items_center()
-                .child(
-                    Label::new(label_text)
-                        .size(LabelSize::XSmall)
-                        .color(Color::Muted),
-                )
-                .child(div().flex_1())
-                .child(
-                    IconButton::new(format!("step-up-{}-{}", entry.id, i), IconName::ArrowUp)
-                        .size(ui::ButtonSize::Compact)
-                        .disabled(i == 0)
-                        .on_click(move |_, _, cx| {
-                            up_entity.update(cx, |this, cx| {
-                                this.reorder_pipeline_step(&pipeline_id, i, -1, cx);
-                            }).log_err();
-                        }),
-                )
-                .child(
-                    IconButton::new(format!("step-down-{}-{}", entry.id, i), IconName::ArrowDown)
-                        .size(ui::ButtonSize::Compact)
-                        .disabled(i >= step_count - 1)
-                        .on_click(move |_, _, cx| {
-                            down_entity.update(cx, |this, cx| {
-                                this.reorder_pipeline_step(&pipeline_id2, i, 1, cx);
-                            }).log_err();
-                        }),
-                )
-                .child(
-                    IconButton::new(format!("step-remove-{}-{}", entry.id, i), IconName::Close)
-                        .size(ui::ButtonSize::Compact)
-                        .on_click(move |_, _, cx| {
-                            remove_entity.update(cx, |this, cx| {
-                                this.remove_pipeline_step(&pipeline_id3, i, cx);
-                            }).log_err();
-                        }),
-                );
-
-            elements.push(row.into_any_element());
-        }
-
-        // [+ Add Step] button — capture everything outside the closure to avoid
-        // re-entering Dashboard while it's being updated (build_picker_entries
-        // calls dashboard.read() which would deadlock).
-        let source_path = entry.source_path.clone();
-        let add_pipeline_id = entry.id.clone();
-        let workspace_handle = self.workspace.clone();
-        let picker_tools = self.tools.clone();
-        let picker_automations = self.automations.clone();
-        let picker_config_root = self.config_root.clone();
-        elements.push(
-            h_flex()
-                .pl_4()
-                .pt_1()
-                .child(
-                    ButtonLike::new(format!("add-step-{}", add_pipeline_id))
-                        .style(ButtonStyle::Subtle)
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .child(Icon::new(IconName::Plus).size(IconSize::XSmall).color(Color::Muted))
-                                .child(Label::new("Add Step").size(LabelSize::XSmall).color(Color::Muted)),
-                        )
-                        .on_click(move |_, window, cx| {
-                            let Some(source_path) = source_path.clone() else { return };
-                            let Some(workspace) = workspace_handle.upgrade() else { return };
-
-                            // Build picker entries from pre-captured data (not from dashboard.read())
-                            let mut entries: Vec<crate::automation_picker::PickerEntry> = Vec::new();
-                            for tool in &picker_tools {
-                                if tool.hidden { continue; }
-                                entries.push(crate::automation_picker::PickerEntry::new_tool(
-                                    tool.clone(),
-                                    Some(picker_config_root.clone()),
-                                ));
-                            }
-                            for auto in &picker_automations {
-                                if auto.hidden { continue; }
-                                entries.push(crate::automation_picker::PickerEntry::new_automation(
-                                    auto.clone(),
-                                    Some(picker_config_root.clone()),
-                                ));
-                            }
-
-                            let mode = crate::automation_picker::PickerMode::AddPipelineStep {
-                                pipeline_source_path: source_path,
-                                group: None,
-                            };
-                            let ws = workspace_handle.clone();
-                            let pipeline_id = add_pipeline_id.clone();
-                            workspace.update(cx, |workspace, cx| {
-                                workspace.toggle_modal(window, cx, |window, cx| {
-                                    crate::automation_picker::AutomationModal::new_with_mode(
-                                        entries,
-                                        mode,
-                                        Some(pipeline_id),
-                                        ws,
-                                        window,
-                                        cx,
-                                    )
-                                });
-                            });
-                        }),
-                )
-                .into_any_element(),
-        );
-
-        elements
-    }
-
     fn render_pipeline_card(
         &mut self,
         entry: &AutomationEntry,
@@ -3964,251 +3733,55 @@ Rules for the completion report:
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let entry_id = entry.id.clone();
-        let entry_label: SharedString = entry.label.clone().into();
-        let entry_description: SharedString = entry.description.clone().into();
-        let icon = icon_for_automation(&entry.icon);
         let is_running = self.active_pipelines.contains(&entry.id);
-        let has_steps = !entry.steps.is_empty();
         let is_expanded = self.expanded_automations.contains(&entry.id);
-
-        let accent = cx.theme().colors().text_accent;
-        let icon_tint_bg = cx.theme().colors().element_background;
-
+        let is_editing = self.pipelines_in_edit_mode.contains(&entry.id);
+        let is_pending_delete = self.pipelines_pending_delete.contains(&entry.id);
         let is_scheduled = entry.schedule.as_ref().is_some_and(|s| s.enabled);
         let schedule_cron = entry.schedule.as_ref()
             .map(|s| s.cron.clone())
             .unwrap_or_default();
-
+        let accent = cx.theme().colors().text_accent;
         let entity = cx.entity().downgrade();
-
-        let is_editing = self.pipelines_in_edit_mode.contains(&entry.id);
-        let is_pending_delete = self.pipelines_pending_delete.contains(&entry.id);
-
-        // Run/Stop button
-        let run_entity = entity.clone();
-        let stop_entity = entity.clone();
-        let run_id = entry_id.clone();
-        let stop_id = entry_id.clone();
-        let run_entry = entry.clone();
-
-        // Edit toggle
-        let edit_entity = entity.clone();
-        let edit_id = entry_id.clone();
-
-        // Delete
-        let delete_entity = entity.clone();
-        let delete_id = entry_id.clone();
-
-        // Schedule toggle
-        let sched_entity = entity.clone();
-        let sched_id = entry_id.clone();
-
-        // Expand/collapse
-        let disc_entity = entity.clone();
-        let disc_id = entry_id.clone();
-
-        // Card body click → expand/collapse
-        let click_entity = entity;
-        let click_id = entry_id.clone();
-
-        // Step tree (built before the element tree to avoid borrow issues)
-        let step_tree = if is_editing {
-            self.render_pipeline_edit_steps(entry, cx)
-        } else {
-            self.render_pipeline_step_tree(&entry.steps, cx)
-        };
-
         let active_folder = self.active_folder.clone()
             .unwrap_or_else(|| self.config_root.clone());
 
-        // Right-side: status badge + action buttons
-        let right_side = h_flex()
-            .gap_2()
-            .items_center()
-            .child(
-                Label::new(if is_running {
-                    SharedString::from("running")
-                } else {
-                    SharedString::from(format!("{} steps", entry.steps.len()))
-                })
-                .color(if is_running { Color::Accent } else { Color::Muted })
-                .size(LabelSize::XSmall),
+        let step_tree = if is_editing {
+            pipeline_card::render_pipeline_edit_steps(
+                entry,
+                &self.tools,
+                &self.automations,
+                entity.clone(),
+                self.workspace.clone(),
+                self.config_root.clone(),
             )
-            .child(
-                h_flex()
-                    .gap_1()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        |_, window, cx| {
-                            window.prevent_default();
-                            cx.stop_propagation();
-                        },
-                    )
-                    .child(
-                        Disclosure::new(
-                            SharedString::from(format!("disc-pipeline-{}", disc_id)),
-                            is_expanded,
-                        )
-                        .on_click(move |_, _, cx| {
-                            disc_entity.update(cx, |this, cx| {
-                                if this.expanded_automations.contains(&disc_id) {
-                                    this.expanded_automations.remove(&disc_id);
-                                } else {
-                                    this.expanded_automations.insert(disc_id.clone());
-                                }
-                                cx.notify();
-                            }).log_err();
-                        }),
-                    )
-                    .child(if is_running {
-                        IconButton::new(
-                            format!("stop-pipeline-{}", stop_id),
-                            IconName::Stop,
-                        )
-                        .tooltip(Tooltip::text("Stop pipeline"))
-                        .on_click(move |_, _, cx| {
-                            stop_entity.update(cx, |this, cx| {
-                                if let Some(flag) = this.pipeline_cancel_flags.get(&stop_id) {
-                                    flag.store(true, Ordering::Relaxed);
-                                }
-                                cx.notify();
-                            }).log_err();
-                        })
-                    } else {
-                        IconButton::new(
-                            format!("run-pipeline-{}", run_id),
-                            IconName::PlayFilled,
-                        )
-                        .disabled(!has_steps)
-                        .tooltip(Tooltip::text(if !has_steps {
-                            "No steps to run"
-                        } else {
-                            "Run pipeline"
-                        }))
-                        .on_click(move |_, _, cx| {
-                            run_entity.update(cx, |this, cx| {
-                                this.run_pipeline(
-                                    &run_entry,
-                                    &active_folder,
-                                    0,
-                                    RevealStrategy::Always,
-                                    cx,
-                                );
-                            }).log_err();
-                        })
-                    })
-                    .child(
-                        IconButton::new(
-                            format!("sched-toggle-pipeline-{}", sched_id),
-                            IconName::CountdownTimer,
-                        )
-                        .icon_size(IconSize::Small)
-                        .icon_color(if is_scheduled { Color::Accent } else { Color::Muted })
-                        .tooltip(Tooltip::text(if is_scheduled { "Disable schedule" } else { "Enable schedule" }))
-                        .on_click(move |_, _window, cx| {
-                            sched_entity
-                                .update(cx, |this, cx| {
-                                    this.toggle_schedule(&sched_id, cx);
-                                })
-                                .log_err();
-                        }),
-                    )
-                    .child(
-                        IconButton::new(
-                            format!("edit-pipeline-{}", edit_id),
-                            if is_editing { IconName::Check } else { IconName::Settings },
-                        )
-                        .disabled(is_running)
-                        .tooltip(Tooltip::text(if is_running {
-                            "Cannot edit while running"
-                        } else if is_editing {
-                            "Done editing"
-                        } else {
-                            "Edit pipeline"
-                        }))
-                        .on_click(move |_, _, cx| {
-                            edit_entity.update(cx, |this, cx| {
-                                if this.pipelines_in_edit_mode.contains(&edit_id) {
-                                    this.pipelines_in_edit_mode.remove(&edit_id);
-                                    this.pipelines_pending_delete.remove(&edit_id);
-                                } else {
-                                    this.pipelines_in_edit_mode.insert(edit_id.clone());
-                                    this.expanded_automations.insert(edit_id.clone());
-                                }
-                                cx.notify();
-                            }).log_err();
-                        }),
-                    )
-                    .when(is_editing, |el| {
-                        el.child(
-                            IconButton::new(
-                                format!("delete-pipeline-{}", delete_id),
-                                IconName::Trash,
-                            )
-                            .icon_color(if is_pending_delete { Color::Error } else { Color::Default })
-                            .tooltip(Tooltip::text(if is_pending_delete {
-                                "Click again to confirm delete"
-                            } else {
-                                "Delete pipeline"
-                            }))
-                            .on_click(move |_, _, cx| {
-                                delete_entity.update(cx, |this, cx| {
-                                    if this.pipelines_pending_delete.contains(&delete_id) {
-                                        this.pipelines_pending_delete.remove(&delete_id);
-                                        this.delete_pipeline_toml(&delete_id, cx);
-                                    } else {
-                                        this.pipelines_pending_delete.insert(delete_id.clone());
-                                        cx.notify();
-                                    }
-                                }).log_err();
-                            }),
-                        )
-                    }),
-            );
+        } else {
+            pipeline_card::render_pipeline_step_tree(
+                &entry.steps,
+                &self.tools,
+                &self.automations,
+            )
+        };
 
-        // Below-header: schedule controls + step tree when expanded
         let sched_controls = self.render_schedule_controls(
-            &entry_id, &schedule_cron, window, cx,
+            &entry.id, &schedule_cron, window, cx,
         );
-        let extra_content = div()
-            .when(is_scheduled, move |el| el.child(sched_controls))
-            .when(is_expanded && !step_tree.is_empty(), |el| {
-                el.child(
-                    v_flex()
-                        .px_2()
-                        .pb_2()
-                        .gap_px()
-                        .children(step_tree),
-                )
-            });
 
-        Self::render_card_shell(
-            format!("pipeline-card-{}-{}", entry_id, idx),
+        pipeline_card::render_pipeline_card(
+            entry,
+            idx,
+            is_running,
+            is_expanded,
+            is_editing,
+            is_pending_delete,
+            is_scheduled,
             accent,
-            icon,
-            Color::Accent,
-            icon_tint_bg,
-            v_flex()
-                .flex_1()
-                .overflow_hidden()
-                .child(Label::new(entry_label))
-                .child(
-                    Label::new(entry_description)
-                        .color(Color::Muted)
-                        .size(LabelSize::Small)
-                        .truncate(),
-                ),
-            right_side,
-            extra_content,
+            entity,
+            step_tree,
+            sched_controls.into_any_element(),
+            active_folder,
             cx,
         )
-        .on_click(move |_, _window, cx| {
-            click_entity.update(cx, |this, cx| {
-                this.toggle_automation_expanded(&click_id, cx);
-            }).log_err();
-        })
-        .into_any_element()
     }
 
     fn render_pipelines_section(
