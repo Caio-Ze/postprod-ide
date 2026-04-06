@@ -5,7 +5,7 @@
 //! manual layout for pipeline entries. Also contains step tree rendering
 //! (view and edit modes).
 
-use gpui::{AnyElement, App, Hsla, IntoElement, MouseButton, ParentElement, SharedString, Styled, WeakEntity};
+use gpui::{AnyElement, App, IntoElement, MouseButton, ParentElement, SharedString, Styled, WeakEntity};
 use ui::{
     ButtonLike, ButtonStyle, Color, Disclosure, IconButton, IconName, IconSize, Icon,
     Label, LabelSize, Tooltip, prelude::*,
@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use crate::Dashboard;
-use crate::card::{CardIcon, DashboardCard};
+use crate::card::{CardIcon, CardRenderContext, DashboardCard};
 use crate::collect_step_groups;
 use crate::config::{AutomationEntry, PipelineStep, ToolEntry, icon_for_automation};
 
@@ -291,20 +291,22 @@ pub fn render_pipeline_edit_steps(
 /// here. Pre-built elements (step_tree, schedule_controls) are passed in
 /// because schedule controls require `&mut Dashboard` context to render.
 pub fn render_pipeline_card(
-    entry: &AutomationEntry,
-    idx: usize,
+    ctx: &CardRenderContext<'_>,
     is_running: bool,
-    is_expanded: bool,
     is_editing: bool,
-    is_pending_delete: bool,
-    is_scheduled: bool,
-    accent: Hsla,
-    entity: WeakEntity<Dashboard>,
     step_tree: Vec<AnyElement>,
     schedule_controls: AnyElement,
     active_folder: PathBuf,
     cx: &App,
 ) -> AnyElement {
+    let entry = ctx.entry;
+    let idx = ctx.idx;
+    let accent = ctx.accent;
+    let is_expanded = ctx.is_expanded;
+    let is_scheduled = ctx.is_scheduled;
+    let is_pending_delete = ctx.is_pending_delete;
+    let entity = ctx.entity.clone();
+
     let icon = icon_for_automation(&entry.icon);
     let entry_id = entry.id.clone();
     let entry_label: SharedString = entry.label.clone().into();
