@@ -198,17 +198,23 @@ fn build_folder_dropdown(
 
     let border_hsla = icon_color.color(cx);
 
-    let label_content = v_flex()
+    let label_content = h_flex()
         .flex_1()
         .overflow_hidden()
         .min_w(px(60.))
+        .items_center()
+        .gap(DynamicSpacing::Base04.rems(cx))
         .child(
             Label::new(SharedString::from(format!("{}:", tag)))
-                .size(LabelSize::Small)
-                .color(Color::Muted)
-                .truncate(),
+                .size(LabelSize::XSmall)
+                .color(Color::Muted),
         )
-        .child(Label::new(display_name).color(name_color).size(LabelSize::Small).truncate());
+        .child(
+            div()
+                .flex_1()
+                .overflow_hidden()
+                .child(Label::new(display_name).color(name_color).size(LabelSize::Small).truncate()),
+        );
 
     let folder_row = ListItem::new(SharedString::from(format!("{}-row", id)))
         .spacing(ListItemSpacing::Dense)
