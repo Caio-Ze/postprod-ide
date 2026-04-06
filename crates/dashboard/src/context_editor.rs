@@ -9,8 +9,8 @@ use std::path::PathBuf;
 
 use gpui::{AnyElement, App, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, WeakEntity};
 use ui::{
-    ButtonLike, ButtonStyle, Color, Icon, IconButton, IconName, IconSize, Label, LabelSize,
-    prelude::*,
+    ButtonLike, ButtonStyle, Color, DynamicSpacing, Icon, IconButton, IconName, IconSize, Label,
+    LabelSize, prelude::*,
 };
 use util::ResultExt as _;
 use workspace::Workspace;
@@ -41,16 +41,16 @@ pub(crate) fn render_context_summary(
     let gear_id = automation_id.to_string();
 
     let mut row = h_flex()
-        .gap_1()
-        .pl_4()
+        .gap(DynamicSpacing::Base04.rems(cx))
+        .pl(DynamicSpacing::Base16.rems(cx))
         .items_center()
         .flex_wrap();
 
     if !skip_default && !default_contexts.is_empty() {
         row = row.child(
             div()
-                .px_1p5()
-                .py_0p5()
+                .px(DynamicSpacing::Base06.rems(cx))
+                .py(DynamicSpacing::Base02.rems(cx))
                 .rounded_sm()
                 .bg(cx.theme().colors().element_background)
                 .child(Label::new("defaults").size(LabelSize::XSmall).color(Color::Muted)),
@@ -62,8 +62,8 @@ pub(crate) fn render_context_summary(
         let label_text = format!("{}  [{}]", ctx.label, badge);
         row = row.child(
             div()
-                .px_1p5()
-                .py_0p5()
+                .px(DynamicSpacing::Base06.rems(cx))
+                .py(DynamicSpacing::Base02.rems(cx))
                 .rounded_sm()
                 .bg(cx.theme().colors().element_background)
                 .child(Label::new(label_text).size(LabelSize::XSmall).color(Color::Muted)),
@@ -101,7 +101,7 @@ pub(crate) fn render_context_editor(
     scripts: Vec<PathBuf>,
     config_root: PathBuf,
     entity: WeakEntity<Dashboard>,
-    _cx: &App,
+    cx: &App,
 ) -> Vec<AnyElement> {
     let mut elements = Vec::new();
     let context_count = contexts.len();
@@ -112,15 +112,15 @@ pub(crate) fn render_context_editor(
     let default_label: SharedString = if skip_default { "Default context: off".into() } else { "Default context: on".into() };
     elements.push(
         h_flex()
-            .gap_1()
-            .pl_4()
+            .gap(DynamicSpacing::Base04.rems(cx))
+            .pl(DynamicSpacing::Base16.rems(cx))
             .items_center()
             .child(
                 ButtonLike::new(format!("toggle-default-ctx-{}", toggle_id))
                     .style(ButtonStyle::Subtle)
                     .child(
                         h_flex()
-                            .gap_1()
+                            .gap(DynamicSpacing::Base04.rems(cx))
                             .child(Icon::new(if skip_default { IconName::XCircle } else { IconName::Check })
                                 .size(IconSize::XSmall)
                                 .color(if skip_default { Color::Muted } else { Color::Accent }))
@@ -149,8 +149,8 @@ pub(crate) fn render_context_editor(
         let auto_id3 = automation_id.to_string();
 
         let row = h_flex()
-            .gap_1()
-            .pl_4()
+            .gap(DynamicSpacing::Base04.rems(cx))
+            .pl(DynamicSpacing::Base16.rems(cx))
             .items_center()
             .child(
                 Label::new(label_text)
@@ -199,15 +199,15 @@ pub(crate) fn render_context_editor(
 
     elements.push(
         h_flex()
-            .pl_4()
-            .pt_1()
-            .gap_2()
+            .pl(DynamicSpacing::Base16.rems(cx))
+            .pt(DynamicSpacing::Base04.rems(cx))
+            .gap(DynamicSpacing::Base08.rems(cx))
             .child(
                 ButtonLike::new(format!("add-ctx-path-{}", add_path_id))
                     .style(ButtonStyle::Subtle)
                     .child(
                         h_flex()
-                            .gap_1()
+                            .gap(DynamicSpacing::Base04.rems(cx))
                             .child(Icon::new(IconName::Folder).size(IconSize::XSmall).color(Color::Muted))
                             .child(Label::new("Add prompt or context file").size(LabelSize::XSmall).color(Color::Muted)),
                     )
@@ -252,7 +252,7 @@ pub(crate) fn render_context_editor(
                             .style(ButtonStyle::Subtle)
                             .child(
                                 h_flex()
-                                    .gap_1()
+                                    .gap(DynamicSpacing::Base04.rems(cx))
                                     .child(Icon::new(IconName::ToolTerminal).size(IconSize::XSmall).color(Color::Muted))
                                     .child(Label::new("Add Script").size(LabelSize::XSmall).color(Color::Muted)),
                             )
@@ -292,14 +292,14 @@ pub(crate) fn render_context_editor(
     let done_id = automation_id.to_string();
     elements.push(
         h_flex()
-            .pl_4()
-            .pt_0p5()
+            .pl(DynamicSpacing::Base16.rems(cx))
+            .pt(DynamicSpacing::Base02.rems(cx))
             .child(
                 ButtonLike::new(format!("ctx-done-gear-{}", done_id))
                     .style(ButtonStyle::Subtle)
                     .child(
                         h_flex()
-                            .gap_1()
+                            .gap(DynamicSpacing::Base04.rems(cx))
                             .child(Icon::new(IconName::Check).size(IconSize::XSmall).color(Color::Accent))
                             .child(Label::new("Done").size(LabelSize::XSmall).color(Color::Accent)),
                     )
