@@ -145,6 +145,9 @@ struct AutoDisableToast;
 
 pub fn init(cx: &mut App) {
     cx.observe_new::<Workspace>(|workspace, _, _cx| {
+        workspace.register_action(|workspace, _: &ToggleFocus, window, cx| {
+            workspace.toggle_panel_focus::<Dashboard>(window, cx);
+        });
         workspace.register_action(
             |workspace, _: &automation_picker::RunAutomationPicker, window, cx| {
                 let entries = automation_picker::build_picker_entries(workspace, cx);
