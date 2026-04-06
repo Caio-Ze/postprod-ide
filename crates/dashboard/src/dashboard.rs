@@ -98,7 +98,10 @@ impl Settings for DashboardSettings {
         let panel = content.dashboard_panel.as_ref();
         Self {
             button: panel.and_then(|p| p.button).unwrap_or(true),
-            dock: panel.and_then(|p| p.dock).unwrap_or(DockPosition::Right),
+            dock: panel
+                .and_then(|p| p.dock)
+                .map(Into::into)
+                .unwrap_or(DockPosition::Right),
             default_width: panel
                 .and_then(|p| p.default_width.map(px))
                 .unwrap_or(px(360.)),
@@ -5403,7 +5406,7 @@ impl Panel for Dashboard {
             settings
                 .dashboard_panel
                 .get_or_insert_default()
-                .dock = Some(position);
+                .dock = Some(position.into());
         });
     }
 
