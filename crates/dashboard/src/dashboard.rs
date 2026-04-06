@@ -109,7 +109,7 @@ impl Settings for DashboardSettings {
             default_width: panel
                 .and_then(|p| p.default_width.map(px))
                 .unwrap_or(px(360.)),
-            starts_open: true,
+            starts_open: panel.and_then(|p| p.starts_open).unwrap_or(true),
         }
     }
 }
