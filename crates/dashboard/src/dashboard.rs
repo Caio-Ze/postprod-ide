@@ -1,3 +1,4 @@
+mod ai_agents_section;
 mod automation_card;
 mod automation_picker;
 pub(crate) mod card;
@@ -45,7 +46,7 @@ use gpui::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 use settings::{RegisterSetting, Settings, update_settings_file};
-use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
+use task::{RevealStrategy, SpawnInTerminal, TaskId};
 use ui::{
     ButtonLike, ButtonStyle, ContextMenu, Disclosure, Divider, DividerColor,
     DropdownMenu, DropdownStyle, Headline, HeadlineSize, Icon, IconButton, IconName, IconSize,
@@ -3861,97 +3862,14 @@ Rules for the completion report:
     }
 
     fn render_ai_agents_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let is_open = !self.collapsed_sections.contains("ai-agents");
-
-        if !is_open {
-            return v_flex().w_full().gap_1().child(self.section_header(
-                "AI AGENTS",
-                "ai-agents",
-                cx,
-            ));
-        }
-
-        let workspace = self.workspace.clone();
-        let cwd = self.agent_cwd();
-
-        // Resolve actual binary paths so we can run them directly without a
-        // shell wrapper (avoids `.zshrc` errors from `-i` flag).
-        let agents: Vec<_> = self
-            .agent_launchers
-            .iter()
-            .map(|entry| {
-                let id = entry.id.clone();
-                let label = entry.label.clone();
-                let program = resolve_bin(&entry.command);
-                let args: Vec<String> = entry.flags.split_whitespace().map(String::from).collect();
-                (id, label, program, args)
-            })
-            .collect();
-
-        let agent_buttons: Vec<_> = agents
-            .into_iter()
-            .map({
-                move |(id, label, program, args)| {
-                    let workspace = workspace.clone();
-                    let cwd = cwd.clone();
-
-                    ButtonLike::new(SharedString::from(id.clone()))
-                        .full_width()
-                        .size(ButtonSize::Medium)
-                        .child(
-                            h_flex()
-                                .w_full()
-                                .gap_2()
-                                .child(
-                                    Icon::new(IconName::Sparkle)
-                                        .color(Color::Accent)
-                                        .size(IconSize::Small),
-                                )
-                                .child(Label::new(label.clone())),
-                        )
-                        .on_click(move |_, window, cx| {
-                            let workspace = workspace.clone();
-                            let args = args.clone();
-                            let program = program.clone();
-                            let cwd = cwd.clone();
-                            let label = label.clone();
-                            let id = id.clone();
-                            workspace.update(cx, |workspace, cx| {
-                                let spawn = SpawnInTerminal {
-                                    id: TaskId(format!("ai-agent-{}", id)),
-                                    label: label.clone(),
-                                    full_label: label.clone(),
-                                    command_label: label.clone(),
-                                    cwd: Some(cwd),
-                                    shell: Shell::WithArguments {
-                                        program,
-                                        args,
-                                        title_override: Some(label),
-                                    },
-                                    use_new_terminal: true,
-                                    allow_concurrent_runs: false,
-                                    reveal: RevealStrategy::Always,
-                                    ..Default::default()
-                                };
-                                workspace.spawn_in_terminal(spawn, window, cx).detach();
-                            }).log_err();
-                        })
-                        .into_any_element()
-                }
-            })
-            .collect();
-
-        v_flex()
-            .w_full()
-            .gap_1()
-            .child(self.section_header("AI AGENTS", "ai-agents", cx))
-            .child(
-                v_flex()
-                    .id("ai-agents-content-anim")
-                    .w_full()
-                    .gap_1()
-                    .children(agent_buttons),
-            )
+        ai_agents_section::render_ai_agents_section(
+            &self.collapsed_sections,
+            &self.agent_launchers,
+            &self.workspace,
+            self.agent_cwd(),
+            cx.entity().downgrade(),
+            cx,
+        )
     }
 }
 
