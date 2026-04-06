@@ -4,6 +4,7 @@ mod hotkeys;
 mod paths;
 pub(crate) mod persistence;
 mod scheduler_ui;
+mod section;
 
 use config::{
     AgentEntry, AutomationEntry, BackendEntry, FolderTarget, ParamEntry, ParamType, PipelineStep,
@@ -1940,7 +1941,7 @@ Rules for the completion report:
 
     // -- Rendering helpers --
 
-    fn toggle_section(&mut self, section_id: &str, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_section(&mut self, section_id: &str, cx: &mut Context<Self>) {
         if self.collapsed_sections.contains(section_id) {
             self.collapsed_sections.remove(section_id);
         } else {
@@ -2815,29 +2816,7 @@ Rules for the completion report:
         section_id: &str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let is_open = !self.collapsed_sections.contains(section_id);
-        let entity = cx.entity().downgrade();
-        let id_for_toggle = section_id.to_string();
-
-        h_flex()
-            .px_1()
-            .mb_2()
-            .gap_2()
-            .items_center()
-            .child(
-                Disclosure::new(SharedString::from(format!("disc-{}", section_id)), is_open)
-                    .on_click(move |_, _, cx| {
-                        entity.update(cx, |this, cx| {
-                            this.toggle_section(&id_for_toggle, cx);
-                        }).log_err();
-                    }),
-            )
-            .child(
-                Label::new(title.to_string())
-                    .color(Color::Muted)
-                    .size(LabelSize::Small),
-            )
-            .child(Divider::horizontal().color(DividerColor::BorderVariant))
+        section::section_header(title, section_id, &self.collapsed_sections, cx.entity().downgrade())
     }
 
     fn sub_section_header(
@@ -2846,29 +2825,7 @@ Rules for the completion report:
         section_id: &str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let is_open = !self.collapsed_sections.contains(section_id);
-        let entity = cx.entity().downgrade();
-        let id_for_toggle = section_id.to_string();
-
-        h_flex()
-            .pl_2()
-            .mt_1()
-            .mb_1()
-            .gap_1p5()
-            .items_center()
-            .child(
-                Disclosure::new(SharedString::from(format!("disc-{}", section_id)), is_open)
-                    .on_click(move |_, _, cx| {
-                        entity.update(cx, |this, cx| {
-                            this.toggle_section(&id_for_toggle, cx);
-                        }).log_err();
-                    }),
-            )
-            .child(
-                Label::new(title.to_string())
-                    .color(Color::Muted)
-                    .size(LabelSize::Small),
-            )
+        section::sub_section_header(title, section_id, &self.collapsed_sections, cx.entity().downgrade())
     }
 
     /// Build a click handler closure for running a tool (background or terminal).
