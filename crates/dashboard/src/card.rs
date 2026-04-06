@@ -219,6 +219,8 @@ impl DashboardCard {
         let label_content = {
             let mut col = v_flex()
                 .overflow_hidden()
+                .flex_1()
+                .min_w(px(80.))
                 .child(Label::new(self.label.clone()).truncate());
             if let Some(desc) = self.description {
                 col = col.child(
@@ -235,7 +237,8 @@ impl DashboardCard {
         // card's on_click handler.
         let end_slot_el = self.end_slot.map(|slot| {
             h_flex()
-                .flex_shrink_0()
+                .flex_shrink()
+                .overflow_hidden()
                 .gap(DynamicSpacing::Base04.rems(cx))
                 .items_center()
                 .on_mouse_down(MouseButton::Left, |_, window, cx| {
