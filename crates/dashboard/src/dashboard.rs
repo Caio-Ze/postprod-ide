@@ -2584,7 +2584,6 @@ Rules for the completion report:
             // on_dest_select
             {
                 let entity = entity.clone();
-                let config_root = config_root;
                 move |path, _window, cx: &mut App| {
                     write_destination_folder(&config_root, &path);
                     entity.update(cx, |this, cx| {
@@ -2860,7 +2859,7 @@ Rules for the completion report:
                 let tool_id = tool.id.clone();
                 let tool_label = tool.label.clone();
                 let action_buttons =
-                    self.tool_action_buttons(&tool_id, &tool_label, group_name.clone(), cx)
+                    self.tool_action_buttons(&tool_id, &tool_label, group_name, cx)
                         .into_any_element();
 
                 tool_card::render_featured_tool(
@@ -2921,7 +2920,7 @@ Rules for the completion report:
                 let tool_id = tool.id.clone();
                 let tool_label = tool.label.clone();
                 let action_buttons =
-                    self.tool_action_buttons(&tool_id, &tool_label, group_name.clone(), cx)
+                    self.tool_action_buttons(&tool_id, &tool_label, group_name, cx)
                         .into_any_element();
 
                 tool_card::render_standard_tool(
@@ -2947,7 +2946,7 @@ Rules for the completion report:
                 let tool_id = tool.id.clone();
                 let tool_label = tool.label.clone();
                 let action_buttons =
-                    self.tool_action_buttons(&tool_id, &tool_label, group_name.clone(), cx)
+                    self.tool_action_buttons(&tool_id, &tool_label, group_name, cx)
                         .into_any_element();
 
                 tool_card::render_compact_tool(
