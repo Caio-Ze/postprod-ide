@@ -8,7 +8,7 @@
 //! - End slot: action buttons (via `ListItem::end_slot`)
 //! - Elevation shadow via `ElevationIndex::ElevatedSurface`
 //! - `DynamicSpacing` for all padding/gaps
-//! - Semantic colors only (no manual opacity calculations)
+//! - Semantic colors (accent strip border uses `opacity(0.5)` for subtlety)
 //! - Expandable content area below the header row
 
 use gpui::{
