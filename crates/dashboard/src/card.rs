@@ -13,12 +13,34 @@
 
 use gpui::{
     AnyElement, App, ClickEvent, Div, Hsla, IntoElement, MouseButton, ParentElement,
-    SharedString, Styled, Window,
+    SharedString, Styled, WeakEntity, Window,
 };
 use ui::{
     Color, DynamicSpacing, Icon, IconName, IconSize, Label, LabelSize, ListItem, ListItemSpacing,
     prelude::*,
 };
+
+use crate::Dashboard;
+use crate::config::AutomationEntry;
+
+// ---------------------------------------------------------------------------
+// CardRenderContext
+// ---------------------------------------------------------------------------
+
+/// Shared context for automation and pipeline card renderers.
+///
+/// Bundles the 7 common positional args that both `render_automation_card`
+/// and `render_pipeline_card` require — reducing fragile 13-14 arg
+/// signatures to cleaner interfaces.
+pub(crate) struct CardRenderContext<'a> {
+    pub entry: &'a AutomationEntry,
+    pub idx: usize,
+    pub accent: Hsla,
+    pub is_expanded: bool,
+    pub is_scheduled: bool,
+    pub is_pending_delete: bool,
+    pub entity: WeakEntity<Dashboard>,
+}
 
 // ---------------------------------------------------------------------------
 // Icon container

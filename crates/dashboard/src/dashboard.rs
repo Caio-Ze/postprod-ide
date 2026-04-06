@@ -30,6 +30,7 @@ use persistence::{
 
 pub use hotkeys::init_global_hotkeys;
 use hotkeys::GlobalShortcutModal;
+use card::CardRenderContext;
 
 use agent_ui::AgentPanel;
 use menu;
@@ -3419,19 +3420,21 @@ Rules for the completion report:
             None
         };
 
-        let entity = cx.entity().downgrade();
-
-        automation_card::render_automation_card(
+        let ctx = CardRenderContext {
             entry,
             idx,
-            icon_color,
-            badge_label.clone(),
-            badge_color,
             accent,
             is_expanded,
             is_scheduled,
             is_pending_delete,
-            entity,
+            entity: cx.entity().downgrade(),
+        };
+
+        automation_card::render_automation_card(
+            &ctx,
+            icon_color,
+            badge_label.clone(),
+            badge_color,
             param_fields,
             schedule_controls,
             context_rows,
@@ -3767,16 +3770,20 @@ Rules for the completion report:
             &entry.id, &schedule_cron, window, cx,
         );
 
-        pipeline_card::render_pipeline_card(
+        let ctx = CardRenderContext {
             entry,
             idx,
-            is_running,
-            is_expanded,
-            is_editing,
-            is_pending_delete,
-            is_scheduled,
             accent,
+            is_expanded,
+            is_scheduled,
+            is_pending_delete,
             entity,
+        };
+
+        pipeline_card::render_pipeline_card(
+            &ctx,
+            is_running,
+            is_editing,
             step_tree,
             sched_controls.into_any_element(),
             active_folder,
