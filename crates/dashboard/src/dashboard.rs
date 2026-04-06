@@ -2,6 +2,7 @@ mod automation_card;
 mod automation_picker;
 pub(crate) mod card;
 mod config;
+mod context_editor;
 mod folder_bar;
 mod hotkeys;
 mod paths;
@@ -3403,10 +3404,32 @@ Rules for the completion report:
 
         let param_fields = self.render_entry_params(&entry.id, &entry.params, window, cx);
         let context_rows = if is_expanded {
+            let entity = cx.entity().downgrade();
             if self.automations_in_context_edit.contains(&entry.id) {
-                self.render_context_editor(&entry.id, &entry.contexts, entry.skip_default_context, cx)
+                let automation_source_path = self.automations.iter()
+                    .find(|a| a.id == entry.id)
+                    .and_then(|a| a.source_path.clone());
+                let scripts = config::collect_context_scripts(&self.config_root);
+                context_editor::render_context_editor(
+                    &entry.id,
+                    &entry.contexts,
+                    entry.skip_default_context,
+                    automation_source_path,
+                    self.workspace.clone(),
+                    scripts,
+                    self.config_root.clone(),
+                    entity,
+                    cx,
+                )
             } else {
-                self.render_context_summary(&entry.id, &entry.contexts, entry.skip_default_context, cx)
+                context_editor::render_context_summary(
+                    &entry.id,
+                    &entry.contexts,
+                    entry.skip_default_context,
+                    &self.default_contexts,
+                    entity,
+                    cx,
+                )
             }
         } else {
             Vec::new()
@@ -3757,12 +3780,14 @@ Rules for the completion report:
                 entity.clone(),
                 self.workspace.clone(),
                 self.config_root.clone(),
+                cx,
             )
         } else {
             pipeline_card::render_pipeline_step_tree(
                 &entry.steps,
                 &self.tools,
                 &self.automations,
+                cx,
             )
         };
 
