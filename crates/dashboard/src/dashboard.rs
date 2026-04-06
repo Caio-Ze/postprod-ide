@@ -1,5 +1,4 @@
 mod automation_picker;
-#[allow(unused)]
 pub(crate) mod card;
 mod config;
 mod folder_bar;
@@ -8,10 +7,11 @@ mod paths;
 pub(crate) mod persistence;
 mod scheduler_ui;
 mod section;
+mod tool_card;
 
 use config::{
     AgentEntry, AutomationEntry, BackendEntry, FolderTarget, ParamEntry, ParamType, PipelineStep,
-    ScheduleConfig, ToolEntry, ToolSource, ToolTier, icon_for_automation, icon_for_tool,
+    ScheduleConfig, ToolEntry, ToolSource, ToolTier, icon_for_automation,
     load_agents_config, load_automations_registry, load_tools_registry,
 };
 use paths::{
@@ -2834,122 +2834,67 @@ Rules for the completion report:
             )
     }
 
-    /// Build Featured tool cards: full-width, accent border + left strip,
-    /// 40px tinted icon, hover-reveal actions.
+    /// Build Featured tool cards using the shared `DashboardCard` component.
     fn build_featured_cards(
         &mut self,
         tools: &[ToolEntry],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        let accent_color = cx.theme().colors().text_accent;
-        let icon_tint_bg = cx.theme().colors().element_background;
-
         let tools_owned: Vec<ToolEntry> = tools.to_vec();
         tools_owned
             .into_iter()
             .map(|tool| {
                 let group_name = SharedString::from(format!("tool-{}", tool.id));
                 let click_handler = self.tool_click_handler(&tool, cx);
-                let tool_icon = icon_for_tool(&tool.icon);
-                let tool_label: SharedString = tool.label.clone().into();
-                let tool_description: SharedString = tool.description.clone().into();
-
-                let has_params = !tool.params.is_empty();
-
-                // Render params first (returns owned Vec, releases &mut borrows)
-                let param_fields = if has_params {
+                let param_fields = if !tool.params.is_empty() {
                     self.render_entry_params(&tool.id, &tool.params, window, cx)
                 } else {
                     Vec::new()
                 };
-
-                let featured_drop = cx.listener(|this, paths: &ExternalPaths, _window, cx| {
+                let drop_handler = cx.listener(|this, paths: &ExternalPaths, _window, cx| {
                     if let Some(dir) = paths.paths().iter().find(|p| p.is_dir()) {
                         this.set_folder(FolderTarget::Destination, dir.clone(), cx);
                     }
                 });
-
-                // Action buttons last (impl IntoElement captures cx lifetime)
-                let param_pl = DynamicSpacing::Base48.rems(cx);
+                let tool_id = tool.id.clone();
+                let tool_label = tool.label.clone();
                 let action_buttons =
-                    self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
+                    self.tool_action_buttons(&tool_id, &tool_label, group_name.clone(), cx)
+                        .into_any_element();
 
-                let extra_content = div()
-                    .when(has_params, |el| {
-                        el.child(
-                            h_flex()
-                                .px_2()
-                                .pb_2()
-                                .pl(param_pl)
-                                .gap_2()
-                                .flex_wrap()
-                                .children(param_fields),
-                        )
-                    });
-
-                Self::render_card_shell(
-                    format!("featured-{}", tool.id),
-                    accent_color,
-                    tool_icon,
-                    Color::Accent,
-                    icon_tint_bg,
-                    v_flex()
-                        .flex_1()
-                        .overflow_hidden()
-                        .child(Label::new(tool_label))
-                        .child(
-                            Label::new(tool_description)
-                                .color(Color::Muted)
-                                .size(LabelSize::Small)
-                                .truncate(),
-                        ),
-                    h_flex().child(action_buttons),
-                    extra_content,
+                tool_card::render_featured_tool(
+                    &tool,
+                    action_buttons,
+                    param_fields,
+                    click_handler,
+                    Some(drop_handler),
                     cx,
                 )
-                .group(group_name)
-                .drag_over::<ExternalPaths>(|style, _, _, cx| {
-                    style.bg(cx.theme().colors().drop_target_background)
-                })
-                .on_drop(featured_drop)
-                .on_click(click_handler)
-                .into_any_element()
             })
             .collect()
     }
 
-    /// Build Standard tool cards: neutral border, 28px icon, params inline below.
+    /// Build Standard tool cards using the shared `DashboardCard` component.
     fn build_standard_cards(
         &mut self,
         tools: &[ToolEntry],
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<gpui::AnyElement> {
-        let hover_border = cx.theme().colors().text_accent;
-        let card_bg = cx.theme().colors().elevated_surface_background;
-        let border_color = cx.theme().colors().border_variant;
-        let icon_bg = cx.theme().colors().element_background;
-
         let tools_owned: Vec<ToolEntry> = tools.to_vec();
         tools_owned
             .into_iter()
             .map(|tool| {
                 let group_name = SharedString::from(format!("tool-{}", tool.id));
                 let click_handler = self.tool_click_handler(&tool, cx);
-                let tool_icon = icon_for_tool(&tool.icon);
-                let tool_label: SharedString = tool.label.clone().into();
-                let tool_description: SharedString = tool.description.clone().into();
-                let has_params = !tool.params.is_empty();
-
-                // Render params first (returns owned Vec, releases &mut borrows)
-                let param_fields = if has_params {
+                let param_fields = if !tool.params.is_empty() {
                     self.render_entry_params(&tool.id, &tool.params, window, cx)
                 } else {
                     Vec::new()
                 };
 
-                let path_drop_handler = tool
+                let drop_handler = tool
                     .params
                     .iter()
                     .find(|p| p.param_type == ParamType::Path)
@@ -2973,133 +2918,44 @@ Rules for the completion report:
                         )
                     });
 
-                // Action buttons last (impl IntoElement captures cx lifetime)
-                let param_pl = DynamicSpacing::Base40.rems(cx);
+                let tool_id = tool.id.clone();
+                let tool_label = tool.label.clone();
                 let action_buttons =
-                    self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
+                    self.tool_action_buttons(&tool_id, &tool_label, group_name.clone(), cx)
+                        .into_any_element();
 
-                div()
-                    .id(SharedString::from(format!("standard-{}", tool.id)))
-                    .group(group_name)
-                    .flex_basis(relative(0.48))
-                    .flex_grow()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(border_color)
-                    .bg(card_bg)
-                    .overflow_hidden()
-                    .cursor_pointer()
-                    .hover(move |style| style.border_color(hover_border))
-                    .when(path_drop_handler.is_some(), |el| {
-                        el.drag_over::<ExternalPaths>(|style, _, _, cx| {
-                            style.bg(cx.theme().colors().drop_target_background)
-                        })
-                    })
-                    .when_some(path_drop_handler, |el, handler| el.on_drop(handler))
-                    .child(
-                        h_flex()
-                            .w_full()
-                            .p_2()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .size(px(28.))
-                                    .rounded(px(6.))
-                                    .bg(icon_bg)
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .child(
-                                        Icon::new(tool_icon)
-                                            .size(IconSize::Small)
-                                            .color(Color::Muted),
-                                    ),
-                            )
-                            .child(
-                                v_flex()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .child(Label::new(tool_label).size(LabelSize::Small))
-                                    .child(
-                                        Label::new(tool_description)
-                                            .color(Color::Muted)
-                                            .size(LabelSize::Small)
-                                            .truncate(),
-                                    ),
-                            )
-                            .child(h_flex().flex_shrink_0().child(action_buttons)),
-                    )
-                    .when(has_params, |el| {
-                        el.child(
-                            h_flex()
-                                .px_2()
-                                .pb_2()
-                                .pl(param_pl)
-                                .gap_2()
-                                .flex_wrap()
-                                .children(param_fields),
-                        )
-                    })
-                    .on_click(click_handler)
-                    .into_any_element()
+                tool_card::render_standard_tool(
+                    &tool,
+                    action_buttons,
+                    param_fields,
+                    click_handler,
+                    drop_handler,
+                    cx,
+                )
             })
             .collect()
     }
 
-    /// Build Compact tool cards: minimal icon + label, 3-column grid items.
+    /// Build Compact tool cards using the shared `DashboardCard` component.
     fn build_compact_cards(&self, tools: &[ToolEntry], cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
-        let hover_border = cx.theme().colors().text_accent;
-        let border_color = cx.theme().colors().border_variant;
-
         let tools_owned: Vec<ToolEntry> = tools.to_vec();
         tools_owned
             .into_iter()
             .map(|tool| {
                 let group_name = SharedString::from(format!("tool-{}", tool.id));
                 let click_handler = self.tool_click_handler(&tool, cx);
+                let tool_id = tool.id.clone();
+                let tool_label = tool.label.clone();
                 let action_buttons =
-                    self.tool_action_buttons(&tool.id, &tool.label, group_name.clone(), cx);
-                let tool_icon = icon_for_tool(&tool.icon);
-                let tool_label: SharedString = tool.label.clone().into();
-                let tool_description = tool.description.clone();
+                    self.tool_action_buttons(&tool_id, &tool_label, group_name.clone(), cx)
+                        .into_any_element();
 
-                div()
-                    .id(SharedString::from(format!("compact-{}", tool.id)))
-                    .group(group_name)
-                    .flex_basis(relative(0.31))
-                    .flex_grow()
-                    .rounded_sm()
-                    .border_1()
-                    .border_color(border_color)
-                    .overflow_hidden()
-                    .cursor_pointer()
-                    .hover(move |style| style.border_color(hover_border))
-                    .child(
-                        h_flex()
-                            .px_2()
-                            .py_1()
-                            .gap_2()
-                            .items_center()
-                            .child(
-                                Icon::new(tool_icon)
-                                    .size(IconSize::XSmall)
-                                    .color(Color::Muted),
-                            )
-                            .child(
-                                Label::new(tool_label)
-                                    .size(LabelSize::XSmall)
-                                    .truncate(),
-                            )
-                            .child(div().flex_grow())
-                            .child(
-                                div().flex_shrink_0().child(action_buttons),
-                            ),
-                    )
-                    .tooltip(Tooltip::text(tool_description))
-                    .on_click(click_handler)
-                    .into_any_element()
+                tool_card::render_compact_tool(
+                    &tool,
+                    action_buttons,
+                    click_handler,
+                    cx,
+                )
             })
             .collect()
     }
@@ -3225,23 +3081,13 @@ Rules for the completion report:
                 if !standard.is_empty() {
                     let cards = self.build_standard_cards(&standard, window, cx);
                     section_elements.push(
-                        h_flex()
-                            .w_full()
-                            .flex_wrap()
-                            .gap(DynamicSpacing::Base08.rems(cx))
-                            .children(cards)
-                            .into_any_element(),
+                        v_flex().w_full().gap(DynamicSpacing::Base06.rems(cx)).children(cards).into_any_element(),
                     );
                 }
                 if !compact.is_empty() {
                     let cards = self.build_compact_cards(&compact, cx);
                     section_elements.push(
-                        h_flex()
-                            .w_full()
-                            .flex_wrap()
-                            .gap(DynamicSpacing::Base08.rems(cx))
-                            .children(cards)
-                            .into_any_element(),
+                        v_flex().w_full().gap(DynamicSpacing::Base04.rems(cx)).children(cards).into_any_element(),
                     );
                 }
             }
