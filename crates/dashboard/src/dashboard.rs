@@ -46,11 +46,10 @@ use ui::{
 };
 use project::WorktreeId;
 use workspace::{
-    DraggedSelection, OpenOptions, Pane, ProToolsSessionName, Toast,
+    DraggedSelection, OpenOptions, ProToolsSessionName, Toast,
     Workspace,
-    item::{Item, ItemEvent},
+    dock::{DockPosition, Panel, PanelEvent},
     notifications::NotificationId,
-    with_active_or_new_workspace,
 };
 
 use postprod_scheduler::{
@@ -61,7 +60,6 @@ use util::ResultExt as _;
 
 use futures::channel::oneshot;
 
-use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -75,8 +73,8 @@ use std::time::Duration;
 actions!(
     dashboard,
     [
-        /// Show the PostProd Tools Dashboard.
-        ShowDashboard
+        /// Toggle the PostProd Tools Dashboard panel.
+        ToggleFocus
     ]
 );
 
@@ -107,82 +105,7 @@ struct AutoDisableToast;
 // Init
 // ---------------------------------------------------------------------------
 
-/// Reject directory-only drops on the pane overlay when Dashboard is active,
-/// so dashboard folder-cards can handle them instead.
-fn set_pane_drop_predicate(pane: &Entity<Pane>, workspace: &Workspace, cx: &mut App) {
-    let weak_pane = pane.downgrade();
-    let weak_project = workspace.project().downgrade();
-
-    pane.update(cx, |pane, _cx| {
-        pane.set_can_drop(Some(Arc::new(move |dragged: &dyn Any, _window, cx| {
-            let dashboard_active = weak_pane
-                .read_with(cx, |pane, _cx| {
-                    pane.active_item()
-                        .and_then(|item| item.downcast::<Dashboard>())
-                        .is_some()
-                })
-                .unwrap_or(false);
-
-            if !dashboard_active {
-                return true;
-            }
-
-            if let Some(paths) = dragged.downcast_ref::<ExternalPaths>() {
-                return paths.paths().iter().any(|p| !p.is_dir());
-            }
-
-            if let Some(selection) = dragged.downcast_ref::<DraggedSelection>() {
-                let is_dir_only = weak_project
-                    .read_with(cx, |project, cx| {
-                        let worktree_store = project.worktree_store().read(cx);
-                        selection.items().all(|entry| {
-                            worktree_store
-                                .entry_for_id(entry.entry_id, cx)
-                                .is_some_and(|e| e.is_dir())
-                        })
-                    })
-                    .unwrap_or(false);
-                return !is_dir_only;
-            }
-
-            true
-        })));
-    });
-}
-
 pub fn init(cx: &mut App) {
-    cx.on_action(|_: &ShowDashboard, cx| {
-        with_active_or_new_workspace(cx, |workspace, window, cx| {
-            workspace
-                .with_local_workspace(window, cx, |workspace, window, cx| {
-                    // Find existing Dashboard in any pane
-                    let existing = workspace.panes().iter().find_map(|pane| {
-                        pane.read(cx)
-                            .items()
-                            .find_map(|item| item.downcast::<Dashboard>())
-                    });
-
-                    if let Some(existing) = existing {
-                        workspace.activate_item(&existing, true, true, window, cx);
-                    } else {
-                        let dashboard = Dashboard::new(workspace, suite_root(), cx);
-                        workspace.add_item_to_active_pane(
-                            Box::new(dashboard),
-                            Some(0),
-                            true,
-                            window,
-                            cx,
-                        );
-                        workspace.active_pane().update(cx, |pane, _cx| {
-                            pane.set_pinned_count(pane.pinned_count() + 1);
-                        });
-                        set_pane_drop_predicate(workspace.active_pane(), workspace, cx);
-                    }
-                })
-                .detach();
-        });
-    });
-
     cx.observe_new::<Workspace>(|workspace, _, _cx| {
         workspace.register_action(
             |workspace, _: &automation_picker::RunAutomationPicker, window, cx| {
@@ -197,52 +120,7 @@ pub fn init(cx: &mut App) {
     .detach();
 }
 
-/// Ensure a Dashboard tab exists in the workspace, and switch config_root
-/// if the active workspace folder has its own dashboard config.
-pub fn ensure_dashboard(
-    workspace: &mut Workspace,
-    window: &mut Window,
-    cx: &mut Context<Workspace>,
-) {
-    // If a dashboard already exists in any pane, nothing to do.
-    // Folder switching is handled by the Dashboard's workspace observation.
-    let has_dashboard = workspace
-        .panes()
-        .iter()
-        .flat_map(|pane| pane.read(cx).items())
-        .any(|item| item.downcast::<Dashboard>().is_some());
-
-    if has_dashboard {
-        // Dashboard exists (restored from persistence). Apply settings profile
-        // for the current config_root — the constructor only runs on first creation.
-        let config_root = workspace
-            .root_paths(cx)
-            .into_iter()
-            .find(|path| folder_has_dashboard_config(path))
-            .map(|arc_path| arc_path.to_path_buf())
-            .unwrap_or_else(suite_root);
-        let (_, _, _, config_profile) = load_agents_config(&config_root);
-        if let Some(profile_name) = config_profile {
-            cx.set_global(settings::ActiveSettingsProfileName(profile_name));
-        }
-        return;
-    }
-
-    // Initial creation: use the first root folder that has dashboard config
-    let config_root = workspace
-        .root_paths(cx)
-        .into_iter()
-        .find(|path| folder_has_dashboard_config(path))
-        .map(|arc_path| arc_path.to_path_buf())
-        .unwrap_or_else(suite_root);
-
-    let dashboard = Dashboard::new(workspace, config_root, cx);
-    workspace.add_item_to_center(Box::new(dashboard), window, cx);
-    workspace.active_pane().update(cx, |pane, _cx| {
-        pane.set_pinned_count(pane.pinned_count() + 1);
-    });
-    set_pane_drop_predicate(workspace.active_pane(), workspace, cx);
-}
+const DASHBOARD_PANEL_KEY: &str = "Dashboard";
 
 
 // ---------------------------------------------------------------------------
@@ -498,6 +376,28 @@ pub(crate) fn resolve_tool_command(
 }
 
 impl Dashboard {
+    pub async fn load(
+        workspace: WeakEntity<Workspace>,
+        mut cx: gpui::AsyncWindowContext,
+    ) -> anyhow::Result<Entity<Self>> {
+        workspace.update_in(&mut cx, |workspace, _window, cx| {
+            let config_root = workspace
+                .root_paths(cx)
+                .into_iter()
+                .find(|path| folder_has_dashboard_config(path))
+                .map(|arc_path| arc_path.to_path_buf())
+                .unwrap_or_else(suite_root);
+
+            // Apply settings profile from config
+            let (_, _, _, config_profile) = load_agents_config(&config_root);
+            if let Some(profile_name) = config_profile {
+                cx.set_global(settings::ActiveSettingsProfileName(profile_name));
+            }
+
+            Dashboard::new(workspace, config_root, cx)
+        })
+    }
+
     pub fn new(workspace: &Workspace, config_root: PathBuf, cx: &mut App) -> Entity<Self> {
         let runtime_path = resolve_runtime_path();
 
@@ -5478,10 +5378,10 @@ impl Render for Dashboard {
 }
 
 // ---------------------------------------------------------------------------
-// Trait impls for center-pane Item
+// Trait impls for docked Panel
 // ---------------------------------------------------------------------------
 
-impl EventEmitter<ItemEvent> for Dashboard {}
+impl EventEmitter<PanelEvent> for Dashboard {}
 
 impl Focusable for Dashboard {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -5489,23 +5389,49 @@ impl Focusable for Dashboard {
     }
 }
 
-impl Item for Dashboard {
-    type Event = ItemEvent;
-
-    fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "Dashboard".into()
+impl Panel for Dashboard {
+    fn persistent_name() -> &'static str {
+        "Dashboard"
     }
 
-    fn show_toolbar(&self) -> bool {
-        false
+    fn panel_key() -> &'static str {
+        DASHBOARD_PANEL_KEY
     }
 
-    fn prevent_close(&self, _cx: &App) -> bool {
+    fn position(&self, _window: &Window, _cx: &App) -> DockPosition {
+        DockPosition::Right
+    }
+
+    fn position_is_valid(&self, position: DockPosition) -> bool {
+        matches!(position, DockPosition::Left | DockPosition::Right | DockPosition::Bottom)
+    }
+
+    fn set_position(&mut self, _position: DockPosition, _window: &mut Window, _cx: &mut Context<Self>) {
+        // Position is fixed to Right for now; settings-based position comes in a later step.
+    }
+
+    fn default_size(&self, _window: &Window, _cx: &App) -> Pixels {
+        px(360.)
+    }
+
+    fn icon(&self, _window: &Window, _cx: &App) -> Option<IconName> {
+        Some(IconName::AudioOn)
+    }
+
+    fn icon_tooltip(&self, _window: &Window, _cx: &App) -> Option<&'static str> {
+        Some("Dashboard")
+    }
+
+    fn toggle_action(&self) -> Box<dyn Action> {
+        Box::new(ToggleFocus)
+    }
+
+    fn starts_open(&self, _window: &Window, _cx: &App) -> bool {
         true
     }
 
-    fn to_item_events(event: &Self::Event, f: &mut dyn FnMut(ItemEvent)) {
-        f(*event)
+    fn activation_priority(&self) -> u32 {
+        2
     }
 }
 

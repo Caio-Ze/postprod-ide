@@ -487,7 +487,7 @@ impl MultiWorkspace {
         if changed {
             cx.emit(MultiWorkspaceEvent::ActiveWorkspaceChanged);
             self.serialize(cx);
-            // Emit Activate on the new workspace so ensure_dashboard() in zed.rs runs.
+            // Emit Activate on the new workspace so zed.rs event handlers run.
             // Conditional on `changed` to prevent infinite recursion: the subscription
             // handler in subscribe_to_workspace() calls activate() when a workspace
             // emits Activate — if we emitted unconditionally, it would loop.
