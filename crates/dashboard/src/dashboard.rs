@@ -2584,7 +2584,7 @@ Rules for the completion report:
             // on_dest_select
             {
                 let entity = entity.clone();
-                let config_root = config_root.clone();
+                let config_root = config_root;
                 move |path, _window, cx: &mut App| {
                     write_destination_folder(&config_root, &path);
                     entity.update(cx, |this, cx| {
@@ -5281,7 +5281,7 @@ impl Panel for Dashboard {
     }
 
     fn activation_priority(&self) -> u32 {
-        2
+        8
     }
 }
 
