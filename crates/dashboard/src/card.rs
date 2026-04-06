@@ -145,6 +145,7 @@ pub struct DashboardCard {
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     group_name: Option<SharedString>,
     spacing: ListItemSpacing,
+    custom_child: Option<AnyElement>,
 }
 
 impl DashboardCard {
@@ -160,6 +161,7 @@ impl DashboardCard {
             on_click: None,
             group_name: None,
             spacing: ListItemSpacing::Dense,
+            custom_child: None,
         }
     }
 
@@ -213,10 +215,18 @@ impl DashboardCard {
         self
     }
 
+    /// Custom child element replacing the default label/description column.
+    pub fn custom_child(mut self, el: impl IntoElement) -> Self {
+        self.custom_child = Some(el.into_any_element());
+        self
+    }
+
     /// Build the card element tree.
     pub fn render(self, cx: &App) -> impl IntoElement {
         // -- header row via ListItem ------------------------------------------
-        let label_content = {
+        let child_element: AnyElement = if let Some(custom) = self.custom_child {
+            custom
+        } else {
             let mut col = v_flex()
                 .overflow_hidden()
                 .flex_1()
@@ -230,7 +240,7 @@ impl DashboardCard {
                         .truncate(),
                 );
             }
-            col
+            col.into_any_element()
         };
 
         // Wrap end-slot in a propagation guard so button clicks don't fire the
@@ -252,7 +262,7 @@ impl DashboardCard {
             .spacing(self.spacing)
             .inset(true)
             .start_slot(self.icon.into_element(cx))
-            .child(label_content);
+            .child(child_element);
 
         if let Some(end) = end_slot_el {
             list_item = list_item.end_slot(end);

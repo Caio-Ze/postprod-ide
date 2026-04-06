@@ -3319,73 +3319,6 @@ Rules for the completion report:
             .collect()
     }
 
-    /// Shared card layout used by automation, pipeline, and tool cards.
-    ///
-    /// Builds the outer container (background, border, hover, rounded corners),
-    /// the left accent strip, icon container, and places `content` and
-    /// `right_side` in the header row.  Any additional content (params,
-    /// schedule, expansion) is appended from `extra_content`.
-    ///
-    /// Background and hover colors are looked up from the theme — callers
-    /// don't need to pass them.  Chain `.on_click()` / `.group()` on the
-    /// returned `Div`.
-    fn render_card_shell(
-        element_id: impl Into<SharedString>,
-        accent: gpui::Hsla,
-        icon: IconName,
-        icon_color: Color,
-        icon_tint_bg: gpui::Hsla,
-        content: impl IntoElement,
-        right_side: Div,
-        extra_content: Div,
-        cx: &App,
-    ) -> gpui::Stateful<Div> {
-        let hover_bg = cx.theme().colors().ghost_element_hover;
-
-        div()
-            .id(element_id.into())
-            .w_full()
-            .elevation_2(cx)
-            .border_color(accent.opacity(0.5))
-            .overflow_hidden()
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover_bg))
-            .child(
-                h_flex()
-                    .w_full()
-                    .child(div().w(px(3.)).h_full().flex_shrink_0().bg(accent))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .child(
-                                h_flex()
-                                    .flex_1()
-                                    .p(DynamicSpacing::Base08.rems(cx))
-                                    .gap(DynamicSpacing::Base12.rems(cx))
-                                    .items_center()
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .size(px(36.))
-                                            .rounded(px(8.))
-                                            .bg(icon_tint_bg)
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .child(
-                                                Icon::new(icon)
-                                                    .size(IconSize::Medium)
-                                                    .color(icon_color),
-                                            ),
-                                    )
-                                    .child(content)
-                                    .child(right_side.flex_shrink_0()),
-                            )
-                            .child(extra_content),
-                    ),
-            )
-    }
-
     fn render_automation_card(
         &mut self,
         entry: &AutomationEntry,
@@ -3609,41 +3542,43 @@ Rules for the completion report:
         // Ghost card for pending new pipeline
         let ghost_card = self.pending_new_pipeline.clone().map(|editor| {
             let accent = cx.theme().colors().text_accent;
-            let icon_tint_bg = cx.theme().colors().element_background;
             let border_color = cx.theme().colors().border;
             let confirm_entity = cx.entity().downgrade();
             let cancel_entity = cx.entity().downgrade();
 
-            Self::render_card_shell(
-                "new-pipeline-ghost",
-                accent,
-                IconName::PlayFilled,
-                Color::Accent,
-                icon_tint_bg,
-                div()
-                    .flex_1()
-                    .border_1()
-                    .border_color(border_color)
-                    .rounded_sm()
-                    .px_1()
-                    .child(editor),
-                div(),
-                div(),
-                cx,
-            )
-            .on_action(move |_: &menu::Confirm, _, cx| {
-                confirm_entity.update(cx, |this, cx| {
-                    if let Some(editor) = &this.pending_new_pipeline {
-                        let text = editor.read(cx).text(cx).trim().to_string();
-                        this.finish_new_pipeline(text, cx);
-                    }
-                }).log_err();
-            })
-            .on_action(move |_: &menu::Cancel, _, cx| {
-                cancel_entity.update(cx, |this, cx| {
-                    this.cancel_new_pipeline(cx);
-                }).log_err();
-            })
+            div()
+                .id("new-pipeline-ghost")
+                .child(
+                    card::DashboardCard::new(
+                        "new-pipeline-ghost-inner",
+                        card::CardIcon::new(IconName::PlayFilled).color(Color::Accent),
+                        "",
+                    )
+                    .accent(accent)
+                    .custom_child(
+                        div()
+                            .flex_1()
+                            .border_1()
+                            .border_color(border_color)
+                            .rounded_sm()
+                            .px_1()
+                            .child(editor),
+                    )
+                    .render(cx),
+                )
+                .on_action(move |_: &menu::Confirm, _, cx| {
+                    confirm_entity.update(cx, |this, cx| {
+                        if let Some(editor) = &this.pending_new_pipeline {
+                            let text = editor.read(cx).text(cx).trim().to_string();
+                            this.finish_new_pipeline(text, cx);
+                        }
+                    }).log_err();
+                })
+                .on_action(move |_: &menu::Cancel, _, cx| {
+                    cancel_entity.update(cx, |this, cx| {
+                        this.cancel_new_pipeline(cx);
+                    }).log_err();
+                })
         });
 
         // [+ New Pipeline] button
@@ -3867,43 +3802,45 @@ Rules for the completion report:
     fn render_new_automation_ghost(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let editor = self.pending_new_automation.clone()?;
         let accent = cx.theme().colors().text_accent;
-        let icon_tint_bg = cx.theme().colors().element_background;
         let border_color = cx.theme().colors().border;
         let confirm_entity = cx.entity().downgrade();
         let cancel_entity = cx.entity().downgrade();
 
         Some(
-            Self::render_card_shell(
-                "new-automation-ghost",
-                accent,
-                IconName::Sparkle,
-                Color::Accent,
-                icon_tint_bg,
-                div()
-                    .flex_1()
-                    .border_1()
-                    .border_color(border_color)
-                    .rounded_sm()
-                    .px_1()
-                    .child(editor),
-                div(),
-                div(),
-                cx,
-            )
-            .on_action(move |_: &menu::Confirm, _, cx| {
-                confirm_entity.update(cx, |this, cx| {
-                    if let Some(editor) = &this.pending_new_automation {
-                        let text = editor.read(cx).text(cx).trim().to_string();
-                        this.finish_new_automation(text, cx);
-                    }
-                }).log_err();
-            })
-            .on_action(move |_: &menu::Cancel, _, cx| {
-                cancel_entity.update(cx, |this, cx| {
-                    this.cancel_new_automation(cx);
-                }).log_err();
-            })
-            .into_any_element(),
+            div()
+                .id("new-automation-ghost")
+                .child(
+                    card::DashboardCard::new(
+                        "new-automation-ghost-inner",
+                        card::CardIcon::new(IconName::Sparkle).color(Color::Accent),
+                        "",
+                    )
+                    .accent(accent)
+                    .custom_child(
+                        div()
+                            .flex_1()
+                            .border_1()
+                            .border_color(border_color)
+                            .rounded_sm()
+                            .px_1()
+                            .child(editor),
+                    )
+                    .render(cx),
+                )
+                .on_action(move |_: &menu::Confirm, _, cx| {
+                    confirm_entity.update(cx, |this, cx| {
+                        if let Some(editor) = &this.pending_new_automation {
+                            let text = editor.read(cx).text(cx).trim().to_string();
+                            this.finish_new_automation(text, cx);
+                        }
+                    }).log_err();
+                })
+                .on_action(move |_: &menu::Cancel, _, cx| {
+                    cancel_entity.update(cx, |this, cx| {
+                        this.cancel_new_automation(cx);
+                    }).log_err();
+                })
+                .into_any_element(),
         )
     }
 
@@ -4086,60 +4023,53 @@ impl Render for Dashboard {
                 }
             }))
             .size_full()
-            .justify_center()
             .overflow_hidden()
             .bg(cx.theme().colors().editor_background)
+            .relative()
             .child(
-                h_flex()
-                    .relative()
+                v_flex()
+                    .id("dashboard-scroll")
                     .size_full()
-                    .px_6()
-                    .max_w(px(1100.))
+                    .min_w_0()
+                    .px(DynamicSpacing::Base08.rems(cx))
+                    .pt(DynamicSpacing::Base16.rems(cx))
+                    .pb(DynamicSpacing::Base16.rems(cx))
+                    .gap(DynamicSpacing::Base16.rems(cx))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.scroll_handle)
+                    // Header
                     .child(
-                        v_flex()
-                            .id("dashboard-scroll")
-                            .size_full()
-                            .min_w_0()
-                            .pt_8()
-                            .pb_8()
-                            .max_w_full()
-                            .gap_6()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.scroll_handle)
-                            // Header
+                        h_flex()
+                            .w_full()
+                            .mb(DynamicSpacing::Base08.rems(cx))
+                            .gap(DynamicSpacing::Base08.rems(cx))
                             .child(
-                                h_flex()
-                                    .w_full()
-                                    .mb_4()
-                                    .gap_3()
-                                    .child(
-                                        Icon::new(IconName::AudioOn)
-                                            .size(IconSize::Medium)
-                                            .color(Color::Accent),
-                                    )
-                                    .child(
-                                        Headline::new("PostProd Tools").size(HeadlineSize::Small),
-                                    ),
+                                Icon::new(IconName::AudioOn)
+                                    .size(IconSize::Medium)
+                                    .color(Color::Accent),
                             )
-                            // Session status bar
-                            .child(self.render_session_status(cx))
-                            // Folder selectors
-                            .child(self.render_folder_row(window, cx))
-                            // Three-tier tool layout
-                            .child(self.render_tools_section(window, cx))
-                            // AI Agents
-                            .child(self.render_ai_agents_section(cx))
-                            // Scheduled automations (only shown when at least one is scheduled)
-                            .child(self.render_scheduled_section(cx))
-                            // Pipelines
-                            .child(self.render_pipelines_section(window, cx))
-                            // Automations
-                            .child(self.render_automations_section(window, cx))
-                            // Delivery status
-                            .child(self.render_delivery_status(cx)),
+                            .child(
+                                Headline::new("PostProd Tools").size(HeadlineSize::Small),
+                            ),
                     )
-                    .vertical_scrollbar_for(&self.scroll_handle, window, cx),
+                    // Session status bar
+                    .child(self.render_session_status(cx))
+                    // Folder selectors
+                    .child(self.render_folder_row(window, cx))
+                    // Three-tier tool layout
+                    .child(self.render_tools_section(window, cx))
+                    // AI Agents
+                    .child(self.render_ai_agents_section(cx))
+                    // Scheduled automations (only shown when at least one is scheduled)
+                    .child(self.render_scheduled_section(cx))
+                    // Pipelines
+                    .child(self.render_pipelines_section(window, cx))
+                    // Automations
+                    .child(self.render_automations_section(window, cx))
+                    // Delivery status
+                    .child(self.render_delivery_status(cx)),
             )
+            .vertical_scrollbar_for(&self.scroll_handle, window, cx)
     }
 }
 
