@@ -4,7 +4,7 @@
 //! `DashboardCard` (ListItem-based) — replacing the old `render_card_shell`
 //! manual layout for automation entries.
 
-use gpui::{AnyElement, App, Hsla, IntoElement, MouseButton, ParentElement, SharedString, Styled, WeakEntity};
+use gpui::{AnyElement, App, IntoElement, MouseButton, ParentElement, SharedString, Styled};
 use ui::{
     Color, Disclosure, DynamicSpacing, IconButton, IconName, IconSize, Label, LabelSize, Tooltip,
     prelude::*,
@@ -12,9 +12,8 @@ use ui::{
 use util::ResultExt as _;
 use workspace::OpenOptions;
 
-use crate::Dashboard;
-use crate::card::{CardIcon, DashboardCard};
-use crate::config::{AutomationEntry, icon_for_automation};
+use crate::card::{CardIcon, CardRenderContext, DashboardCard};
+use crate::config::icon_for_automation;
 use crate::paths::automations_dir_for;
 
 /// Build an automation card using `DashboardCard`.
@@ -25,21 +24,23 @@ use crate::paths::automations_dir_for;
 /// (param fields, schedule controls, context rows) are passed in because
 /// they require `&mut Dashboard` context to render.
 pub fn render_automation_card(
-    entry: &AutomationEntry,
-    idx: usize,
+    ctx: &CardRenderContext<'_>,
     icon_color: Color,
     badge_label: SharedString,
     badge_color: Color,
-    accent: Hsla,
-    is_expanded: bool,
-    is_scheduled: bool,
-    is_pending_delete: bool,
-    entity: WeakEntity<Dashboard>,
     param_fields: Vec<AnyElement>,
     schedule_controls: Option<AnyElement>,
     context_rows: Vec<AnyElement>,
     cx: &App,
 ) -> AnyElement {
+    let entry = ctx.entry;
+    let idx = ctx.idx;
+    let accent = ctx.accent;
+    let is_expanded = ctx.is_expanded;
+    let is_scheduled = ctx.is_scheduled;
+    let is_pending_delete = ctx.is_pending_delete;
+    let entity = ctx.entity.clone();
+
     let icon = icon_for_automation(&entry.icon);
     let entry_id = entry.id.clone();
     let entry_label: SharedString = entry.label.clone().into();
