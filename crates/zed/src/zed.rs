@@ -21,7 +21,7 @@ use assets::Assets;
 use breadcrumbs::Breadcrumbs;
 use client::zed_urls;
 use collections::VecDeque;
-use dashboard::ensure_dashboard;
+use dashboard::Dashboard;
 use debugger_ui::debugger_panel::DebugPanel;
 use editor::{Editor, MultiBuffer};
 use extension_host::ExtensionStore;
@@ -505,15 +505,11 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                     title,
                     language,
                 } => open_bundled_file(workspace, text.clone(), title, language, window, cx),
-                workspace::Event::Activate => {
-                    ensure_dashboard(workspace, window, cx);
-                }
+                workspace::Event::Activate => {}
                 _ => {}
             }
         })
         .detach();
-
-        ensure_dashboard(workspace, window, cx);
 
         #[cfg(not(any(test, target_os = "macos")))]
         initialize_file_watcher(window, cx);
@@ -726,6 +722,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             workspace_handle.clone(),
             cx.clone(),
         );
+        let dashboard_panel = Dashboard::load(workspace_handle.clone(), cx.clone());
         let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
 
         async fn add_panel_when_ready(
@@ -751,6 +748,7 @@ fn initialize_panels(window: &mut Window, cx: &mut Context<Workspace>) -> Task<a
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(notification_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(dashboard_panel, workspace_handle.clone(), cx.clone()),
             initialize_agent_panel(workspace_handle, cx.clone()).map(|r| r.log_err()),
         );
 
