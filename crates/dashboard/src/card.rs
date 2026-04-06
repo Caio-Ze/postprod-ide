@@ -3,9 +3,9 @@
 //! `DashboardCard` wraps Zed's `ListItem` to provide a consistent card shell
 //! used by automation, pipeline, and tool cards. It handles:
 //!
-//! - Start slot: themed icon container
-//! - Label + description
-//! - End slot: action buttons
+//! - Start slot: themed icon container (via `ListItem::start_slot`)
+//! - Label + description (via `ListItem::child`)
+//! - End slot: action buttons (via `ListItem::end_slot`)
 //! - Elevation shadow via `ElevationIndex::ElevatedSurface`
 //! - `DynamicSpacing` for all padding/gaps
 //! - Semantic colors only (no manual opacity calculations)
@@ -103,14 +103,15 @@ fn accent_strip(color: Hsla) -> Div {
 ///
 /// ```text
 /// ┌─[accent]──────────────────────────────────────┐
-/// │  [icon]  Title              [end-slot buttons] │
-/// │          Description                           │
+/// │  [ListItem: icon | Title        | end-slot]   │
+/// │                   Description                  │
 /// │  [expanded content: context, prompt, steps]    │
 /// └───────────────────────────────────────────────-┘
 /// ```
 ///
-/// Uses `ElevationIndex::ElevatedSurface` (via `elevation_2`) for the outer
-/// container and `DynamicSpacing` for all internal gaps and padding.
+/// The header row is a real `ListItem::new()` — hover states, spacing, and
+/// slot layout come from Zed's native component. The outer container adds
+/// `elevation_2` and an optional accent strip that `ListItem` can't provide.
 pub struct DashboardCard {
     id: SharedString,
     icon: CardIcon,
@@ -192,13 +193,11 @@ impl DashboardCard {
 
     /// Build the card element tree.
     pub fn render(self, cx: &App) -> impl IntoElement {
-        let hover_bg = cx.theme().colors().ghost_element_hover;
-
         // -- header row via ListItem ------------------------------------------
-        let label_el = Label::new(self.label.clone());
-
-        let content = {
-            let mut col = v_flex().flex_1().overflow_hidden().child(label_el);
+        let label_content = {
+            let mut col = v_flex()
+                .overflow_hidden()
+                .child(Label::new(self.label.clone()).truncate());
             if let Some(desc) = self.description {
                 col = col.child(
                     Label::new(desc)
@@ -209,8 +208,6 @@ impl DashboardCard {
             }
             col
         };
-
-        let icon_el = self.icon.into_element(cx);
 
         // Wrap end-slot in a propagation guard so button clicks don't fire the
         // card's on_click handler.
@@ -226,24 +223,27 @@ impl DashboardCard {
                 .child(slot)
         });
 
-        let header_row = {
-            let mut row = h_flex()
-                .flex_1()
-                .p(DynamicSpacing::Base08.rems(cx))
-                .gap(DynamicSpacing::Base12.rems(cx))
-                .items_center()
-                .child(icon_el)
-                .child(content);
+        let mut list_item = ListItem::new(self.id.clone())
+            .spacing(self.spacing)
+            .inset(true)
+            .start_slot(self.icon.into_element(cx))
+            .child(label_content);
 
-            if let Some(end) = end_slot_el {
-                row = row.child(end);
-            }
-            row
-        };
+        if let Some(end) = end_slot_el {
+            list_item = list_item.end_slot(end);
+        }
+
+        if let Some(group) = self.group_name.clone() {
+            list_item = list_item.group_name(group);
+        }
+
+        if let Some(handler) = self.on_click {
+            list_item = list_item.on_click(handler);
+        }
 
         // -- outer container --------------------------------------------------
         let inner = {
-            let mut col = v_flex().flex_1().child(header_row);
+            let mut col = v_flex().flex_1().child(list_item);
             if let Some(expanded) = self.expanded_content {
                 col = col.child(expanded);
             }
@@ -260,24 +260,13 @@ impl DashboardCard {
         };
 
         let mut card = div()
-            .id(self.id.clone())
             .w_full()
             .elevation_2(cx)
             .overflow_hidden()
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover_bg))
             .child(body);
 
         if let Some(accent_color) = self.accent {
             card = card.border_color(accent_color.opacity(0.5));
-        }
-
-        if let Some(group) = self.group_name {
-            card = card.group(group);
-        }
-
-        if let Some(handler) = self.on_click {
-            card = card.on_click(handler);
         }
 
         card
