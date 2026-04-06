@@ -132,7 +132,7 @@ pub struct SettingsContent {
     pub collaboration_panel: Option<PanelSettingsContent>,
 
     /// Configuration for the dashboard panel (PostProd).
-    pub dashboard_panel: Option<PanelSettingsContent>,
+    pub dashboard_panel: Option<DashboardPanelSettingsContent>,
 
     pub debugger: Option<DebuggerSettingsContent>,
 
@@ -647,6 +647,28 @@ pub struct PanelSettingsContent {
     /// Default: 240
     #[serde(serialize_with = "crate::serialize_optional_f32_with_two_decimal_places")]
     pub default_width: Option<f32>,
+}
+
+#[with_fallible_options]
+#[derive(Clone, Default, Serialize, Deserialize, JsonSchema, MergeFrom, Debug, PartialEq)]
+pub struct DashboardPanelSettingsContent {
+    /// Whether to show the panel button in the status bar.
+    ///
+    /// Default: true
+    pub button: Option<bool>,
+    /// Where to dock the panel.
+    ///
+    /// Default: right
+    pub dock: Option<DockPosition>,
+    /// Default width of the panel in pixels.
+    ///
+    /// Default: 360
+    #[serde(serialize_with = "crate::serialize_optional_f32_with_two_decimal_places")]
+    pub default_width: Option<f32>,
+    /// Whether the dashboard panel should open on startup.
+    ///
+    /// Default: true
+    pub starts_open: Option<bool>,
 }
 
 #[with_fallible_options]
