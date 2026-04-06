@@ -79,7 +79,7 @@ pub fn render_automation_card(
     // --- Action buttons (end slot) -------------------------------------------
 
     let action_buttons = h_flex()
-        .gap_2()
+        .gap(DynamicSpacing::Base08.rems(cx))
         .items_center()
         .child(
             Label::new(badge_label)
@@ -88,7 +88,7 @@ pub fn render_automation_card(
         )
         .child(
             h_flex()
-                .gap_1()
+                .gap(DynamicSpacing::Base04.rems(cx))
                 .on_mouse_down(MouseButton::Left, |_, window, cx| {
                     window.prevent_default();
                     cx.stop_propagation();
@@ -253,9 +253,9 @@ pub fn render_automation_card(
                         h_flex()
                             .w_full()
                             .pl(param_pl)
-                            .pr_2()
-                            .pb_1()
-                            .gap_2()
+                            .pr(DynamicSpacing::Base08.rems(cx))
+                            .pb(DynamicSpacing::Base04.rems(cx))
+                            .gap(DynamicSpacing::Base08.rems(cx))
                             .flex_wrap()
                             .children(param_fields),
                     )
@@ -265,14 +265,14 @@ pub fn render_automation_card(
                     el.child(
                         v_flex()
                             .w_full()
-                            .px_3()
-                            .pb_2()
-                            .gap_1()
+                            .px(DynamicSpacing::Base12.rems(cx))
+                            .pb(DynamicSpacing::Base08.rems(cx))
+                            .gap(DynamicSpacing::Base04.rems(cx))
                             .children(context_rows)
                             .child(
                                 div()
                                     .w_full()
-                                    .p_2()
+                                    .p(DynamicSpacing::Base08.rems(cx))
                                     .rounded_md()
                                     .bg(editor_bg)
                                     .child(
