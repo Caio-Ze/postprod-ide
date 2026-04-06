@@ -523,7 +523,7 @@ impl PickerDelegate for AutomationPickerDelegate {
                     log::error!("Failed to write pipeline step: {e}");
                 }
                 // Trigger dashboard reload
-                window.dispatch_action(Box::new(crate::ShowDashboard), cx);
+                window.dispatch_action(Box::new(crate::ToggleFocus), cx);
             }
             PickerMode::AddContextScript { source_path, .. } => {
                 let script_name = match &entry.kind {
@@ -537,7 +537,7 @@ impl PickerDelegate for AutomationPickerDelegate {
                 if let Err(e) = append_context_script_to_toml_at(source_path, &script_name) {
                     log::error!("Failed to add context script: {e}");
                 }
-                window.dispatch_action(Box::new(crate::ShowDashboard), cx);
+                window.dispatch_action(Box::new(crate::ToggleFocus), cx);
             }
             PickerMode::Run => {
                 match &entry.kind {
