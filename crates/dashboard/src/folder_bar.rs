@@ -3,6 +3,9 @@
 //! Extracted from `dashboard.rs` to keep the panel rendering modular.
 //! All functions take data by reference and return `AnyElement`, so the
 //! parent `Dashboard` stays in control of state mutations.
+//!
+//! Uses Zed's `ListItem` component for row layouts (session status, folder
+//! selectors) to get native hover, spacing, and slot layout for free.
 
 use std::path::PathBuf;
 
@@ -10,34 +13,49 @@ use gpui::{
     App, Corner, ExternalPaths, IntoElement, ParentElement, SharedString, Styled, Window,
 };
 use ui::{
-    ButtonLike, ButtonStyle, Callout, ContextMenu, DynamicSpacing, Icon, IconName, IconSize, Label,
-    LabelSize, PopoverMenu, prelude::*,
+    ButtonLike, ButtonStyle, ContextMenu, DynamicSpacing, Icon, IconName, IconSize, Label,
+    LabelSize, ListItem, ListItemSpacing, PopoverMenu, prelude::*,
 };
 use workspace::DraggedSelection;
 
 
-/// Render the session status callout.
+/// Render the session status row using `ListItem`.
 ///
-/// Shows a green callout with the session name when a Pro Tools session is
+/// Shows a check icon with the session name when a Pro Tools session is
 /// detected, or an empty element otherwise.
 pub(crate) fn render_session_status(
     session_name: &Option<String>,
     session_path: &Option<String>,
-    _cx: &App,
+    cx: &App,
 ) -> AnyElement {
     match session_name {
         Some(name) => {
-            let callout = Callout::new()
-                .severity(ui::Severity::Success)
-                .icon(IconName::Check)
-                .title(format!("Session: {}", name));
+            let mut label_content = v_flex()
+                .overflow_hidden()
+                .child(Label::new(format!("Session: {}", name)).truncate());
             if let Some(path) = session_path {
-                callout.description(path.clone()).into_any_element()
-            } else {
-                callout.into_any_element()
+                label_content = label_content.child(
+                    Label::new(path.clone())
+                        .color(Color::Muted)
+                        .size(LabelSize::Small)
+                        .truncate(),
+                );
             }
+
+            ListItem::new("session-status")
+                .spacing(ListItemSpacing::Dense)
+                .inset(true)
+                .start_slot(
+                    Icon::new(IconName::Check)
+                        .color(Color::Success)
+                        .size(IconSize::Small),
+                )
+                .child(label_content)
+                .into_any_element()
         }
-        None => div().into_any_element(),
+        None => div()
+            .h(DynamicSpacing::Base08.rems(cx))
+            .into_any_element(),
     }
 }
 
@@ -178,32 +196,32 @@ fn build_folder_dropdown(
 
     let border_hsla = icon_color.color(cx);
 
-    let label_el = h_flex()
-        .gap(DynamicSpacing::Base02.rems(cx))
-        .items_center()
-        .child(
-            Icon::new(IconName::Folder)
-                .color(icon_color)
-                .size(IconSize::XSmall),
-        )
+    let label_content = v_flex()
+        .overflow_hidden()
         .child(
             Label::new(SharedString::from(format!("{}:", tag)))
                 .size(LabelSize::Small)
                 .color(Color::Muted),
         )
-        .child(
-            Label::new(display_name)
-                .color(name_color)
-                .size(LabelSize::Small),
-        );
+        .child(Label::new(display_name).color(name_color).size(LabelSize::Small).truncate());
 
-    let trigger = ButtonLike::new(SharedString::from(format!("{}-trigger", id)))
-        .child(label_el)
-        .child(
+    let folder_row = ListItem::new(SharedString::from(format!("{}-row", id)))
+        .spacing(ListItemSpacing::Dense)
+        .inset(true)
+        .start_slot(
+            Icon::new(IconName::Folder)
+                .color(icon_color)
+                .size(IconSize::XSmall),
+        )
+        .child(label_content)
+        .end_slot(
             Icon::new(IconName::ChevronUpDown)
                 .size(IconSize::XSmall)
                 .color(Color::Muted),
-        )
+        );
+
+    let trigger = ButtonLike::new(SharedString::from(format!("{}-trigger", id)))
+        .child(folder_row)
         .style(ButtonStyle::Transparent)
         .full_width();
 
