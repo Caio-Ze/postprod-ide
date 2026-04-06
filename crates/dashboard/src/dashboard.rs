@@ -1,4 +1,5 @@
 mod automation_picker;
+#[allow(unused)]
 pub(crate) mod card;
 mod config;
 mod hotkeys;
