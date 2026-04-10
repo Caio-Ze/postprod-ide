@@ -85,6 +85,18 @@ pub struct ProjectSettingsContent {
     ///
     /// Default: false
     pub disable_ai: Option<SaturatingBool>,
+
+    /// Name of a settings profile (defined in user settings under `profiles`)
+    /// to activate when an item from this worktree is focused. The profile
+    /// itself is still defined in user settings; this field only names
+    /// which profile to activate.
+    ///
+    /// If the named profile is not defined in user settings, nothing is
+    /// activated — collaborators who clone a project without the profile
+    /// defined see default behavior, not an error.
+    ///
+    /// Default: null
+    pub active_profile: Option<String>,
 }
 
 #[with_fallible_options]
