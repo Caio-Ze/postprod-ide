@@ -5806,31 +5806,39 @@ impl Workspace {
         self.follower_states.contains_key(&id.into())
     }
 
-    /// Read `active_profile` from the `.zed/settings.json` of the worktree
-    /// containing the currently-focused item and apply it as the active
-    /// settings profile. Items without a project path (terminals, Welcome
-    /// tabs) leave the current profile unchanged. Idempotent: no-op if
-    /// the target equals the current profile.
+    /// Apply the `active_profile` declared in the effective active
+    /// worktree's root `.zed/settings.json` as the active settings profile.
     ///
-    /// Called from the `Workspace::new` deferred setup (initial activation),
-    /// from `active_item_path_changed` (focus changes), and from
-    /// `MultiWorkspace::activate` (sidebar workspace switch).
+    /// The "effective active worktree" is identified using the same
+    /// ordered logic as `TitleBar::effective_active_worktree`, so the
+    /// profile and the title bar always agree on "which worktree is
+    /// active":
+    /// 1. The worktree containing `Project::active_repository` — the
+    ///    repository of the currently active file (via the
+    ///    most-specific-repo resolution from PR #51898). Picking a folder
+    ///    in the recent-project menu sets the active repository (PR #53645),
+    ///    so user picks flow through this tier.
+    /// 2. First visible worktree as a final fallback.
+    ///
+    /// Called from `Workspace::new`'s deferred setup (initial activation)
+    /// and `MultiWorkspace::activate` (sidebar workspace switch). Not
+    /// called on pane/tab focus changes — individual file clicks should
+    /// not change the active profile, consistent with how the title bar
+    /// name behaves.
     ///
     /// Graceful semantics: if the named profile is not defined in the
     /// user's global `profiles` section, `UserSettingsContentExt::for_profile`
     /// returns `None` during recompute and no overrides apply — so
     /// collaborators who clone a project without the profile defined see
-    /// default behavior rather than an error.
+    /// default behavior rather than an error. Idempotent: no-op if the
+    /// target equals the current profile.
     pub(crate) fn apply_local_active_profile(&self, cx: &mut App) {
-        let Some(active_worktree_id) = self
-            .active_project_path(cx)
-            .map(|project_path| project_path.worktree_id)
-        else {
+        let Some(worktree_id) = self.effective_active_worktree_id(cx) else {
             return;
         };
 
         let target = SettingsStore::global(cx)
-            .local_settings(active_worktree_id)
+            .local_settings(worktree_id)
             .find(|(path, _)| path.is_empty())
             .and_then(|(_, content)| content.active_profile.clone());
 
@@ -5848,6 +5856,33 @@ impl Workspace {
             }
             (None, None) => {}
         }
+    }
+
+    /// Identify the effective active worktree using the same logic as
+    /// `TitleBar::effective_active_worktree`. Duplicated here to keep
+    /// this code focused on activation — a follow-up could extract
+    /// `effective_active_worktree` onto Workspace and have both call
+    /// sites share it.
+    fn effective_active_worktree_id(&self, cx: &App) -> Option<WorktreeId> {
+        let project = self.project.read(cx);
+
+        if let Some(repo) = project.active_repository(cx) {
+            let repo = repo.read(cx);
+            let repo_path = &repo.work_directory_abs_path;
+            for worktree in project.visible_worktrees(cx) {
+                let worktree_path = worktree.read(cx).abs_path();
+                if worktree_path == *repo_path
+                    || worktree_path.starts_with(repo_path.as_ref())
+                {
+                    return Some(worktree.read(cx).id());
+                }
+            }
+        }
+
+        project
+            .visible_worktrees(cx)
+            .next()
+            .map(|worktree| worktree.read(cx).id())
     }
 
     fn active_item_path_changed(
@@ -5870,7 +5905,6 @@ impl Workspace {
         }
 
         self.update_window_title(window, cx);
-        self.apply_local_active_profile(cx);
     }
 
     fn update_window_title(&mut self, window: &mut Window, cx: &mut App) {
