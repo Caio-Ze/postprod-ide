@@ -451,7 +451,18 @@ impl Dashboard {
                 cx.set_global(settings::ActiveSettingsProfileName(name));
             }
             None => {
-                cx.remove_global::<settings::ActiveSettingsProfileName>();
+                // Guard: `remove_global` panics if the global is absent. This
+                // function is called from three sites (Dashboard::new,
+                // switch_config_root, workspace::Event::Activate handler),
+                // and consecutive `None` calls are possible — e.g. title-bar
+                // picker switches to a no-profile folder (clears global),
+                // then Ctrl+Cmd+Tab switches to another workspace whose folder
+                // also has no profile (tries to clear again → panic without
+                // this guard). Mirrors the pattern in
+                // `settings_profile_selector.rs::update_active_profile_name_global`.
+                if cx.has_global::<settings::ActiveSettingsProfileName>() {
+                    cx.remove_global::<settings::ActiveSettingsProfileName>();
+                }
             }
         }
     }
