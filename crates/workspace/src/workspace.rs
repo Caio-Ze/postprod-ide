@@ -63,9 +63,9 @@ use gpui::{
     Action, AnyEntity, AnyView, AnyWeakView, App, AsyncApp, AsyncWindowContext, Axis, Bounds,
     Context, CursorStyle, Decorations, DragMoveEvent, Entity, EntityId, EventEmitter, FocusHandle,
     Focusable, Global, HitboxBehavior, Hsla, KeyContext, Keystroke, ManagedView, MouseButton,
-    PathPromptOptions, Point, PromptLevel, Render, ResizeEdge, Size, Stateful, Subscription,
-    SystemWindowTabController, Task, Tiling, WeakEntity, WindowBounds, WindowHandle, WindowId,
-    WindowOptions, actions, canvas, point, relative, size, transparent_black,
+    PathPromptOptions, Point, PromptLevel, ReadGlobal, Render, ResizeEdge, Size, Stateful,
+    Subscription, SystemWindowTabController, Task, Tiling, WeakEntity, WindowBounds, WindowHandle,
+    WindowId, WindowOptions, actions, canvas, point, relative, size, transparent_black,
 };
 pub use history_manager::*;
 pub use item::{
@@ -111,7 +111,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use session::AppSession;
 use settings::{
-    CenteredPaddingSettings, Settings, SettingsLocation, SettingsStore, update_settings_file,
+    ActiveSettingsProfileName, CenteredPaddingSettings, Settings, SettingsLocation, SettingsStore,
+    update_settings_file,
 };
 
 use sqlez::{
@@ -1767,6 +1768,7 @@ impl Workspace {
         cx.defer_in(window, move |this, window, cx| {
             this.update_window_title(window, cx);
             this.show_initial_notifications(cx);
+            this.apply_local_active_profile(cx);
         });
 
         let mut center = PaneGroup::new(center_pane.clone());
@@ -5789,6 +5791,50 @@ impl Workspace {
         self.follower_states.contains_key(&id.into())
     }
 
+    /// Read `active_profile` from the `.zed/settings.json` of the worktree
+    /// containing the currently-focused item and apply it as the active
+    /// settings profile. Items without a project path (terminals, Welcome
+    /// tabs) leave the current profile unchanged. Idempotent: no-op if
+    /// the target equals the current profile.
+    ///
+    /// Called from the `Workspace::new` deferred setup (initial activation),
+    /// from `active_item_path_changed` (focus changes), and from
+    /// `MultiWorkspace::activate` (sidebar workspace switch).
+    ///
+    /// Graceful semantics: if the named profile is not defined in the
+    /// user's global `profiles` section, `UserSettingsContentExt::for_profile`
+    /// returns `None` during recompute and no overrides apply — so
+    /// collaborators who clone a project without the profile defined see
+    /// default behavior rather than an error.
+    pub(crate) fn apply_local_active_profile(&self, cx: &mut App) {
+        let Some(active_worktree_id) = self
+            .active_project_path(cx)
+            .map(|project_path| project_path.worktree_id)
+        else {
+            return;
+        };
+
+        let target = SettingsStore::global(cx)
+            .local_settings(active_worktree_id)
+            .find(|(path, _)| path.is_empty())
+            .and_then(|(_, content)| content.active_profile.clone());
+
+        let current = cx
+            .try_global::<ActiveSettingsProfileName>()
+            .map(|g| g.0.clone());
+
+        match (target, current) {
+            (Some(new_name), Some(old_name)) if new_name == old_name => {}
+            (Some(new_name), _) => {
+                cx.set_global(ActiveSettingsProfileName(new_name));
+            }
+            (None, Some(_)) => {
+                cx.remove_global::<ActiveSettingsProfileName>();
+            }
+            (None, None) => {}
+        }
+    }
+
     fn active_item_path_changed(
         &mut self,
         focus_changed: bool,
@@ -5809,6 +5855,7 @@ impl Workspace {
         }
 
         self.update_window_title(window, cx);
+        self.apply_local_active_profile(cx);
     }
 
     fn update_window_title(&mut self, window: &mut Window, cx: &mut App) {

@@ -1456,8 +1456,13 @@ impl MultiWorkspace {
         // (see crates/dashboard/src/dashboard.rs:846-862).
         // Recursion-safe: subscription handler calls activate() with same workspace,
         // which exits early at the self.workspace() == &workspace guard.
-        self.workspace()
-            .update(cx, |_, cx| cx.emit(WorkspaceEvent::Activate));
+        // Also re-apply the per-worktree settings profile so switching
+        // workspaces via the sidebar activates the focused worktree's
+        // `active_profile` (see Workspace::apply_local_active_profile).
+        self.workspace().update(cx, |workspace, cx| {
+            cx.emit(WorkspaceEvent::Activate);
+            workspace.apply_local_active_profile(cx);
+        });
         self.focus_active_workspace(window, cx);
         cx.notify();
     }
