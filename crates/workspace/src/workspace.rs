@@ -10808,7 +10808,7 @@ mod tests {
     };
     use project::{Project, ProjectEntryId};
     use serde_json::json;
-    use settings::SettingsStore;
+    use settings::{LocalSettingsKind, LocalSettingsPath, SettingsStore};
     use util::path;
     use util::rel_path::rel_path;
 
@@ -15210,6 +15210,162 @@ mod tests {
                 workspace.right_dock().read(cx).panels_len(),
                 2,
                 "Both panels should still be in the right dock"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_apply_local_active_profile_with_declared_worktree(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(path!("/root"), json!({ "main.rs": "" }))
+            .await;
+
+        let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
+        let (workspace, cx) = cx.add_window_view(|window, cx| {
+            Workspace::test_new(project.clone(), window, cx)
+        });
+        cx.run_until_parked();
+
+        let worktree_id = project.update(cx, |project, cx| {
+            project.worktrees(cx).next().unwrap().read(cx).id()
+        });
+
+        // Clear any startup state so this test starts from a known baseline.
+        cx.update(|_, cx| {
+            if cx.has_global::<ActiveSettingsProfileName>() {
+                cx.remove_global::<ActiveSettingsProfileName>();
+            }
+        });
+
+        // Inject a .zed/settings.json with `active_profile: "Studio"` at the
+        // worktree root (empty relative path).
+        cx.update(|_, cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store
+                    .set_local_settings(
+                        worktree_id,
+                        LocalSettingsPath::InWorktree(rel_path("").into()),
+                        LocalSettingsKind::Settings,
+                        Some(r#"{"active_profile": "Studio"}"#),
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+
+        // Baseline: global should still be unset until we apply.
+        cx.update(|_, cx| {
+            assert!(
+                !cx.has_global::<ActiveSettingsProfileName>(),
+                "ActiveSettingsProfileName should be unset before apply"
+            );
+        });
+
+        workspace.update(cx, |workspace, cx| {
+            workspace.apply_local_active_profile(cx);
+        });
+
+        cx.update(|_, cx| {
+            assert_eq!(
+                cx.try_global::<ActiveSettingsProfileName>()
+                    .map(|p| p.0.clone()),
+                Some("Studio".to_string()),
+                "declared active_profile should be applied to the global"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_apply_local_active_profile_undeclared_preserves_picker_selection(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(path!("/root"), json!({ "main.rs": "" }))
+            .await;
+
+        let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
+        let (workspace, cx) = cx.add_window_view(|window, cx| {
+            Workspace::test_new(project.clone(), window, cx)
+        });
+        cx.run_until_parked();
+
+        // Simulate a manual selection made through settings_profile_selector:
+        // set the runtime global directly, mirroring what the picker does on
+        // confirm (cx.set_global(ActiveSettingsProfileName(...))).
+        cx.update(|_, cx| {
+            cx.set_global(ActiveSettingsProfileName("Streaming".to_string()));
+        });
+
+        // Do NOT inject any .zed/settings.json for the worktree — this is the
+        // "undeclared" case we want to test.
+        workspace.update(cx, |workspace, cx| {
+            workspace.apply_local_active_profile(cx);
+        });
+
+        cx.update(|_, cx| {
+            assert_eq!(
+                cx.try_global::<ActiveSettingsProfileName>()
+                    .map(|p| p.0.clone()),
+                Some("Streaming".to_string()),
+                "an undeclared worktree must not clobber a manual picker selection"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_apply_local_active_profile_declaration_overrides_picker_selection(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(path!("/root"), json!({ "main.rs": "" }))
+            .await;
+
+        let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
+        let (workspace, cx) = cx.add_window_view(|window, cx| {
+            Workspace::test_new(project.clone(), window, cx)
+        });
+        cx.run_until_parked();
+
+        let worktree_id = project.update(cx, |project, cx| {
+            project.worktrees(cx).next().unwrap().read(cx).id()
+        });
+
+        // Simulate a manual picker selection first.
+        cx.update(|_, cx| {
+            cx.set_global(ActiveSettingsProfileName("Streaming".to_string()));
+        });
+
+        // Now inject a declaration that disagrees with the picker.
+        cx.update(|_, cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store
+                    .set_local_settings(
+                        worktree_id,
+                        LocalSettingsPath::InWorktree(rel_path("").into()),
+                        LocalSettingsKind::Settings,
+                        Some(r#"{"active_profile": "Studio"}"#),
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+
+        workspace.update(cx, |workspace, cx| {
+            workspace.apply_local_active_profile(cx);
+        });
+
+        cx.update(|_, cx| {
+            assert_eq!(
+                cx.try_global::<ActiveSettingsProfileName>()
+                    .map(|p| p.0.clone()),
+                Some("Studio".to_string()),
+                "a declared active_profile should override a manual picker selection on activation"
             );
         });
     }
