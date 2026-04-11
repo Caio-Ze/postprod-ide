@@ -5723,6 +5723,19 @@ impl Workspace {
     /// collaborators who clone a project without the profile defined see
     /// default behavior rather than an error. Idempotent: no-op if the
     /// target equals the current profile.
+    ///
+    /// Interaction with `settings_profile_selector` (the profile picker):
+    /// the picker and this function both mutate the runtime global
+    /// `ActiveSettingsProfileName`. When the effective worktree declares
+    /// an `active_profile`, the declaration wins on every activation
+    /// event — any transient picker override is replaced. When the
+    /// effective worktree does *not* declare one, this function is a
+    /// no-op: a manual picker selection is preserved until the user
+    /// moves focus to a worktree that declares its own profile. This
+    /// mirrors how `theme` composes with the Theme Selector: declarative
+    /// state is a project-level default, imperative picker actions are
+    /// overrides that survive until a new declarative value asserts
+    /// itself.
     pub(crate) fn apply_local_active_profile(&self, cx: &mut App) {
         let Some(worktree_id) = self.effective_active_worktree_id(cx) else {
             return;
@@ -5742,10 +5755,10 @@ impl Workspace {
             (Some(new_name), _) => {
                 cx.set_global(ActiveSettingsProfileName(new_name));
             }
-            (None, Some(_)) => {
-                cx.remove_global::<ActiveSettingsProfileName>();
-            }
-            (None, None) => {}
+            // Worktree declares no `active_profile`: leave the global
+            // alone so a manual picker selection is preserved. See the
+            // doc comment above for the declarative/imperative rationale.
+            (None, _) => {}
         }
     }
 
