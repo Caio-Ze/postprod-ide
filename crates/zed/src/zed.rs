@@ -505,13 +505,14 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                     title,
                     language,
                 } => open_bundled_file(workspace, text.clone(), title, language, window, cx),
-                // Per-folder settings profile switching is handled by the
-                // Dashboard panel: each Dashboard subscribes to its own
-                // workspace's `Activate` event and re-applies its stored
-                // `settings_profile` as the global `ActiveSettingsProfileName`.
-                // See `crates/dashboard/src/dashboard.rs` (`apply_settings_profile`,
-                // `_activate_subscription`) and `private/reference/MULTIFOLDER_DASHBOARD.md`
-                // § "Settings profile switching". Intentionally no-op here.
+                // Per-worktree settings profile activation runs directly in
+                // `MultiWorkspace::activate`: after emitting
+                // `WorkspaceEvent::Activate`, it calls
+                // `workspace.apply_local_active_profile(cx)` which reads the
+                // effective active worktree's root `.zed/settings.json`
+                // `active_profile` field and sets the
+                // `ActiveSettingsProfileName` global. Nothing else to do here.
+                // See `private/specs/persistent-active-profile.md`.
                 workspace::Event::Activate => {}
                 _ => {}
             }
