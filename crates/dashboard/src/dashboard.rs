@@ -268,17 +268,6 @@ pub struct Dashboard {
     workspace: WeakEntity<Workspace>,
     last_worktree_override: Option<WorktreeId>,
     _workspace_observation: Option<Subscription>,
-    // Subscription to `workspace::Event::Activate` — re-applies `settings_profile`
-    // as a global when MultiWorkspace switches the active workspace. Without this,
-    // per-folder settings profiles only work for title-bar folder switches (which
-    // go through `switch_config_root()`), not MultiWorkspace sidebar switches.
-    // See `private/reference/MULTIFOLDER_DASHBOARD.md` § "Settings profile switching".
-    _activate_subscription: Option<Subscription>,
-    // Settings profile name read from this folder's `AGENTS.toml` (`profile` field,
-    // top-level). `None` means "no profile" — Zed falls back to base settings.
-    // Kept on the struct so the `Activate` subscription can re-apply it when
-    // MultiWorkspace switches active workspace.
-    settings_profile: Option<String>,
     focus_handle: FocusHandle,
     pub(crate) config_root: PathBuf,
     runtime_path: PathBuf,
@@ -430,43 +419,6 @@ pub(crate) fn resolve_tool_command(
 }
 
 impl Dashboard {
-    /// Apply a per-folder settings profile as the global
-    /// `settings::ActiveSettingsProfileName`. Called at three sites that
-    /// transition the active config context:
-    ///   1. `Dashboard::new()` — initial load.
-    ///   2. `switch_config_root()` — title-bar folder switch (within one workspace).
-    ///   3. The `workspace::Event::Activate` subscription — MultiWorkspace
-    ///      switches the active workspace via its sidebar.
-    ///
-    /// `None` means "no profile declared in this folder's AGENTS.toml". In that
-    /// case the previous profile is *cleared* via `remove_global` (Q1 = option a
-    /// per 2026-04-07 design discussion), so the newly-active folder falls back
-    /// cleanly to Zed's base settings rather than inheriting the previous
-    /// folder's profile. `SettingsStore::observe_active_settings_profile_name`
-    /// (registered in `settings::init()`) picks up the change and recomputes
-    /// settings globally.
-    fn apply_settings_profile(profile: Option<String>, cx: &mut App) {
-        match profile {
-            Some(name) => {
-                cx.set_global(settings::ActiveSettingsProfileName(name));
-            }
-            None => {
-                // Guard: `remove_global` panics if the global is absent. This
-                // function is called from three sites (Dashboard::new,
-                // switch_config_root, workspace::Event::Activate handler),
-                // and consecutive `None` calls are possible — e.g. title-bar
-                // picker switches to a no-profile folder (clears global),
-                // then Ctrl+Cmd+Tab switches to another workspace whose folder
-                // also has no profile (tries to clear again → panic without
-                // this guard). Mirrors the pattern in
-                // `settings_profile_selector.rs::update_active_profile_name_global`.
-                if cx.has_global::<settings::ActiveSettingsProfileName>() {
-                    cx.remove_global::<settings::ActiveSettingsProfileName>();
-                }
-            }
-        }
-    }
-
     pub async fn load(
         workspace: WeakEntity<Workspace>,
         mut cx: gpui::AsyncWindowContext,
@@ -479,9 +431,6 @@ impl Dashboard {
                 .map(|arc_path| arc_path.to_path_buf())
                 .unwrap_or_else(suite_root);
 
-            // Settings profile is applied inside `Dashboard::new()` below, which
-            // both stores it on the struct and sets the global. We intentionally
-            // do NOT call `apply_settings_profile` here to avoid double-apply.
             Dashboard::new(workspace, config_root, cx)
         })
     }
@@ -500,12 +449,7 @@ impl Dashboard {
         let recent_destinations = read_recent_destinations(&config_root);
         let (automations, automations_error) = load_automations_registry(&config_root);
         let (tools, tools_error) = load_tools_registry(&config_root);
-        let (backends, agent_launchers, _agents_error, config_profile) = load_agents_config(&config_root);
-        // Apply the profile immediately so the very first render uses the
-        // correct settings. Also stored on the struct below so the
-        // `workspace::Event::Activate` subscription can re-apply it on
-        // MultiWorkspace switches.
-        Self::apply_settings_profile(config_profile.clone(), cx);
+        let (backends, agent_launchers, _agents_error) = load_agents_config(&config_root);
         let default_contexts = config::load_default_contexts(&config_root);
         let background_tools = read_background_tools(&config_root);
         let collapsed_sections = read_collapsed_sections(&config_root);
@@ -741,7 +685,7 @@ impl Dashboard {
                     let Ok(config_root) = config_root else { break };
                     let loaded_from = config_root.clone();
 
-                    let (backends, agent_launchers, _err, _profile) = cx
+                    let (backends, agent_launchers, _err) = cx
                         .background_executor()
                         .spawn(async move { load_agents_config(&config_root) })
                         .await;
@@ -854,36 +798,10 @@ impl Dashboard {
                 })
             });
 
-            // Subscribe to `workspace::Event::Activate` — fires when
-            // MultiWorkspace switches the active Workspace entity (sidebar
-            // click). Each Workspace has its own Dashboard, so this
-            // subscription is scoped to THIS dashboard's workspace: only fires
-            // when THIS workspace becomes active. When that happens, re-apply
-            // our stored `settings_profile` as the global so Zed's settings
-            // recompute with the right per-folder overrides. Without this,
-            // the previously-active workspace's profile stays in effect.
-            // See `MultiWorkspace::activate()` in crates/workspace/src/multi_workspace.rs:
-            // it emits `WorkspaceEvent::Activate` on the newly-active workspace.
-            let activate_subscription = workspace.weak_handle().upgrade().map(|ws_entity| {
-                cx.subscribe(
-                    &ws_entity,
-                    |dashboard: &mut Dashboard, _workspace_entity, event, cx| {
-                        if let workspace::Event::Activate = event {
-                            Self::apply_settings_profile(
-                                dashboard.settings_profile.clone(),
-                                cx,
-                            );
-                        }
-                    },
-                )
-            });
-
             Self {
                 workspace: workspace.weak_handle(),
                 last_worktree_override: None,
                 _workspace_observation: workspace_observation,
-                _activate_subscription: activate_subscription,
-                settings_profile: config_profile,
                 focus_handle: cx.focus_handle(),
                 config_root,
                 runtime_path,
@@ -1072,7 +990,7 @@ impl Dashboard {
         // Immediate reload of all config
         let (tools, tools_error) = load_tools_registry(&self.config_root);
         let (automations, automations_error) = load_automations_registry(&self.config_root);
-        let (backends, agent_launchers, _, config_profile) = load_agents_config(&self.config_root);
+        let (backends, agent_launchers, _) = load_agents_config(&self.config_root);
 
         self.tools = tools;
         self.tools_error = tools_error;
@@ -1081,13 +999,6 @@ impl Dashboard {
         self.default_contexts = config::load_default_contexts(&self.config_root);
         self.backends = backends;
         self.agent_launchers = agent_launchers;
-
-        // Update stored profile and apply it globally. Stored on the struct
-        // so the `workspace::Event::Activate` subscription can re-apply it
-        // later when MultiWorkspace switches back to this workspace.
-        // `None` clears any previously-set profile — see `apply_settings_profile`.
-        self.settings_profile = config_profile.clone();
-        Self::apply_settings_profile(config_profile, cx);
 
         // Reload per-folder state
         self.active_folder = read_active_folder(&self.config_root);
