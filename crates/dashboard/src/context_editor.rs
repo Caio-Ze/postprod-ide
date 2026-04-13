@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use gpui::{AnyElement, App, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, WeakEntity};
 use ui::{
-    ButtonLike, ButtonStyle, Color, DynamicSpacing, Icon, IconButton, IconName, IconSize, Label,
+    ButtonLike, ButtonStyle, Color, DynamicSpacing, Icon, IconName, IconSize, Label,
     LabelSize, prelude::*,
 };
 use util::ResultExt as _;
@@ -104,7 +104,6 @@ pub(crate) fn render_context_editor(
     cx: &App,
 ) -> Vec<AnyElement> {
     let mut elements = Vec::new();
-    let context_count = contexts.len();
 
     // "Use default context" toggle
     let toggle_entity = entity.clone();
@@ -137,16 +136,9 @@ pub(crate) fn render_context_editor(
     );
 
     // Context entry rows
-    for (i, ctx) in contexts.iter().enumerate() {
+    for (_i, ctx) in contexts.iter().enumerate() {
         let badge = if ctx.source_type == "script" { "script" } else { "path" };
         let label_text = format!("{}  [{}]", ctx.label, badge);
-
-        let up_entity = entity.clone();
-        let down_entity = entity.clone();
-        let remove_entity = entity.clone();
-        let auto_id = automation_id.to_string();
-        let auto_id2 = automation_id.to_string();
-        let auto_id3 = automation_id.to_string();
 
         let row = h_flex()
             .gap(DynamicSpacing::Base04.rems(cx))
@@ -157,36 +149,7 @@ pub(crate) fn render_context_editor(
                     .size(LabelSize::XSmall)
                     .color(if ctx.required { Color::Default } else { Color::Muted }),
             )
-            .child(div().flex_1())
-            .child(
-                IconButton::new(format!("ctx-up-{}-{}", automation_id, i), IconName::ArrowUp)
-                    .size(ui::ButtonSize::Compact)
-                    .disabled(i == 0)
-                    .on_click(move |_, _, cx| {
-                        up_entity.update(cx, |this, cx| {
-                            this.reorder_context_entry(&auto_id, i, -1, cx);
-                        }).log_err();
-                    }),
-            )
-            .child(
-                IconButton::new(format!("ctx-down-{}-{}", automation_id, i), IconName::ArrowDown)
-                    .size(ui::ButtonSize::Compact)
-                    .disabled(i >= context_count - 1)
-                    .on_click(move |_, _, cx| {
-                        down_entity.update(cx, |this, cx| {
-                            this.reorder_context_entry(&auto_id2, i, 1, cx);
-                        }).log_err();
-                    }),
-            )
-            .child(
-                IconButton::new(format!("ctx-remove-{}-{}", automation_id, i), IconName::Close)
-                    .size(ui::ButtonSize::Compact)
-                    .on_click(move |_, _, cx| {
-                        remove_entity.update(cx, |this, cx| {
-                            this.remove_context_entry(&auto_id3, i, cx);
-                        }).log_err();
-                    }),
-            );
+            .child(div().flex_1());
 
         elements.push(row.into_any_element());
     }
