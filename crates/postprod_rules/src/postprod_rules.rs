@@ -19,6 +19,7 @@ use platform_title_bar::PlatformTitleBar;
 use release_channel::ReleaseChannel;
 use rope::Rope;
 use settings::{ActionSequence, Settings};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -30,11 +31,7 @@ use workspace::{MultiWorkspace, Workspace, WorkspaceSettings, client_side_decora
 use zed_actions::assistant::InlineAssist;
 
 pub fn init(cx: &mut App) {
-    cx.observe_new::<Workspace>(|_, _, _cx| {
-        // Action registration happens via the key_context on the window element.
-        // No global state needed — NoteStore is created by Dashboard per-project.
-    })
-    .detach();
+    cx.observe_new::<Workspace>(|_, _, _cx| {}).detach();
 }
 
 actions!(
@@ -60,7 +57,6 @@ pub trait InlineAssistDelegate {
         cx: &mut Context<PostProdRules>,
     );
 
-    /// Returns whether the Agent panel was focused.
     fn focus_agent_panel(
         &self,
         workspace: &mut Workspace,
@@ -69,15 +65,60 @@ pub trait InlineAssistDelegate {
     ) -> bool;
 }
 
-/// Opens or focuses the PostProd Rules window.
-///
-/// Unlike upstream's `open_rules_library()` which uses a global PromptStore,
-/// this accepts an `Entity<NoteStore>` because our store is per-project.
+// ---------------------------------------------------------------------------
+// Public types for Dashboard integration
+// ---------------------------------------------------------------------------
+
+/// Selection target for deep linking into the window.
+pub enum SelectionTarget {
+    Note(NoteId),
+    PromptFile(String),
+}
+
+/// Lightweight automation info passed by Dashboard.
+#[derive(Clone, Debug)]
+pub struct AutomationInfo {
+    pub id: String,
+    pub label: String,
+    pub prompt_file: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Internal types
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq)]
+enum PickerSection {
+    Prompt,
+    DefaultContext,
+}
+
+#[derive(Clone, Debug)]
+struct PromptFileEntry {
+    filename: String,
+    display_name: String,
+    path: PathBuf,
+    section: PickerSection,
+    is_symlink: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum ActiveEntryId {
+    Note(NoteId),
+    File(PathBuf),
+}
+
+// ---------------------------------------------------------------------------
+// Window open
+// ---------------------------------------------------------------------------
+
 pub fn open_postprod_rules(
     store: Entity<NoteStore>,
     language_registry: Arc<LanguageRegistry>,
     inline_assist_delegate: Box<dyn InlineAssistDelegate>,
-    note_to_select: Option<NoteId>,
+    config_root: PathBuf,
+    automations: Vec<AutomationInfo>,
+    selection: Option<SelectionTarget>,
     cx: &mut App,
 ) -> Task<Result<WindowHandle<PostProdRules>>> {
     cx.spawn(async move |cx| {
@@ -89,13 +130,18 @@ pub fn open_postprod_rules(
             if let Some(existing_window) = existing_window {
                 existing_window
                     .update(cx, |rules, window, cx| {
-                        if let Some(note_to_select) = note_to_select {
-                            rules.load_note(note_to_select, true, window, cx);
+                        match &selection {
+                            Some(SelectionTarget::Note(id)) => {
+                                rules.load_note(*id, true, window, cx);
+                            }
+                            Some(SelectionTarget::PromptFile(filename)) => {
+                                rules.select_prompt_file(filename, window, cx);
+                            }
+                            None => {}
                         }
                         window.activate_window()
                     })
                     .ok();
-
                 Some(existing_window)
             } else {
                 None
@@ -138,7 +184,9 @@ pub fn open_postprod_rules(
                             store,
                             language_registry,
                             inline_assist_delegate,
-                            note_to_select,
+                            config_root,
+                            automations,
+                            selection,
                             window,
                             cx,
                         )
@@ -149,12 +197,20 @@ pub fn open_postprod_rules(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Main struct
+// ---------------------------------------------------------------------------
+
 pub struct PostProdRules {
     title_bar: Option<Entity<PlatformTitleBar>>,
     store: Entity<NoteStore>,
     language_registry: Arc<LanguageRegistry>,
+    config_root: PathBuf,
+    #[allow(dead_code)]
+    automations: Vec<AutomationInfo>,
     note_editors: HashMap<NoteId, NoteEditor>,
-    active_note_id: Option<NoteId>,
+    file_editors: HashMap<PathBuf, FileEditor>,
+    active_entry: Option<ActiveEntryId>,
     picker: Entity<Picker<PostProdPickerDelegate>>,
     pending_load: Task<()>,
     inline_assist_delegate: Box<dyn InlineAssistDelegate>,
@@ -171,26 +227,99 @@ struct NoteEditor {
     _subscriptions: Vec<Subscription>,
 }
 
+struct FileEditor {
+    title: SharedString,
+    body_editor: Entity<Editor>,
+    is_symlink: bool,
+    path: PathBuf,
+    token_count: Option<u64>,
+    pending_token_count: Task<Option<()>>,
+    next_body_to_save: Option<Rope>,
+    pending_save: Option<Task<Option<()>>>,
+    _subscriptions: Vec<Subscription>,
+}
+
+// ---------------------------------------------------------------------------
+// Picker types
+// ---------------------------------------------------------------------------
+
 enum PostProdPickerEntry {
     Header(SharedString),
     Note(NoteMetadata),
+    PromptFile(PromptFileEntry),
+    DefaultContextFile(PromptFileEntry),
     Separator,
 }
 
 struct PostProdPickerDelegate {
     store: Entity<NoteStore>,
+    prompt_files: Vec<PromptFileEntry>,
+    default_context_files: Vec<PromptFileEntry>,
     selected_index: usize,
     filtered_entries: Vec<PostProdPickerEntry>,
 }
 
 enum PostProdPickerEvent {
-    Selected { note_id: NoteId },
-    Confirmed { note_id: NoteId },
+    Selected { entry_id: ActiveEntryId },
+    Confirmed { entry_id: ActiveEntryId },
     Deleted { note_id: NoteId },
     ToggledDefault { note_id: NoteId },
 }
 
 impl EventEmitter<PostProdPickerEvent> for Picker<PostProdPickerDelegate> {}
+
+// ---------------------------------------------------------------------------
+// File scanning helpers
+// ---------------------------------------------------------------------------
+
+fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
+    let mut entries = Vec::new();
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return entries,
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path.extension().map_or(true, |ext| ext != "md") {
+            continue;
+        }
+        let filename = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let display_name = filename
+            .trim_end_matches(".md")
+            .replace('-', " ")
+            .replace('_', " ");
+        let is_symlink = std::fs::symlink_metadata(&path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        entries.push(PromptFileEntry {
+            filename,
+            display_name,
+            path,
+            section: section.clone(),
+            is_symlink,
+        });
+    }
+    entries.sort_by(|a, b| a.display_name.cmp(&b.display_name));
+    entries
+}
+
+fn entry_id_for_picker_entry(entry: &PostProdPickerEntry) -> Option<ActiveEntryId> {
+    match entry {
+        PostProdPickerEntry::Note(n) => Some(ActiveEntryId::Note(n.id)),
+        PostProdPickerEntry::PromptFile(f) | PostProdPickerEntry::DefaultContextFile(f) => {
+            Some(ActiveEntryId::File(f.path.clone()))
+        }
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PickerDelegate
+// ---------------------------------------------------------------------------
 
 impl PickerDelegate for PostProdPickerDelegate {
     type ListItem = AnyElement;
@@ -200,7 +329,7 @@ impl PickerDelegate for PostProdPickerDelegate {
     }
 
     fn no_matches_text(&self, _window: &mut Window, _cx: &mut App) -> Option<SharedString> {
-        Some("No notes found matching your search.".into())
+        Some("No entries found matching your search.".into())
     }
 
     fn selected_index(&self) -> usize {
@@ -210,10 +339,12 @@ impl PickerDelegate for PostProdPickerDelegate {
     fn set_selected_index(&mut self, ix: usize, _: &mut Window, cx: &mut Context<Picker<Self>>) {
         self.selected_index = ix.min(self.filtered_entries.len().saturating_sub(1));
 
-        if let Some(PostProdPickerEntry::Note(note)) =
-            self.filtered_entries.get(self.selected_index)
+        if let Some(entry_id) = self
+            .filtered_entries
+            .get(self.selected_index)
+            .and_then(entry_id_for_picker_entry)
         {
-            cx.emit(PostProdPickerEvent::Selected { note_id: note.id });
+            cx.emit(PostProdPickerEvent::Selected { entry_id });
         }
 
         cx.notify();
@@ -221,10 +352,10 @@ impl PickerDelegate for PostProdPickerDelegate {
 
     fn can_select(&self, ix: usize, _: &mut Window, _: &mut Context<Picker<Self>>) -> bool {
         match self.filtered_entries.get(ix) {
-            Some(PostProdPickerEntry::Note(_)) => true,
-            Some(PostProdPickerEntry::Header(_))
-            | Some(PostProdPickerEntry::Separator)
-            | None => false,
+            Some(PostProdPickerEntry::Note(_))
+            | Some(PostProdPickerEntry::PromptFile(_))
+            | Some(PostProdPickerEntry::DefaultContextFile(_)) => true,
+            _ => false,
         }
     }
 
@@ -243,60 +374,93 @@ impl PickerDelegate for PostProdPickerDelegate {
         cx: &mut Context<Picker<Self>>,
     ) -> Task<()> {
         let cancellation_flag = Arc::new(AtomicBool::default());
-        let search = self.store.read(cx).search(query, cancellation_flag, cx);
+        let search = self.store.read(cx).search(query.clone(), cancellation_flag, cx);
 
-        let prev_note_id = self
+        let prompt_files = self.prompt_files.clone();
+        let default_context_files = self.default_context_files.clone();
+
+        let prev_entry_id = self
             .filtered_entries
             .get(self.selected_index)
-            .and_then(|entry| {
-                if let PostProdPickerEntry::Note(note) = entry {
-                    Some(note.id)
-                } else {
-                    None
-                }
-            });
+            .and_then(entry_id_for_picker_entry);
 
         cx.spawn_in(window, async move |this, cx| {
             let (filtered_entries, selected_index) = cx
                 .background_spawn(async move {
-                    let matches = search.await;
+                    let note_matches = search.await;
+                    let query_lower = query.to_lowercase();
 
-                    let (default_notes, other_notes): (Vec<_>, Vec<_>) =
-                        matches.into_iter().partition(|note| note.default);
+                    // Filter prompt files by query
+                    let filtered_prompts: Vec<_> = if query.is_empty() {
+                        prompt_files
+                    } else {
+                        prompt_files
+                            .into_iter()
+                            .filter(|f| f.display_name.to_lowercase().contains(&query_lower))
+                            .collect()
+                    };
+
+                    // Filter default context files by query
+                    let filtered_dc: Vec<_> = if query.is_empty() {
+                        default_context_files
+                    } else {
+                        default_context_files
+                            .into_iter()
+                            .filter(|f| f.display_name.to_lowercase().contains(&query_lower))
+                            .collect()
+                    };
 
                     let mut filtered_entries = Vec::new();
 
-                    if !default_notes.is_empty() {
+                    // Section: PROMPTS
+                    if !filtered_prompts.is_empty() {
                         filtered_entries
-                            .push(PostProdPickerEntry::Header("Default Notes".into()));
-
-                        for note in default_notes {
-                            filtered_entries.push(PostProdPickerEntry::Note(note));
+                            .push(PostProdPickerEntry::Header("PROMPTS".into()));
+                        for f in filtered_prompts {
+                            filtered_entries.push(PostProdPickerEntry::PromptFile(f));
                         }
-
                         filtered_entries.push(PostProdPickerEntry::Separator);
                     }
 
-                    for note in other_notes {
-                        filtered_entries.push(PostProdPickerEntry::Note(note));
+                    // Section: NOTES
+                    let (default_notes, other_notes): (Vec<_>, Vec<_>) =
+                        note_matches.into_iter().partition(|note| note.default);
+
+                    if !default_notes.is_empty() || !other_notes.is_empty() {
+                        filtered_entries
+                            .push(PostProdPickerEntry::Header("NOTES".into()));
+
+                        if !default_notes.is_empty() {
+                            for note in default_notes {
+                                filtered_entries.push(PostProdPickerEntry::Note(note));
+                            }
+                        }
+                        for note in other_notes {
+                            filtered_entries.push(PostProdPickerEntry::Note(note));
+                        }
+                        filtered_entries.push(PostProdPickerEntry::Separator);
                     }
 
-                    let selected_index = prev_note_id
-                        .and_then(|prev_note_id| {
+                    // Section: DEFAULT CONTEXT
+                    if !filtered_dc.is_empty() {
+                        filtered_entries
+                            .push(PostProdPickerEntry::Header("DEFAULT CONTEXT".into()));
+                        for f in filtered_dc {
+                            filtered_entries
+                                .push(PostProdPickerEntry::DefaultContextFile(f));
+                        }
+                    }
+
+                    let selected_index = prev_entry_id
+                        .and_then(|prev| {
                             filtered_entries.iter().position(|entry| {
-                                if let PostProdPickerEntry::Note(note) = entry {
-                                    note.id == prev_note_id
-                                } else {
-                                    false
-                                }
+                                entry_id_for_picker_entry(entry).as_ref() == Some(&prev)
                             })
                         })
                         .unwrap_or_else(|| {
                             filtered_entries
                                 .iter()
-                                .position(|entry| {
-                                    matches!(entry, PostProdPickerEntry::Note(_))
-                                })
+                                .position(|entry| entry_id_for_picker_entry(entry).is_some())
                                 .unwrap_or(0)
                         });
 
@@ -320,10 +484,12 @@ impl PickerDelegate for PostProdPickerDelegate {
     }
 
     fn confirm(&mut self, _secondary: bool, _: &mut Window, cx: &mut Context<Picker<Self>>) {
-        if let Some(PostProdPickerEntry::Note(note)) =
-            self.filtered_entries.get(self.selected_index)
+        if let Some(entry_id) = self
+            .filtered_entries
+            .get(self.selected_index)
+            .and_then(entry_id_for_picker_entry)
         {
-            cx.emit(PostProdPickerEvent::Confirmed { note_id: note.id });
+            cx.emit(PostProdPickerEvent::Confirmed { entry_id });
         }
     }
 
@@ -337,24 +503,11 @@ impl PickerDelegate for PostProdPickerDelegate {
         cx: &mut Context<Picker<Self>>,
     ) -> Option<Self::ListItem> {
         match self.filtered_entries.get(ix)? {
-            PostProdPickerEntry::Header(title) => {
-                let tooltip_text =
-                    "Default Notes are attached to every standalone automation run.";
-
-                Some(
-                    ListSubHeader::new(title.clone())
-                        .end_slot(
-                            IconButton::new("info", IconName::Info)
-                                .style(ButtonStyle::Transparent)
-                                .icon_size(IconSize::Small)
-                                .icon_color(Color::Muted)
-                                .tooltip(Tooltip::text(tooltip_text))
-                                .into_any_element(),
-                        )
-                        .inset(true)
-                        .into_any_element(),
-                )
-            }
+            PostProdPickerEntry::Header(title) => Some(
+                ListSubHeader::new(title.clone())
+                    .inset(true)
+                    .into_any_element(),
+            ),
             PostProdPickerEntry::Separator => Some(
                 h_flex()
                     .py_1()
@@ -370,6 +523,11 @@ impl PickerDelegate for PostProdPickerDelegate {
                         .inset(true)
                         .spacing(ListItemSpacing::Sparse)
                         .toggle_state(selected)
+                        .start_slot(
+                            Icon::new(IconName::Notepad)
+                                .size(IconSize::Small)
+                                .color(Color::Muted),
+                        )
                         .child(
                             Label::new(note.title.clone().unwrap_or("Untitled".into()))
                                 .truncate()
@@ -432,6 +590,50 @@ impl PickerDelegate for PostProdPickerDelegate {
                         .into_any_element(),
                 )
             }
+            PostProdPickerEntry::PromptFile(file) => {
+                let label: SharedString = file.display_name.clone().into();
+                Some(
+                    ListItem::new(ix)
+                        .inset(true)
+                        .spacing(ListItemSpacing::Sparse)
+                        .toggle_state(selected)
+                        .start_slot(
+                            Icon::new(IconName::File)
+                                .size(IconSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(Label::new(label).truncate().mr_10())
+                        .end_slot::<Label>(Some(
+                            Label::new(file.filename.clone())
+                                .color(Color::Muted)
+                                .size(LabelSize::Small),
+                        ))
+                        .into_any_element(),
+                )
+            }
+            PostProdPickerEntry::DefaultContextFile(file) => {
+                let label: SharedString = file.display_name.clone().into();
+                Some(
+                    ListItem::new(ix)
+                        .inset(true)
+                        .spacing(ListItemSpacing::Sparse)
+                        .toggle_state(selected)
+                        .start_slot(
+                            Icon::new(IconName::Folder)
+                                .size(IconSize::Small)
+                                .color(Color::Muted),
+                        )
+                        .child(Label::new(label).truncate().mr_10())
+                        .when(file.is_symlink, |this| {
+                            this.end_slot::<Label>(Some(
+                                Label::new("symlink")
+                                    .color(Color::Warning)
+                                    .size(LabelSize::XSmall),
+                            ))
+                        })
+                        .into_any_element(),
+                )
+            }
         }
     }
 
@@ -457,17 +659,32 @@ impl PickerDelegate for PostProdPickerDelegate {
     }
 }
 
+// ---------------------------------------------------------------------------
+// PostProdRules implementation
+// ---------------------------------------------------------------------------
+
 impl PostProdRules {
     fn new(
         store: Entity<NoteStore>,
         language_registry: Arc<LanguageRegistry>,
         inline_assist_delegate: Box<dyn InlineAssistDelegate>,
-        note_to_select: Option<NoteId>,
+        config_root: PathBuf,
+        automations: Vec<AutomationInfo>,
+        selection: Option<SelectionTarget>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let prompt_files =
+            scan_md_files(&config_root.join("config/prompts"), PickerSection::Prompt);
+        let default_context_files = scan_md_files(
+            &config_root.join("config/default-context"),
+            PickerSection::DefaultContext,
+        );
+
         let picker_delegate = PostProdPickerDelegate {
             store: store.clone(),
+            prompt_files: prompt_files.clone(),
+            default_context_files: default_context_files.clone(),
             selected_index: 0,
             filtered_entries: Vec::new(),
         };
@@ -488,16 +705,25 @@ impl PostProdRules {
             },
             store,
             language_registry,
+            config_root,
+            automations,
             note_editors: HashMap::default(),
-            active_note_id: None,
+            file_editors: HashMap::default(),
+            active_entry: None,
             pending_load: Task::ready(()),
             inline_assist_delegate,
             _subscriptions: vec![cx.subscribe_in(&picker, window, Self::handle_picker_event)],
             picker,
         };
 
-        if let Some(note_to_select) = note_to_select {
-            this.load_note(note_to_select, true, window, cx);
+        match selection {
+            Some(SelectionTarget::Note(id)) => {
+                this.load_note(id, true, window, cx);
+            }
+            Some(SelectionTarget::PromptFile(filename)) => {
+                this.select_prompt_file(&filename, window, cx);
+            }
+            None => {}
         }
 
         this
@@ -511,11 +737,11 @@ impl PostProdRules {
         cx: &mut Context<Self>,
     ) {
         match event {
-            PostProdPickerEvent::Selected { note_id } => {
-                self.load_note(*note_id, false, window, cx);
+            PostProdPickerEvent::Selected { entry_id } => {
+                self.load_entry(entry_id.clone(), false, window, cx);
             }
-            PostProdPickerEvent::Confirmed { note_id } => {
-                self.load_note(*note_id, true, window, cx);
+            PostProdPickerEvent::Confirmed { entry_id } => {
+                self.load_entry(entry_id.clone(), true, window, cx);
             }
             PostProdPickerEvent::ToggledDefault { note_id } => {
                 self.toggle_default_for_note(*note_id, window, cx);
@@ -523,6 +749,41 @@ impl PostProdRules {
             PostProdPickerEvent::Deleted { note_id } => {
                 self.delete_note(*note_id, window, cx);
             }
+        }
+    }
+
+    fn load_entry(
+        &mut self,
+        entry_id: ActiveEntryId,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match entry_id {
+            ActiveEntryId::Note(id) => self.load_note(id, focus, window, cx),
+            ActiveEntryId::File(path) => self.load_file(path, focus, window, cx),
+        }
+    }
+
+    /// Select a prompt file by filename (for deep linking from Dashboard card).
+    pub fn select_prompt_file(
+        &mut self,
+        filename: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let all_files = self
+            .picker
+            .read(cx)
+            .delegate
+            .prompt_files
+            .iter()
+            .chain(self.picker.read(cx).delegate.default_context_files.iter())
+            .find(|f| f.filename == filename)
+            .map(|f| f.path.clone());
+
+        if let Some(path) = all_files {
+            self.load_file(path, true, window, cx);
         }
     }
 
@@ -631,21 +892,105 @@ impl PostProdRules {
         }
     }
 
+    fn save_file(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        const SAVE_THROTTLE: Duration = Duration::from_millis(500);
+
+        let file_editor = match self.file_editors.get_mut(&path) {
+            Some(e) => e,
+            None => return,
+        };
+        let body = file_editor.body_editor.update(cx, |editor, cx| {
+            editor
+                .buffer()
+                .read(cx)
+                .as_singleton()
+                .unwrap()
+                .read(cx)
+                .as_rope()
+                .clone()
+        });
+
+        let executor = cx.background_executor().clone();
+        let is_symlink = file_editor.is_symlink;
+
+        file_editor.next_body_to_save = Some(body);
+        if file_editor.pending_save.is_none() {
+            let save_path = path.clone();
+            file_editor.pending_save = Some(cx.spawn_in(window, async move |this, cx| {
+                async move {
+                    // Symlink warning on first save
+                    if is_symlink {
+                        let target = std::fs::read_link(&save_path)
+                            .map(|t| t.display().to_string())
+                            .unwrap_or_else(|_| "unknown".to_string());
+                        let answer = this.update_in(cx, |_, window, cx| {
+                            window.prompt(
+                                PromptLevel::Warning,
+                                &format!(
+                                    "This file is a symlink to {}. Editing will modify the shared original. Continue?",
+                                    target
+                                ),
+                                None,
+                                &["Continue", "Cancel"],
+                                cx,
+                            )
+                        })?;
+                        if answer.await.ok() != Some(0) {
+                            return anyhow::Ok(());
+                        }
+                    }
+
+                    loop {
+                        let body = this.update(cx, |this, _| {
+                            this.file_editors
+                                .get_mut(&save_path)?
+                                .next_body_to_save
+                                .take()
+                        })?;
+
+                        if let Some(body) = body {
+                            let text = body.to_string();
+                            let write_path = save_path.clone();
+                            cx.background_executor()
+                                .spawn(async move {
+                                    std::fs::write(&write_path, &text)
+                                })
+                                .await
+                                .log_err();
+
+                            executor.timer(SAVE_THROTTLE).await;
+                        } else {
+                            break;
+                        }
+                    }
+
+                    this.update(cx, |this, _cx| {
+                        if let Some(file_editor) = this.file_editors.get_mut(&save_path) {
+                            file_editor.pending_save = None;
+                        }
+                    })
+                }
+                .log_err()
+                .await
+            }));
+        }
+    }
+
     pub fn delete_active_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(active_note_id) = self.active_note_id {
-            self.delete_note(active_note_id, window, cx);
+        if let Some(ActiveEntryId::Note(note_id)) = self.active_entry {
+            self.delete_note(note_id, window, cx);
         }
     }
 
     pub fn duplicate_active_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(active_note_id) = self.active_note_id {
-            self.duplicate_note(active_note_id, window, cx);
+        if let Some(ActiveEntryId::Note(note_id)) = self.active_entry {
+            self.duplicate_note(note_id, window, cx);
         }
     }
 
     pub fn toggle_default_for_active_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(active_note_id) = self.active_note_id {
-            self.toggle_default_for_note(active_note_id, window, cx);
+        if let Some(ActiveEntryId::Note(note_id)) = self.active_entry {
+            self.toggle_default_for_note(note_id, window, cx);
         }
     }
 
@@ -686,7 +1031,7 @@ impl PostProdRules {
                     .body_editor
                     .update(cx, |editor, cx| window.focus(&editor.focus_handle(cx), cx));
             }
-            self.set_active_note(Some(note_id), window, cx);
+            self.set_active_entry(Some(ActiveEntryId::Note(note_id)), window, cx);
         } else if self.store.read(cx).metadata(note_id).is_some() {
             let language_registry = self.language_registry.clone();
             let note = self.store.read(cx).load(note_id, cx);
@@ -700,9 +1045,7 @@ impl PostProdRules {
                             let metadata = this.store.read(cx).metadata(note_id);
                             editor.set_placeholder_text("Untitled", window, cx);
                             editor.set_text(
-                                metadata
-                                    .and_then(|m| m.title)
-                                    .unwrap_or_default(),
+                                metadata.and_then(|m| m.title).unwrap_or_default(),
                                 window,
                                 cx,
                             );
@@ -760,8 +1103,8 @@ impl PostProdRules {
                                 _subscriptions,
                             },
                         );
-                        this.set_active_note(Some(note_id), window, cx);
-                        this.count_tokens(note_id, window, cx);
+                        this.set_active_entry(Some(ActiveEntryId::Note(note_id)), window, cx);
+                        this.count_tokens_for_note(note_id, window, cx);
                     }
                     Err(error) => {
                         log::error!("error while loading note: {:?}", error);
@@ -772,36 +1115,127 @@ impl PostProdRules {
         }
     }
 
-    fn set_active_note(
+    fn load_file(
         &mut self,
-        note_id: Option<NoteId>,
+        path: PathBuf,
+        focus: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.active_note_id = note_id;
+        if let Some(file_editor) = self.file_editors.get(&path) {
+            if focus {
+                file_editor
+                    .body_editor
+                    .update(cx, |editor, cx| window.focus(&editor.focus_handle(cx), cx));
+            }
+            self.set_active_entry(Some(ActiveEntryId::File(path)), window, cx);
+        } else {
+            let language_registry = self.language_registry.clone();
+            let load_path = path.clone();
+            let is_symlink = std::fs::symlink_metadata(&path)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false);
+            let display_name: SharedString = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+                .trim_end_matches(".md")
+                .replace('-', " ")
+                .replace('_', " ")
+                .into();
+
+            self.pending_load = cx.spawn_in(window, async move |this, cx| {
+                let content = cx
+                    .background_executor()
+                    .spawn(async move { std::fs::read_to_string(&load_path) })
+                    .await;
+                let markdown = language_registry.language_for_name("Markdown").await;
+
+                this.update_in(cx, |this, window, cx| match content {
+                    Ok(content) => {
+                        let editor_path = path.clone();
+                        let body_editor = cx.new(|cx| {
+                            let buffer = cx.new(|cx| {
+                                let mut buffer = Buffer::local(content, cx);
+                                buffer.set_language(markdown.log_err(), cx);
+                                buffer.set_language_registry(language_registry);
+                                buffer
+                            });
+
+                            let mut editor = Editor::for_buffer(buffer, None, window, cx);
+                            editor.set_soft_wrap_mode(SoftWrap::EditorWidth, cx);
+                            editor.set_show_gutter(false, cx);
+                            editor.set_show_wrap_guides(false, cx);
+                            editor.set_show_indent_guides(false, cx);
+                            editor.set_use_modal_editing(true);
+                            editor.set_current_line_highlight(Some(CurrentLineHighlight::None));
+                            if focus {
+                                window.focus(&editor.focus_handle(cx), cx);
+                            }
+                            editor
+                        });
+                        let _subscriptions = vec![cx.subscribe_in(
+                            &body_editor,
+                            window,
+                            move |this, editor, event, window, cx| {
+                                this.handle_file_body_editor_event(
+                                    editor_path.clone(),
+                                    editor,
+                                    event,
+                                    window,
+                                    cx,
+                                )
+                            },
+                        )];
+                        this.file_editors.insert(
+                            path.clone(),
+                            FileEditor {
+                                title: display_name,
+                                body_editor,
+                                is_symlink,
+                                path: path.clone(),
+                                token_count: None,
+                                pending_token_count: Task::ready(None),
+                                next_body_to_save: None,
+                                pending_save: None,
+                                _subscriptions,
+                            },
+                        );
+                        this.set_active_entry(Some(ActiveEntryId::File(path.clone())), window, cx);
+                        this.count_tokens_for_file(path, window, cx);
+                    }
+                    Err(error) => {
+                        log::error!("error while loading file: {:?}", error);
+                    }
+                })
+                .ok();
+            });
+        }
+    }
+
+    fn set_active_entry(
+        &mut self,
+        entry_id: Option<ActiveEntryId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.active_entry = entry_id.clone();
         self.picker.update(cx, |picker, cx| {
-            if let Some(note_id) = note_id {
-                if picker
+            if let Some(entry_id) = &entry_id {
+                let current_matches = picker
                     .delegate
                     .filtered_entries
                     .get(picker.delegate.selected_index())
-                    .is_none_or(|old_selected| {
-                        if let PostProdPickerEntry::Note(note) = old_selected {
-                            note.id != note_id
-                        } else {
-                            true
-                        }
-                    })
-                    && let Some(ix) =
+                    .and_then(entry_id_for_picker_entry);
+                if current_matches.as_ref() != Some(entry_id) {
+                    if let Some(ix) =
                         picker.delegate.filtered_entries.iter().position(|mat| {
-                            if let PostProdPickerEntry::Note(note) = mat {
-                                note.id == note_id
-                            } else {
-                                false
-                            }
+                            entry_id_for_picker_entry(mat).as_ref() == Some(entry_id)
                         })
-                {
-                    picker.set_selected_index(ix, None, true, window, cx);
+                    {
+                        picker.set_selected_index(ix, None, true, window, cx);
+                    }
                 }
             } else {
                 picker.focus(window, cx);
@@ -831,8 +1265,8 @@ impl PostProdRules {
             cx.spawn_in(window, async move |this, cx| {
                 if confirmation.await.ok() == Some(0) {
                     this.update_in(cx, |this, window, cx| {
-                        if this.active_note_id == Some(note_id) {
-                            this.set_active_note(None, window, cx);
+                        if this.active_entry == Some(ActiveEntryId::Note(note_id)) {
+                            this.set_active_entry(None, window, cx);
                         }
                         this.note_editors.remove(&note_id);
                         this.store
@@ -896,12 +1330,25 @@ impl PostProdRules {
         }
     }
 
-    fn focus_active_note(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(active_note) = self.active_note_id {
-            self.note_editors[&active_note]
-                .body_editor
-                .update(cx, |editor, cx| window.focus(&editor.focus_handle(cx), cx));
-            cx.stop_propagation();
+    fn focus_active_editor(&mut self, _: &Tab, window: &mut Window, cx: &mut Context<Self>) {
+        match &self.active_entry {
+            Some(ActiveEntryId::Note(id)) => {
+                if let Some(editor) = self.note_editors.get(id) {
+                    editor
+                        .body_editor
+                        .update(cx, |e, cx| window.focus(&e.focus_handle(cx), cx));
+                    cx.stop_propagation();
+                }
+            }
+            Some(ActiveEntryId::File(path)) => {
+                if let Some(editor) = self.file_editors.get(path) {
+                    editor
+                        .body_editor
+                        .update(cx, |e, cx| window.focus(&e.focus_handle(cx), cx));
+                    cx.stop_propagation();
+                }
+            }
+            None => {}
         }
     }
 
@@ -916,12 +1363,23 @@ impl PostProdRules {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(active_note_id) = self.active_note_id else {
+        let body_editor = match &self.active_entry {
+            Some(ActiveEntryId::Note(id)) => {
+                self.note_editors.get(id).map(|e| &e.body_editor)
+            }
+            Some(ActiveEntryId::File(path)) => {
+                self.file_editors.get(path).map(|e| &e.body_editor)
+            }
+            None => {
+                cx.propagate();
+                return;
+            }
+        };
+        let Some(body_editor) = body_editor else {
             cx.propagate();
             return;
         };
 
-        let note_editor = &self.note_editors[&active_note_id].body_editor;
         let Some(ConfiguredModel { provider, .. }) =
             LanguageModelRegistry::read_global(cx).inline_assistant_model()
         else {
@@ -931,7 +1389,7 @@ impl PostProdRules {
         let initial_prompt = action.prompt.clone();
         if provider.is_authenticated(cx) {
             self.inline_assist_delegate
-                .assist(note_editor, initial_prompt, window, cx);
+                .assist(body_editor, initial_prompt, window, cx);
         } else {
             for window in cx.windows() {
                 if let Some(multi_workspace) = window.downcast::<MultiWorkspace>() {
@@ -958,10 +1416,18 @@ impl PostProdRules {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(note_id) = self.active_note_id
-            && let Some(note_editor) = self.note_editors.get(&note_id)
-        {
-            window.focus(&note_editor.body_editor.focus_handle(cx), cx);
+        match &self.active_entry {
+            Some(ActiveEntryId::Note(id)) => {
+                if let Some(e) = self.note_editors.get(id) {
+                    window.focus(&e.body_editor.focus_handle(cx), cx);
+                }
+            }
+            Some(ActiveEntryId::File(path)) => {
+                if let Some(e) = self.file_editors.get(path) {
+                    window.focus(&e.body_editor.focus_handle(cx), cx);
+                }
+            }
+            None => {}
         }
     }
 
@@ -971,11 +1437,12 @@ impl PostProdRules {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(note_id) = self.active_note_id
-            && let Some(note_editor) = self.note_editors.get(&note_id)
-        {
-            window.focus(&note_editor.title_editor.focus_handle(cx), cx);
+        if let Some(ActiveEntryId::Note(id)) = &self.active_entry {
+            if let Some(e) = self.note_editors.get(id) {
+                window.focus(&e.title_editor.focus_handle(cx), cx);
+            }
         }
+        // Files don't have a separate title editor
     }
 
     fn handle_note_title_editor_event(
@@ -989,7 +1456,7 @@ impl PostProdRules {
         match event {
             EditorEvent::BufferEdited => {
                 self.save_note(note_id, window, cx);
-                self.count_tokens(note_id, window, cx);
+                self.count_tokens_for_note(note_id, window, cx);
             }
             EditorEvent::Blurred => {
                 title_editor.update(cx, |title_editor, cx| {
@@ -1019,7 +1486,7 @@ impl PostProdRules {
         match event {
             EditorEvent::BufferEdited => {
                 self.save_note(note_id, window, cx);
-                self.count_tokens(note_id, window, cx);
+                self.count_tokens_for_note(note_id, window, cx);
             }
             EditorEvent::Blurred => {
                 body_editor.update(cx, |body_editor, cx| {
@@ -1038,21 +1505,63 @@ impl PostProdRules {
         }
     }
 
-    fn count_tokens(&mut self, note_id: NoteId, window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_file_body_editor_event(
+        &mut self,
+        path: PathBuf,
+        body_editor: &Entity<Editor>,
+        event: &EditorEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            EditorEvent::BufferEdited => {
+                self.save_file(path.clone(), window, cx);
+                self.count_tokens_for_file(path, window, cx);
+            }
+            EditorEvent::Blurred => {
+                body_editor.update(cx, |body_editor, cx| {
+                    body_editor.change_selections(
+                        SelectionEffects::no_scroll(),
+                        window,
+                        cx,
+                        |selections| {
+                            let cursor = selections.oldest_anchor().head();
+                            selections.select_anchor_ranges([cursor..cursor]);
+                        },
+                    );
+                });
+            }
+            _ => {}
+        }
+    }
+
+    fn count_tokens_for_note(
+        &mut self,
+        note_id: NoteId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(ConfiguredModel { model, .. }) =
             LanguageModelRegistry::read_global(cx).default_model()
         else {
             return;
         };
         if let Some(note) = self.note_editors.get_mut(&note_id) {
-            let editor = &note.body_editor.read(cx);
-            let buffer = &editor.buffer().read(cx).as_singleton().unwrap().read(cx);
-            let body = buffer.as_rope().clone();
+            let body = note
+                .body_editor
+                .read(cx)
+                .buffer()
+                .read(cx)
+                .as_singleton()
+                .unwrap()
+                .read(cx)
+                .as_rope()
+                .clone();
             note.pending_token_count = cx.spawn_in(window, async move |this, cx| {
                 async move {
-                    const DEBOUNCE_TIMEOUT: Duration = Duration::from_secs(1);
-
-                    cx.background_executor().timer(DEBOUNCE_TIMEOUT).await;
+                    cx.background_executor()
+                        .timer(Duration::from_secs(1))
+                        .await;
                     let token_count = cx
                         .update(|_, cx| {
                             model.count_tokens(
@@ -1080,9 +1589,10 @@ impl PostProdRules {
                         .await?;
 
                     this.update(cx, |this, cx| {
-                        let note_editor = this.note_editors.get_mut(&note_id).unwrap();
-                        note_editor.token_count = Some(token_count);
-                        cx.notify();
+                        if let Some(e) = this.note_editors.get_mut(&note_id) {
+                            e.token_count = Some(token_count);
+                            cx.notify();
+                        }
                     })
                 }
                 .log_err()
@@ -1091,10 +1601,80 @@ impl PostProdRules {
         }
     }
 
+    fn count_tokens_for_file(
+        &mut self,
+        path: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(ConfiguredModel { model, .. }) =
+            LanguageModelRegistry::read_global(cx).default_model()
+        else {
+            return;
+        };
+        if let Some(file_editor) = self.file_editors.get_mut(&path) {
+            let body = file_editor
+                .body_editor
+                .read(cx)
+                .buffer()
+                .read(cx)
+                .as_singleton()
+                .unwrap()
+                .read(cx)
+                .as_rope()
+                .clone();
+            file_editor.pending_token_count = cx.spawn_in(window, async move |this, cx| {
+                async move {
+                    cx.background_executor()
+                        .timer(Duration::from_secs(1))
+                        .await;
+                    let token_count = cx
+                        .update(|_, cx| {
+                            model.count_tokens(
+                                LanguageModelRequest {
+                                    thread_id: None,
+                                    prompt_id: None,
+                                    intent: None,
+                                    messages: vec![LanguageModelRequestMessage {
+                                        role: Role::System,
+                                        content: vec![body.to_string().into()],
+                                        cache: false,
+                                        reasoning_details: None,
+                                    }],
+                                    tools: Vec::new(),
+                                    tool_choice: None,
+                                    stop: Vec::new(),
+                                    temperature: None,
+                                    thinking_allowed: true,
+                                    thinking_effort: None,
+                                    speed: None,
+                                },
+                                cx,
+                            )
+                        })?
+                        .await?;
+
+                    this.update(cx, |this, cx| {
+                        if let Some(e) = this.file_editors.get_mut(&path) {
+                            e.token_count = Some(token_count);
+                            cx.notify();
+                        }
+                    })
+                }
+                .log_err()
+                .await
+            });
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Rendering
+    // -----------------------------------------------------------------------
+
     fn render_note_list(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .id("note-list")
-            .capture_action(cx.listener(Self::focus_active_note))
+            .capture_action(cx.listener(Self::focus_active_editor))
             .px_1p5()
             .h_full()
             .w_64()
@@ -1140,13 +1720,12 @@ impl PostProdRules {
             .child(div().flex_grow().child(self.picker.clone()))
     }
 
-    fn render_active_note_editor(
+    fn render_title_editor(
         &self,
         editor: &Entity<Editor>,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let settings = ThemeSettings::get_global(cx);
-        let text_color = cx.theme().colors().text;
 
         div()
             .w_full()
@@ -1164,7 +1743,7 @@ impl PostProdRules {
                     background: cx.theme().system().transparent,
                     local_player: cx.theme().players().local(),
                     text: TextStyle {
-                        color: text_color,
+                        color: cx.theme().colors().text,
                         font_family: settings.ui_font.family.clone(),
                         font_features: settings.ui_font.features.clone(),
                         font_size: HeadlineSize::Medium.rems().into(),
@@ -1180,6 +1759,17 @@ impl PostProdRules {
                     ..EditorStyle::default()
                 },
             ))
+    }
+
+    fn render_static_title(&self, title: &SharedString, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w_full()
+            .pl_1()
+            .child(
+                Label::new(title.clone())
+                    .size(LabelSize::Large)
+                    .color(Color::Default),
+            )
     }
 
     fn render_duplicate_note_button(&self) -> impl IntoElement {
@@ -1229,100 +1819,157 @@ impl PostProdRules {
             )
     }
 
-    fn render_active_note(&mut self, cx: &mut Context<PostProdRules>) -> gpui::Stateful<Div> {
+    fn render_active_editor_panel(
+        &mut self,
+        cx: &mut Context<PostProdRules>,
+    ) -> gpui::Stateful<Div> {
         div()
-            .id("note-editor")
+            .id("entry-editor")
             .h_full()
             .flex_grow()
             .border_l_1()
             .border_color(cx.theme().colors().border)
             .bg(cx.theme().colors().editor_background)
-            .children(self.active_note_id.and_then(|note_id| {
-                let note_metadata = self.store.read(cx).metadata(note_id)?;
-                let note_editor = &self.note_editors[&note_id];
-                let focus_handle = note_editor.body_editor.focus_handle(cx);
+            .children(self.active_entry.clone().and_then(|entry_id| {
                 let registry = LanguageModelRegistry::read_global(cx);
                 let model = registry.default_model().map(|default| default.model);
 
-                Some(
-                    v_flex()
-                        .id("note-editor-inner")
-                        .size_full()
-                        .relative()
-                        .overflow_hidden()
-                        .on_click(cx.listener(move |_, _, window, cx| {
-                            window.focus(&focus_handle, cx);
-                        }))
-                        .child(
-                            h_flex()
-                                .group("active-editor-header")
-                                .h_12()
-                                .px_2()
-                                .gap_2()
-                                .justify_between()
-                                .child(self.render_active_note_editor(
-                                    &note_editor.title_editor,
-                                    cx,
-                                ))
-                                .child(
-                                    h_flex()
-                                        .h_full()
-                                        .flex_shrink_0()
-                                        .children(note_editor.token_count.map(|token_count| {
-                                            let token_count: SharedString =
-                                                token_count.to_string().into();
-                                            let label_token_count: SharedString =
-                                                token_count.to_string().into();
+                match entry_id {
+                    ActiveEntryId::Note(note_id) => {
+                        let note_metadata = self.store.read(cx).metadata(note_id)?;
+                        let note_editor = &self.note_editors[&note_id];
+                        let focus_handle = note_editor.body_editor.focus_handle(cx);
+                        let token_count = note_editor.token_count;
 
-                                            div()
-                                                .id("token_count")
-                                                .mr_1()
-                                                .flex_shrink_0()
-                                                .tooltip(move |_window, cx| {
-                                                    Tooltip::with_meta(
-                                                        "Token Estimation",
-                                                        None,
-                                                        format!(
-                                                            "Model: {}",
-                                                            model
-                                                                .as_ref()
-                                                                .map(|model| model.name().0)
-                                                                .unwrap_or_default()
-                                                        ),
-                                                        cx,
-                                                    )
-                                                })
-                                                .child(
-                                                    Label::new(format!(
-                                                        "{} tokens",
-                                                        label_token_count
-                                                    ))
-                                                    .color(Color::Muted),
-                                                )
-                                        }))
-                                        .child(
-                                            self.render_note_controls(note_metadata.default),
-                                        ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .on_action(cx.listener(Self::focus_picker))
-                                .on_action(cx.listener(Self::inline_assist))
-                                .on_action(cx.listener(Self::move_up_from_body))
-                                .h_full()
-                                .flex_grow()
-                                .child(
-                                    h_flex()
-                                        .py_2()
-                                        .pl_2p5()
-                                        .h_full()
-                                        .flex_1()
-                                        .child(note_editor.body_editor.clone()),
-                                ),
-                        ),
-                )
+                        Some(self.render_entry_inner(
+                            Some(&note_editor.title_editor),
+                            None,
+                            &note_editor.body_editor,
+                            focus_handle,
+                            token_count,
+                            model,
+                            Some(note_metadata.default),
+                            false,
+                            cx,
+                        ))
+                    }
+                    ActiveEntryId::File(ref path) => {
+                        let file_editor = self.file_editors.get(path)?;
+                        let focus_handle = file_editor.body_editor.focus_handle(cx);
+                        let token_count = file_editor.token_count;
+                        let title = file_editor.title.clone();
+                        let is_symlink = file_editor.is_symlink;
+
+                        Some(self.render_entry_inner(
+                            None,
+                            Some(&title),
+                            &file_editor.body_editor,
+                            focus_handle,
+                            token_count,
+                            model,
+                            None, // files don't have default toggle
+                            is_symlink,
+                            cx,
+                        ))
+                    }
+                }
             }))
+    }
+
+    fn render_entry_inner(
+        &self,
+        title_editor: Option<&Entity<Editor>>,
+        static_title: Option<&SharedString>,
+        body_editor: &Entity<Editor>,
+        focus_handle: gpui::FocusHandle,
+        token_count: Option<u64>,
+        model: Option<Arc<dyn language_model::LanguageModel>>,
+        note_default: Option<bool>, // Some = note (show controls), None = file
+        is_symlink: bool,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<Div> {
+        let title_section = if let Some(editor) = title_editor {
+            self.render_title_editor(editor, cx).into_any_element()
+        } else if let Some(title) = static_title {
+            self.render_static_title(title, cx).into_any_element()
+        } else {
+            div().into_any_element()
+        };
+
+        v_flex()
+            .id("entry-editor-inner")
+            .size_full()
+            .relative()
+            .overflow_hidden()
+            .on_click(cx.listener(move |_, _, window, cx| {
+                window.focus(&focus_handle, cx);
+            }))
+            .child(
+                h_flex()
+                    .group("active-editor-header")
+                    .h_12()
+                    .px_2()
+                    .gap_2()
+                    .justify_between()
+                    .child(title_section)
+                    .child(
+                        h_flex()
+                            .h_full()
+                            .flex_shrink_0()
+                            .children(token_count.map(|tc| {
+                                let tc_str: SharedString = tc.to_string().into();
+                                let label_tc: SharedString = tc_str.to_string().into();
+                                div()
+                                    .id("token_count")
+                                    .mr_1()
+                                    .flex_shrink_0()
+                                    .tooltip(move |_window, cx| {
+                                        Tooltip::with_meta(
+                                            "Token Estimation",
+                                            None,
+                                            format!(
+                                                "Model: {}",
+                                                model
+                                                    .as_ref()
+                                                    .map(|m| m.name().0)
+                                                    .unwrap_or_default()
+                                            ),
+                                            cx,
+                                        )
+                                    })
+                                    .child(
+                                        Label::new(format!("{} tokens", label_tc))
+                                            .color(Color::Muted),
+                                    )
+                            }))
+                            .when(is_symlink, |this| {
+                                this.child(
+                                    Label::new("symlink")
+                                        .color(Color::Warning)
+                                        .size(LabelSize::XSmall),
+                                )
+                            })
+                            .when_some(note_default, |this, default| {
+                                this.child(self.render_note_controls(default))
+                            }),
+                    ),
+            )
+            .child(
+                div()
+                    .on_action(cx.listener(Self::focus_picker))
+                    .on_action(cx.listener(Self::inline_assist))
+                    .on_action(cx.listener(Self::move_up_from_body))
+                    .h_full()
+                    .flex_grow()
+                    .child(
+                        h_flex()
+                            .py_2()
+                            .pl_2p5()
+                            .h_full()
+                            .flex_1()
+                            .child(body_editor.clone()),
+                    ),
+            )
     }
 }
 
@@ -1365,7 +2012,7 @@ impl Render for PostProdRules {
                             this.border_t_1().border_color(cx.theme().colors().border)
                         })
                         .child(self.render_note_list(cx))
-                        .child(self.render_active_note(cx)),
+                        .child(self.render_active_editor_panel(cx)),
                 ),
             window,
             cx,
