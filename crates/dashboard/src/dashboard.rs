@@ -899,8 +899,40 @@ impl Dashboard {
                 id: a.id.clone(),
                 label: a.label.clone(),
                 prompt_file: a.prompt_file.clone(),
+                contexts: a
+                    .contexts
+                    .iter()
+                    .map(|c| postprod_rules::ContextInfo {
+                        source_type: c.source_type.clone(),
+                        label: c.label.clone(),
+                        required: c.required,
+                    })
+                    .collect(),
+                skip_default_context: a.skip_default_context,
             })
             .collect();
+
+        let dashboard_weak = cx.entity().downgrade();
+        let context_callbacks = Arc::new(postprod_rules::ContextCallbacks {
+            reorder: {
+                let weak = dashboard_weak.clone();
+                Box::new(move |automation_id: &str, from: usize, direction: i32, cx: &mut App| {
+                    let auto_id = automation_id.to_string();
+                    weak.update(cx, |dashboard, cx| {
+                        dashboard.reorder_context_entry(&auto_id, from, direction, cx);
+                    }).log_err();
+                })
+            },
+            remove: {
+                let weak = dashboard_weak;
+                Box::new(move |automation_id: &str, index: usize, cx: &mut App| {
+                    let auto_id = automation_id.to_string();
+                    weak.update(cx, |dashboard, cx| {
+                        dashboard.remove_context_entry(&auto_id, index, cx);
+                    }).log_err();
+                })
+            },
+        });
 
         let task = cx.spawn_in(window, async move |this, cx| {
             let language_registry = cx.update(|_window, cx| {
@@ -922,6 +954,7 @@ impl Dashboard {
                     inline_delegate,
                     config_root,
                     automations,
+                    Some(context_callbacks),
                     selection,
                     cx,
                 )
