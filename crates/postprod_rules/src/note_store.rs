@@ -329,14 +329,15 @@ mod tests {
     use gpui::{Entity, TestAppContext};
     use rope::Rope;
 
-    async fn create_test_store(cx: &mut TestAppContext) -> Entity<NoteStore> {
+    async fn create_test_store(
+        cx: &mut TestAppContext,
+    ) -> (tempfile::TempDir, Entity<NoteStore>) {
         cx.executor().allow_parking();
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("notes-db");
         let store = cx.update(|cx| NoteStore::new(db_path, cx)).await.unwrap();
-        // Leak temp_dir so the database directory outlives the store
-        std::mem::forget(temp_dir);
-        cx.new(|_cx| store)
+        let entity = cx.new(|_cx| store);
+        (temp_dir, entity)
     }
 
     // -----------------------------------------------------------------------
@@ -345,7 +346,7 @@ mod tests {
 
     #[gpui::test]
     async fn create_and_load(cx: &mut TestAppContext) {
-        let store = create_test_store(cx).await;
+        let (_temp_dir, store) = create_test_store(cx).await;
 
         let id = NoteId::new();
         store
@@ -373,7 +374,7 @@ mod tests {
 
     #[gpui::test]
     async fn update_title_and_body(cx: &mut TestAppContext) {
-        let store = create_test_store(cx).await;
+        let (_temp_dir, store) = create_test_store(cx).await;
 
         let id = NoteId::new();
         store
@@ -413,7 +414,7 @@ mod tests {
 
     #[gpui::test]
     async fn delete_removes(cx: &mut TestAppContext) {
-        let store = create_test_store(cx).await;
+        let (_temp_dir, store) = create_test_store(cx).await;
 
         let id = NoteId::new();
         store
@@ -444,7 +445,7 @@ mod tests {
 
     #[gpui::test]
     async fn all_metadata_returns_all(cx: &mut TestAppContext) {
-        let store = create_test_store(cx).await;
+        let (_temp_dir, store) = create_test_store(cx).await;
 
         for i in 0..3 {
             store
@@ -468,7 +469,7 @@ mod tests {
 
     #[gpui::test]
     async fn first_returns_alphabetically(cx: &mut TestAppContext) {
-        let store = create_test_store(cx).await;
+        let (_temp_dir, store) = create_test_store(cx).await;
 
         store
             .update(cx, |s, cx| {
@@ -508,7 +509,7 @@ mod tests {
 
     #[gpui::test]
     async fn default_metadata_filters(cx: &mut TestAppContext) {
-        let store = create_test_store(cx).await;
+        let (_temp_dir, store) = create_test_store(cx).await;
 
         store
             .update(cx, |s, cx| {
@@ -545,7 +546,7 @@ mod tests {
 
     #[gpui::test]
     async fn notes_for_automation_filters(cx: &mut TestAppContext) {
-        let store = create_test_store(cx).await;
+        let (_temp_dir, store) = create_test_store(cx).await;
 
         // A default note (applies to all)
         store
@@ -607,7 +608,7 @@ mod tests {
 
     #[gpui::test]
     async fn save_metadata_updates_assignments(cx: &mut TestAppContext) {
-        let store = create_test_store(cx).await;
+        let (_temp_dir, store) = create_test_store(cx).await;
 
         let id = NoteId::new();
         store
@@ -643,7 +644,7 @@ mod tests {
 
     #[gpui::test]
     async fn clear_assignments(cx: &mut TestAppContext) {
-        let store = create_test_store(cx).await;
+        let (_temp_dir, store) = create_test_store(cx).await;
 
         let id = NoteId::new();
         store

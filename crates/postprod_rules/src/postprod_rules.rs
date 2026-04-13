@@ -103,13 +103,13 @@ pub struct ContextCallbacks {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum PickerSection {
+enum PickerSection {
     Prompt,
     DefaultContext,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PromptFileEntry {
+struct PromptFileEntry {
     pub(crate) filename: String,
     pub(crate) display_name: String,
     pub(crate) path: PathBuf,
@@ -292,7 +292,7 @@ impl EventEmitter<PostProdPickerEvent> for Picker<PostProdPickerDelegate> {}
 // File scanning helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
+fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
     let mut entries = Vec::new();
     let read_dir = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
