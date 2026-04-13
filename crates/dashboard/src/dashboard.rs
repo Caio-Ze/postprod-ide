@@ -1365,16 +1365,7 @@ impl Dashboard {
                                             if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                                                 panel.update(cx, |panel, cx| {
                                                     panel.new_external_thread_with_auto_submit(prompt, window, cx);
-                                                    if let Some(profile_name) = &profile {
-                                                        let profile_id = AgentProfileId(profile_name.as_str().into());
-                                                        if let Some(cv) = panel.active_conversation_view() {
-                                                            if let Some(thread) = cv.read(cx).as_native_thread(cx) {
-                                                                thread.update(cx, |thread, cx| {
-                                                                    thread.set_profile(profile_id, cx);
-                                                                });
-                                                            }
-                                                        }
-                                                    }
+                                                    apply_agent_profile_to_thread(panel, &profile, cx);
                                                 });
                                                 workspace.focus_panel::<AgentPanel>(window, cx);
                                             }
@@ -1406,16 +1397,7 @@ impl Dashboard {
                     if let Some(panel) = workspace.panel::<AgentPanel>(cx) {
                         panel.update(cx, |panel, cx| {
                             panel.new_external_thread_with_auto_submit(prompt, window, cx);
-                            if let Some(profile_name) = &automation_profile {
-                                let profile_id = AgentProfileId(profile_name.as_str().into());
-                                if let Some(cv) = panel.active_conversation_view() {
-                                    if let Some(thread) = cv.read(cx).as_native_thread(cx) {
-                                        thread.update(cx, |thread, cx| {
-                                            thread.set_profile(profile_id, cx);
-                                        });
-                                    }
-                                }
-                            }
+                            apply_agent_profile_to_thread(panel, &automation_profile, cx);
                         });
                         workspace.focus_panel::<AgentPanel>(window, cx);
                     }
@@ -4269,6 +4251,23 @@ impl Panel for Dashboard {
 // ---------------------------------------------------------------------------
 // Context gathering (runs on background thread)
 // ---------------------------------------------------------------------------
+
+fn apply_agent_profile_to_thread(
+    panel: &AgentPanel,
+    profile: &Option<String>,
+    cx: &mut App,
+) {
+    if let Some(profile_name) = profile {
+        let profile_id = AgentProfileId(profile_name.as_str().into());
+        if let Some(cv) = panel.active_conversation_view() {
+            if let Some(thread) = cv.read(cx).as_native_thread(cx) {
+                thread.update(cx, |thread, cx| {
+                    thread.set_profile(profile_id, cx);
+                });
+            }
+        }
+    }
+}
 
 /// Gather all context entries, returning assembled text or an error if a required entry fails.
 fn gather_context_blocking(
