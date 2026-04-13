@@ -49,7 +49,6 @@ pub fn render_automation_card(
     let has_params = !entry.params.is_empty();
     let group_name = SharedString::from(format!("automation-{}", entry_id));
     let icon_tint_bg = cx.theme().colors().element_background;
-    let editor_bg = cx.theme().colors().editor_background;
 
     // --- Clone entity handles for each button's closure ----------------------
 
@@ -72,6 +71,10 @@ pub fn render_automation_card(
 
     let disc_entity = entity.clone();
     let disc_id = entry_id.clone();
+
+    let prompt_entity = entity.clone();
+    let prompt_id = entry_id.clone();
+    let prompt_file = entry.prompt_file.clone();
 
     let edit_entity = entity;
     let edit_id = entry_id.clone();
@@ -152,6 +155,32 @@ pub fn render_automation_card(
                             .log_err();
                     }),
                 )
+                .when(prompt_file.is_some(), |this| {
+                    this.child(
+                        IconButton::new(
+                            format!("edit-prompt-{}", prompt_id),
+                            IconName::Pencil,
+                        )
+                        .icon_size(IconSize::Small)
+                        .icon_color(Color::Muted)
+                        .tooltip(Tooltip::text("Edit Prompt"))
+                        .on_click(move |_, window, cx| {
+                            if let Some(ref pf) = prompt_file {
+                                prompt_entity
+                                    .update(cx, |this, cx| {
+                                        this.open_postprod_rules(
+                                            Some(postprod_rules::SelectionTarget::PromptFile(
+                                                pf.clone(),
+                                            )),
+                                            window,
+                                            cx,
+                                        );
+                                    })
+                                    .log_err();
+                            }
+                        }),
+                    )
+                })
                 .child(
                     IconButton::new(
                         format!("delete-automation-{}", delete_id),
@@ -268,19 +297,7 @@ pub fn render_automation_card(
                             .px(DynamicSpacing::Base12.rems(cx))
                             .pb(DynamicSpacing::Base08.rems(cx))
                             .gap(DynamicSpacing::Base04.rems(cx))
-                            .children(context_rows)
-                            .child(
-                                div()
-                                    .w_full()
-                                    .p(DynamicSpacing::Base08.rems(cx))
-                                    .rounded_md()
-                                    .bg(editor_bg)
-                                    .child(
-                                        Label::new(entry_prompt)
-                                            .color(Color::Muted)
-                                            .size(LabelSize::Small),
-                                    ),
-                            ),
+                            .children(context_rows),
                     )
                 }),
         )

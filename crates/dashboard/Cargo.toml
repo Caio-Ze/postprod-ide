@@ -25,7 +25,6 @@ gpui.workspace = true
 log.workspace = true
 menu.workspace = true
 paths.workspace = true
-language.workspace = true
 picker.workspace = true
 postprod_rules.workspace = true
 postprod_scheduler.workspace = true
