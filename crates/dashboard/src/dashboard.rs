@@ -35,14 +35,16 @@ use hotkeys::GlobalShortcutModal;
 use card::CardRenderContext;
 
 use agent_settings::AgentProfileId;
-use agent_ui::AgentPanel;
+use agent_ui::{AgentPanel, InlineAssistant};
+use language::LanguageRegistry;
 use menu;
+use postprod_rules::note_store::NoteStore;
 use editor::{Editor, EditorEvent};
 use gpui::{
     Action, AnyWindowHandle, App, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
     ExternalPaths, FocusHandle, Focusable, IntoElement,
     ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription,
-    WeakEntity, Window, actions,
+    UpdateGlobal, WeakEntity, Window, WindowHandle, actions,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -333,6 +335,10 @@ pub struct Dashboard {
     // "Add Automation" ghost card state
     pending_new_automation: Option<Entity<Editor>>,
     _pending_automation_subscription: Option<Subscription>,
+    // PostProd Rules (notes LMDB store + window handle)
+    note_store: Option<Entity<NoteStore>>,
+    postprod_rules_window: Option<WindowHandle<postprod_rules::PostProdRules>>,
+    _note_store_init: Option<gpui::Task<()>>,
 }
 
 pub(crate) fn resolve_tool_command(
@@ -798,6 +804,24 @@ impl Dashboard {
                 })
             });
 
+            // Create NoteStore init task before building the struct
+            let db_path = state_dir_for(&config_root).join("notes.mdb");
+            let note_store_task = NoteStore::new(db_path, cx);
+            let note_store_init = cx.spawn(async move |dashboard, cx: &mut AsyncApp| {
+                match note_store_task.await {
+                    Ok(store) => {
+                        dashboard.update(cx, |dashboard, cx| {
+                            dashboard.note_store = Some(cx.new(|_| store));
+                            dashboard._note_store_init = None;
+                            cx.notify();
+                        }).log_err();
+                    }
+                    Err(err) => {
+                        log::error!("Failed to initialize NoteStore: {:?}", err);
+                    }
+                }
+            });
+
             Self {
                 workspace: workspace.weak_handle(),
                 last_worktree_override: None,
@@ -848,8 +872,55 @@ impl Dashboard {
                 _pending_pipeline_subscription: None,
                 pending_new_automation: None,
                 _pending_automation_subscription: None,
+                note_store: None,
+                postprod_rules_window: None,
+                _note_store_init: Some(note_store_init),
             }
         })
+    }
+
+    pub(crate) fn open_postprod_rules(
+        &mut self,
+        note_to_select: Option<postprod_rules::note_store::NoteId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(store) = self.note_store.clone() else {
+            log::warn!("NoteStore not ready yet");
+            return;
+        };
+
+        let workspace = self.workspace.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let language_registry = cx.update(|_window, cx| {
+                workspace.upgrade()
+                    .and_then(|ws| Some(ws.read(cx).app_state().languages.clone()))
+            })?;
+            let Some(language_registry) = language_registry else {
+                return anyhow::Ok(());
+            };
+
+            let inline_delegate = Box::new(PostProdInlineAssist {
+                workspace: workspace.clone(),
+            });
+
+            let window_handle = cx.update(|_window, cx| {
+                postprod_rules::open_postprod_rules(
+                    store,
+                    language_registry,
+                    inline_delegate,
+                    note_to_select,
+                    cx,
+                )
+            })?.await?;
+
+            this.update(cx, |dashboard, _cx| {
+                dashboard.postprod_rules_window = Some(window_handle);
+            })?;
+
+            anyhow::Ok(())
+        });
+        task.detach_and_log_err(cx);
     }
 
     pub(crate) fn spawn_tool_entry(
@@ -1037,6 +1108,32 @@ impl Dashboard {
         self.expanded_automations.clear();
         self.pending_new_pipeline = None;
         self._pending_pipeline_subscription = None;
+
+        // Close PostProd Rules window (it's tied to the old project's NoteStore)
+        if let Some(window_handle) = self.postprod_rules_window.take() {
+            cx.update_window(window_handle.into(), |_, window, _cx| {
+                window.remove_window();
+            }).log_err();
+        }
+
+        // Recreate NoteStore for the new config_root
+        self.note_store = None;
+        let db_path = state_dir_for(&self.config_root).join("notes.mdb");
+        let note_store_task = NoteStore::new(db_path, cx);
+        self._note_store_init = Some(cx.spawn(async move |dashboard, cx: &mut AsyncApp| {
+            match note_store_task.await {
+                Ok(store) => {
+                    dashboard.update(cx, |dashboard, cx| {
+                        dashboard.note_store = Some(cx.new(|_| store));
+                        dashboard._note_store_init = None;
+                        cx.notify();
+                    }).log_err();
+                }
+                Err(err) => {
+                    log::error!("Failed to reinitialize NoteStore: {:?}", err);
+                }
+            }
+        }));
 
         cx.notify();
     }
@@ -4430,5 +4527,62 @@ automation = "review"
         assert!(entry.is_pipeline());
 
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PostProd Rules — InlineAssistDelegate implementation
+// ---------------------------------------------------------------------------
+
+struct PostProdInlineAssist {
+    workspace: WeakEntity<Workspace>,
+}
+
+impl postprod_rules::InlineAssistDelegate for PostProdInlineAssist {
+    fn assist(
+        &self,
+        prompt_editor: &Entity<Editor>,
+        initial_prompt: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<postprod_rules::PostProdRules>,
+    ) {
+        InlineAssistant::update_global(cx, |assistant, cx| {
+            let Some(workspace) = self.workspace.upgrade() else {
+                return;
+            };
+            let Some(panel) = workspace.read(cx).panel::<AgentPanel>(cx) else {
+                return;
+            };
+            let history = panel
+                .read(cx)
+                .connection_store()
+                .read(cx)
+                .entry(&agent_ui::Agent::NativeAgent)
+                .and_then(|s| s.read(cx).history())
+                .map(|h| h.downgrade());
+            let project = workspace.read(cx).project().downgrade();
+            let panel = panel.read(cx);
+            let thread_store = panel.thread_store().clone();
+            assistant.assist(
+                prompt_editor,
+                self.workspace.clone(),
+                project,
+                thread_store,
+                None,
+                history,
+                initial_prompt,
+                window,
+                cx,
+            );
+        })
+    }
+
+    fn focus_agent_panel(
+        &self,
+        workspace: &mut Workspace,
+        window: &mut Window,
+        cx: &mut Context<Workspace>,
+    ) -> bool {
+        workspace.focus_panel::<AgentPanel>(window, cx).is_some()
     }
 }
