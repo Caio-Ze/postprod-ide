@@ -936,7 +936,7 @@ impl Dashboard {
         let task = cx.spawn_in(window, async move |this, cx| {
             let language_registry = cx.update(|_window, cx| {
                 workspace.upgrade()
-                    .and_then(|ws| Some(ws.read(cx).app_state().languages.clone()))
+                    .map(|ws| ws.read(cx).app_state().languages.clone())
             })?;
             let Some(language_registry) = language_registry else {
                 return anyhow::Ok(());

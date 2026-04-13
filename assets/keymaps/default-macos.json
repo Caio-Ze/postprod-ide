@@ -423,6 +423,15 @@
     },
   },
   {
+    "context": "PostProdRules",
+    "use_key_equivalents": true,
+    "bindings": {
+      "cmd-n": "postprod_rules::NewNote",
+      "cmd-shift-s": "postprod_rules::ToggleDefaultNote",
+      "cmd-w": "workspace::CloseWindow",
+    },
+  },
+  {
     "context": "BufferSearchBar",
     "use_key_equivalents": true,
     "bindings": {
