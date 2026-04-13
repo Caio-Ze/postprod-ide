@@ -58,7 +58,7 @@ pub fn render_automation_card(
     let run_entity = entity.clone();
     let run_id = entry_id.clone();
     let run_label = entry_label.clone();
-    let run_prompt = entry_prompt.clone();
+    let run_prompt = entry_prompt;
 
     let sched_entity = entity.clone();
     let sched_id = entry_id.clone();
