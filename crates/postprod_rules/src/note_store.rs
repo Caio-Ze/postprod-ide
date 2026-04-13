@@ -131,6 +131,16 @@ impl NoteStore {
         })
     }
 
+    /// Synchronous body read. LMDB reads are microseconds.
+    /// Use for note injection in the prompt assembly path.
+    pub fn load_body_sync(&self, id: NoteId) -> Result<String> {
+        let txn = self.env.read_txn()?;
+        match self.bodies.get(&txn, &id)? {
+            Some(body) => Ok(body.into()),
+            None => Err(anyhow!("note not found")),
+        }
+    }
+
     pub fn load(&self, id: NoteId, cx: &App) -> Task<Result<String>> {
         let env = self.env.clone();
         let bodies = self.bodies;

@@ -1862,7 +1862,7 @@ impl PostProdRules {
                         let focus_handle = note_editor.body_editor.focus_handle(cx);
                         let token_count = note_editor.token_count;
 
-                        Some(self.render_entry_inner(
+                        let mut panel = self.render_entry_inner(
                             Some(&note_editor.title_editor),
                             None,
                             &note_editor.body_editor,
@@ -1872,7 +1872,9 @@ impl PostProdRules {
                             Some(note_metadata.default),
                             false,
                             cx,
-                        ))
+                        );
+                        panel = panel.child(self.render_note_assignment(note_id, cx));
+                        Some(panel)
                     }
                     ActiveEntryId::File(ref path) => {
                         let file_editor = self.file_editors.get(path)?;
@@ -1902,6 +1904,124 @@ impl PostProdRules {
                     }
                 }
             }))
+    }
+
+    fn render_note_assignment(
+        &self,
+        note_id: NoteId,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let metadata = self.store.read(cx).metadata(note_id);
+        let is_default = metadata.as_ref().map_or(false, |m| m.default);
+        let assigned = metadata
+            .as_ref()
+            .map(|m| m.assigned_automations.clone())
+            .unwrap_or_default();
+
+        v_flex()
+            .px_2()
+            .py_1()
+            .gap_1()
+            .border_t_1()
+            .border_color(cx.theme().colors().border)
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(
+                        Label::new("Note Assignment")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Label::new("Applied on standalone runs only")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Warning),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(
+                        IconButton::new("toggle-default-all", IconName::Paperclip)
+                            .toggle_state(is_default)
+                            .when(is_default, |this| this.icon_color(Color::Accent))
+                            .icon_size(IconSize::Small)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.toggle_default_for_note(note_id, window, cx);
+                            })),
+                    )
+                    .child(
+                        Label::new(if is_default {
+                            "Default (attached to all automations)"
+                        } else {
+                            "Assign to specific automations:"
+                        })
+                        .size(LabelSize::Small)
+                        .color(if is_default {
+                            Color::Accent
+                        } else {
+                            Color::Default
+                        }),
+                    ),
+            )
+            .when(!is_default, |this| {
+                this.children(self.automations.iter().map(|automation| {
+                    let auto_id = automation.id.clone();
+                    let is_assigned = assigned.contains(&auto_id);
+                    let auto_label: SharedString = automation.label.clone().into();
+
+                    h_flex()
+                        .gap_2()
+                        .py_0p5()
+                        .child(
+                            IconButton::new(
+                                SharedString::from(format!("assign-{}", auto_id)),
+                                if is_assigned {
+                                    IconName::Check
+                                } else {
+                                    IconName::Plus
+                                },
+                            )
+                            .icon_size(IconSize::XSmall)
+                            .icon_color(if is_assigned {
+                                Color::Accent
+                            } else {
+                                Color::Muted
+                            })
+                            .on_click(cx.listener(move |this, _, _window, cx| {
+                                this.toggle_note_automation_assignment(
+                                    note_id,
+                                    auto_id.clone(),
+                                    cx,
+                                );
+                            })),
+                        )
+                        .child(Label::new(auto_label).size(LabelSize::Small))
+                        .into_any_element()
+                }))
+            })
+    }
+
+    fn toggle_note_automation_assignment(
+        &mut self,
+        note_id: NoteId,
+        automation_id: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.store.update(cx, move |store, cx| {
+            if let Some(metadata) = store.metadata(note_id) {
+                let mut assigned = metadata.assigned_automations.clone();
+                if let Some(pos) = assigned.iter().position(|a| a == &automation_id) {
+                    assigned.remove(pos);
+                } else {
+                    assigned.push(automation_id);
+                }
+                store
+                    .save_metadata(note_id, metadata.title, metadata.default, assigned, cx)
+                    .detach_and_log_err(cx);
+            }
+        });
+        cx.notify();
     }
 
     /// Find the automation that owns the given prompt file.
