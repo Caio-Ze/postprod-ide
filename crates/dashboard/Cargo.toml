@@ -12,6 +12,7 @@ workspace = true
 path = "src/dashboard.rs"
 
 [dependencies]
+agent.workspace = true
 agent_settings.workspace = true
 agent_ui.workspace = true
 anyhow.workspace = true
@@ -24,7 +25,9 @@ gpui.workspace = true
 log.workspace = true
 menu.workspace = true
 paths.workspace = true
+language.workspace = true
 picker.workspace = true
+postprod_rules.workspace = true
 postprod_scheduler.workspace = true
 project.workspace = true
 schemars.workspace = true

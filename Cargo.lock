@@ -4519,6 +4519,7 @@ dependencies = [
 name = "dashboard"
 version = "0.1.0"
 dependencies = [
+ "agent",
  "agent_settings",
  "agent_ui",
  "anyhow",
@@ -4528,10 +4529,12 @@ dependencies = [
  "fuzzy",
  "global-hotkey",
  "gpui",
+ "language",
  "log",
  "menu",
  "paths",
  "picker",
+ "postprod_rules",
  "postprod_scheduler",
  "project",
  "schemars",
