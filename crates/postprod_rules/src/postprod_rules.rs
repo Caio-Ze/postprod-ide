@@ -81,6 +81,23 @@ pub struct AutomationInfo {
     pub id: String,
     pub label: String,
     pub prompt_file: Option<String>,
+    pub contexts: Vec<ContextInfo>,
+    pub skip_default_context: bool,
+}
+
+/// Lightweight context entry info for display in the window.
+#[derive(Clone, Debug)]
+pub struct ContextInfo {
+    pub source_type: String, // "path" or "script"
+    pub label: String,
+    pub required: bool,
+}
+
+/// Callbacks for the window to modify TOML context entries via Dashboard.
+/// The closures run in the calling window's App context.
+pub struct ContextCallbacks {
+    pub reorder: Box<dyn Fn(&str, usize, i32, &mut App) + Send + Sync>,
+    pub remove: Box<dyn Fn(&str, usize, &mut App) + Send + Sync>,
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +135,7 @@ pub fn open_postprod_rules(
     inline_assist_delegate: Box<dyn InlineAssistDelegate>,
     config_root: PathBuf,
     automations: Vec<AutomationInfo>,
+    context_callbacks: Option<Arc<ContextCallbacks>>,
     selection: Option<SelectionTarget>,
     cx: &mut App,
 ) -> Task<Result<WindowHandle<PostProdRules>>> {
@@ -186,6 +204,7 @@ pub fn open_postprod_rules(
                             inline_assist_delegate,
                             config_root,
                             automations,
+                            context_callbacks,
                             selection,
                             window,
                             cx,
@@ -206,8 +225,8 @@ pub struct PostProdRules {
     store: Entity<NoteStore>,
     language_registry: Arc<LanguageRegistry>,
     config_root: PathBuf,
-    #[allow(dead_code)]
     automations: Vec<AutomationInfo>,
+    context_callbacks: Option<Arc<ContextCallbacks>>,
     note_editors: HashMap<NoteId, NoteEditor>,
     file_editors: HashMap<PathBuf, FileEditor>,
     active_entry: Option<ActiveEntryId>,
@@ -670,6 +689,7 @@ impl PostProdRules {
         inline_assist_delegate: Box<dyn InlineAssistDelegate>,
         config_root: PathBuf,
         automations: Vec<AutomationInfo>,
+        context_callbacks: Option<Arc<ContextCallbacks>>,
         selection: Option<SelectionTarget>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -707,6 +727,7 @@ impl PostProdRules {
             language_registry,
             config_root,
             automations,
+            context_callbacks,
             note_editors: HashMap::default(),
             file_editors: HashMap::default(),
             active_entry: None,
@@ -1859,8 +1880,9 @@ impl PostProdRules {
                         let token_count = file_editor.token_count;
                         let title = file_editor.title.clone();
                         let is_symlink = file_editor.is_symlink;
+                        let automation = self.automation_for_prompt_file(path).cloned();
 
-                        Some(self.render_entry_inner(
+                        let mut panel = self.render_entry_inner(
                             None,
                             Some(&title),
                             &file_editor.body_editor,
@@ -1870,9 +1892,136 @@ impl PostProdRules {
                             None, // files don't have default toggle
                             is_symlink,
                             cx,
-                        ))
+                        );
+                        if let Some(automation) = &automation {
+                            if !automation.contexts.is_empty() {
+                                panel = panel.child(self.render_context_list(automation, cx));
+                            }
+                        }
+                        Some(panel)
                     }
                 }
+            }))
+    }
+
+    /// Find the automation that owns the given prompt file.
+    fn automation_for_prompt_file(&self, path: &Path) -> Option<&AutomationInfo> {
+        let filename = path.file_name()?.to_str()?;
+        self.automations
+            .iter()
+            .find(|a| a.prompt_file.as_deref() == Some(filename))
+    }
+
+    fn render_context_list(
+        &self,
+        automation: &AutomationInfo,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let auto_id = automation.id.clone();
+        let callbacks = self.context_callbacks.clone();
+
+        v_flex()
+            .px_2()
+            .py_1()
+            .gap_1()
+            .border_t_1()
+            .border_color(cx.theme().colors().border)
+            .child(
+                h_flex()
+                    .justify_between()
+                    .child(
+                        Label::new("Context Sources")
+                            .size(LabelSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Label::new(format!("{} entries", automation.contexts.len()))
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    ),
+            )
+            .children(automation.contexts.iter().enumerate().map(|(ix, ctx)| {
+                let auto_id_reorder = auto_id.clone();
+                let auto_id_remove = auto_id.clone();
+                let callbacks_reorder = callbacks.clone();
+                let callbacks_remove = callbacks.clone();
+                let is_first = ix == 0;
+                let is_last = ix == automation.contexts.len() - 1;
+
+                h_flex()
+                    .gap_1()
+                    .py_0p5()
+                    .items_center()
+                    .child(
+                        Label::new(ctx.source_type.clone())
+                            .size(LabelSize::XSmall)
+                            .color(if ctx.source_type == "script" {
+                                Color::Accent
+                            } else {
+                                Color::Muted
+                            }),
+                    )
+                    .child(
+                        Label::new(ctx.label.clone())
+                            .size(LabelSize::Small)
+                            .color(Color::Default)
+                            .truncate(),
+                    )
+                    .when(!ctx.required, |this| {
+                        this.child(
+                            Label::new("optional")
+                                .size(LabelSize::XSmall)
+                                .color(Color::Warning),
+                        )
+                    })
+                    .child(div().flex_grow())
+                    .when_some(callbacks_reorder, |this, cb| {
+                        let cb_up = cb.clone();
+                        let cb_down = cb;
+                        this.when(!is_first, |this| {
+                            let auto_id = auto_id_reorder.clone();
+                            this.child(
+                                IconButton::new(
+                                    SharedString::from(format!("ctx-up-{ix}")),
+                                    IconName::ArrowUp,
+                                )
+                                .icon_size(IconSize::XSmall)
+                                .icon_color(Color::Muted)
+                                .on_click(move |_, _window, cx| {
+                                    (cb_up.reorder)(&auto_id, ix, -1, cx);
+                                }),
+                            )
+                        })
+                        .when(!is_last, |this| {
+                            let auto_id = auto_id_reorder.clone();
+                            this.child(
+                                IconButton::new(
+                                    SharedString::from(format!("ctx-down-{ix}")),
+                                    IconName::ArrowDown,
+                                )
+                                .icon_size(IconSize::XSmall)
+                                .icon_color(Color::Muted)
+                                .on_click(move |_, _window, cx| {
+                                    (cb_down.reorder)(&auto_id, ix, 1, cx);
+                                }),
+                            )
+                        })
+                    })
+                    .when_some(callbacks_remove, |this, cb| {
+                        let auto_id = auto_id_remove;
+                        this.child(
+                            IconButton::new(
+                                SharedString::from(format!("ctx-rm-{ix}")),
+                                IconName::Close,
+                            )
+                            .icon_size(IconSize::XSmall)
+                            .icon_color(Color::Muted)
+                            .on_click(move |_, _window, cx| {
+                                (cb.remove)(&auto_id, ix, cx);
+                            }),
+                        )
+                    })
+                    .into_any_element()
             }))
     }
 
