@@ -67,10 +67,18 @@ pub trait InlineAssistDelegate {
 // Public types for Dashboard integration
 // ---------------------------------------------------------------------------
 
-/// Selection target for deep linking into the window.
+/// Selection target for deep linking into the window (used in general mode).
 pub enum SelectionTarget {
     Note(NoteId),
     PromptFile(String),
+}
+
+/// Window operating mode, set at construction.
+pub enum WindowMode {
+    /// Card "Edit Prompt" button — picker scoped to one automation.
+    Scoped(AutomationInfo),
+    /// Header button / keybinding — browse everything.
+    General(Option<SelectionTarget>),
 }
 
 /// Lightweight automation info passed by Dashboard.
@@ -88,6 +96,7 @@ pub struct AutomationInfo {
 pub struct ContextInfo {
     pub source_type: String, // "path" or "script"
     pub label: String,
+    pub resolved_path: PathBuf,
     pub required: bool,
 }
 
@@ -96,6 +105,8 @@ pub struct ContextInfo {
 pub struct ContextCallbacks {
     pub reorder: Box<dyn Fn(&str, usize, i32, &mut App) + Send + Sync>,
     pub remove: Box<dyn Fn(&str, usize, &mut App) + Send + Sync>,
+    pub add_path: Box<dyn Fn(&str, PathBuf, &mut App) + Send + Sync>,
+    pub add_script: Box<dyn Fn(&str, String, &mut App) + Send + Sync>,
 }
 
 // ---------------------------------------------------------------------------
@@ -118,6 +129,16 @@ struct PromptFileEntry {
     pub(crate) is_symlink: bool,
 }
 
+#[derive(Clone, Debug)]
+struct ContextSourceEntry {
+    filename: String,
+    resolved_path: PathBuf,
+    source_type: String,
+    is_directory: bool,
+    toml_index: usize,
+    automation_id: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 enum ActiveEntryId {
     Note(NoteId),
@@ -135,39 +156,22 @@ pub fn open_postprod_rules(
     config_root: PathBuf,
     automations: Vec<AutomationInfo>,
     context_callbacks: Option<Arc<ContextCallbacks>>,
-    selection: Option<SelectionTarget>,
+    mode: WindowMode,
     cx: &mut App,
 ) -> Task<Result<WindowHandle<PostProdRules>>> {
     cx.spawn(async move |cx| {
-        let existing_window = cx.update(|cx| {
-            let existing_window = cx
+        // Close any existing window — always reopen fresh to avoid stale state
+        cx.update(|cx| {
+            if let Some(existing_window) = cx
                 .windows()
                 .into_iter()
-                .find_map(|window| window.downcast::<PostProdRules>());
-            if let Some(existing_window) = existing_window {
+                .find_map(|window| window.downcast::<PostProdRules>())
+            {
                 existing_window
-                    .update(cx, |rules, window, cx| {
-                        match &selection {
-                            Some(SelectionTarget::Note(id)) => {
-                                rules.load_note(*id, true, window, cx);
-                            }
-                            Some(SelectionTarget::PromptFile(filename)) => {
-                                rules.select_prompt_file(filename, window, cx);
-                            }
-                            None => {}
-                        }
-                        window.activate_window()
-                    })
+                    .update(cx, |_, window, _cx| window.remove_window())
                     .ok();
-                Some(existing_window)
-            } else {
-                None
             }
         });
-
-        if let Some(existing_window) = existing_window {
-            return Ok(existing_window);
-        }
 
         cx.update(|cx| {
             let app_id = ReleaseChannel::global(cx).app_id();
@@ -204,7 +208,7 @@ pub fn open_postprod_rules(
                             config_root,
                             automations,
                             context_callbacks,
-                            selection,
+                            mode,
                             window,
                             cx,
                         )
@@ -223,8 +227,8 @@ pub struct PostProdRules {
     title_bar: Option<Entity<PlatformTitleBar>>,
     store: Entity<NoteStore>,
     language_registry: Arc<LanguageRegistry>,
-    #[allow(dead_code)]
     config_root: PathBuf,
+    mode: WindowMode,
     automations: Vec<AutomationInfo>,
     context_callbacks: Option<Arc<ContextCallbacks>>,
     note_editors: HashMap<NoteId, NoteEditor>,
@@ -268,6 +272,10 @@ enum PostProdPickerEntry {
     Note(NoteMetadata),
     PromptFile(PromptFileEntry),
     DefaultContextFile(PromptFileEntry),
+    ContextSource(ContextSourceEntry),
+    FolderChild(ContextSourceEntry),
+    AddContextAction(String),
+    AddNoteAction(String),
     Separator,
 }
 
@@ -275,18 +283,103 @@ struct PostProdPickerDelegate {
     store: Entity<NoteStore>,
     prompt_files: Vec<PromptFileEntry>,
     default_context_files: Vec<PromptFileEntry>,
+    scoped_automation: Option<AutomationInfo>,
+    expanded_folders: collections::HashSet<PathBuf>,
     selected_index: usize,
     filtered_entries: Vec<PostProdPickerEntry>,
 }
 
+#[allow(dead_code)]
 enum PostProdPickerEvent {
     Selected { entry_id: ActiveEntryId },
     Confirmed { entry_id: ActiveEntryId },
     Deleted { note_id: NoteId },
     ToggledDefault { note_id: NoteId },
+    ContextReorder { automation_id: String, toml_index: usize, direction: i32 },
+    ContextRemove { automation_id: String, toml_index: usize },
+    AddContextFile { automation_id: String },
+    AddContextScript { automation_id: String },
+    AddScopedNote { automation_id: String },
 }
 
 impl EventEmitter<PostProdPickerEvent> for Picker<PostProdPickerDelegate> {}
+
+impl PostProdPickerDelegate {
+    /// Toggle folder expansion in the picker. Inserts/removes child entries in-place.
+    fn toggle_folder_expansion(
+        &mut self,
+        folder_path: &Path,
+        cx: &mut Context<Picker<Self>>,
+    ) {
+        if self.expanded_folders.contains(folder_path) {
+            // Collapse: remove FolderChild entries following this folder
+            self.expanded_folders.remove(folder_path);
+            let folder_ix = self
+                .filtered_entries
+                .iter()
+                .position(|e| matches!(e, PostProdPickerEntry::ContextSource(c) if c.resolved_path == folder_path));
+            if let Some(ix) = folder_ix {
+                let remove_start = ix + 1;
+                let remove_count = self.filtered_entries[remove_start..]
+                    .iter()
+                    .take_while(|e| matches!(e, PostProdPickerEntry::FolderChild(_)))
+                    .count();
+                self.filtered_entries
+                    .drain(remove_start..remove_start + remove_count);
+            }
+        } else {
+            // Expand: scan one level and insert FolderChild entries
+            self.expanded_folders.insert(folder_path.to_path_buf());
+            let folder_ix = self
+                .filtered_entries
+                .iter()
+                .position(|e| matches!(e, PostProdPickerEntry::ContextSource(c) if c.resolved_path == folder_path));
+
+            let (automation_id, toml_index) = self
+                .filtered_entries
+                .iter()
+                .find_map(|e| match e {
+                    PostProdPickerEntry::ContextSource(c) if c.resolved_path == folder_path => {
+                        Some((c.automation_id.clone(), c.toml_index))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            if let Some(ix) = folder_ix {
+                let mut children = Vec::new();
+                if let Ok(read_dir) = std::fs::read_dir(folder_path) {
+                    let mut child_paths: Vec<_> = read_dir
+                        .flatten()
+                        .map(|e| e.path())
+                        .filter(|p| p.is_file())
+                        .collect();
+                    child_paths.sort();
+                    for child_path in child_paths {
+                        let filename = child_path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .to_string();
+                        children.push(PostProdPickerEntry::FolderChild(ContextSourceEntry {
+                            filename,
+                            resolved_path: child_path,
+                            source_type: "path".to_string(),
+                            is_directory: false,
+                            toml_index,
+                            automation_id: automation_id.clone(),
+                        }));
+                    }
+                }
+                let insert_at = ix + 1;
+                for (i, child) in children.into_iter().enumerate() {
+                    self.filtered_entries.insert(insert_at + i, child);
+                }
+            }
+        }
+        cx.notify();
+    }
+}
 
 // ---------------------------------------------------------------------------
 // File scanning helpers
@@ -326,11 +419,220 @@ fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
     entries
 }
 
+/// Build picker entries for scoped mode (one automation's content).
+fn build_scoped_entries(
+    automation: &AutomationInfo,
+    prompt_files: &[PromptFileEntry],
+    default_context_files: &[PromptFileEntry],
+    note_matches: &[NoteMetadata],
+    expanded_folders: &collections::HashSet<PathBuf>,
+    query_lower: &str,
+    entries: &mut Vec<PostProdPickerEntry>,
+) {
+    let matches_query = |name: &str| -> bool {
+        query_lower.is_empty() || name.to_lowercase().contains(query_lower)
+    };
+
+    // Section: PROMPT — the automation's prompt file
+    if let Some(ref prompt_filename) = automation.prompt_file {
+        if let Some(prompt_entry) = prompt_files.iter().find(|f| &f.filename == prompt_filename) {
+            if matches_query(&prompt_entry.display_name) {
+                entries.push(PostProdPickerEntry::Header("PROMPT".into()));
+                entries.push(PostProdPickerEntry::PromptFile(prompt_entry.clone()));
+                entries.push(PostProdPickerEntry::Separator);
+            }
+        }
+    }
+
+    // Section: CONTEXT SOURCES — from the automation's context entries
+    let filtered_contexts: Vec<_> = automation
+        .contexts
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches_query(&c.label))
+        .collect();
+    // Always show section in scoped mode (allows adding even when empty)
+    entries.push(PostProdPickerEntry::Header("CONTEXT SOURCES".into()));
+    for (ix, ctx) in filtered_contexts {
+        let is_directory = ctx.resolved_path.is_dir();
+        let filename = ctx
+            .resolved_path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let source_entry = ContextSourceEntry {
+            filename,
+            resolved_path: ctx.resolved_path.clone(),
+            source_type: ctx.source_type.clone(),
+            is_directory,
+            toml_index: ix,
+            automation_id: automation.id.clone(),
+        };
+        entries.push(PostProdPickerEntry::ContextSource(source_entry));
+
+        // Insert folder children if expanded
+        if is_directory && expanded_folders.contains(&ctx.resolved_path) {
+            if let Ok(read_dir) = std::fs::read_dir(&ctx.resolved_path) {
+                let mut child_paths: Vec<_> = read_dir
+                    .flatten()
+                    .map(|e| e.path())
+                    .filter(|p| p.is_file())
+                    .collect();
+                child_paths.sort();
+                for child_path in child_paths {
+                    let child_filename = child_path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    if matches_query(&child_filename) {
+                        entries.push(PostProdPickerEntry::FolderChild(ContextSourceEntry {
+                            filename: child_filename,
+                            resolved_path: child_path,
+                            source_type: "path".to_string(),
+                            is_directory: false,
+                            toml_index: ix,
+                            automation_id: automation.id.clone(),
+                        }));
+                    }
+                }
+            }
+        }
+    }
+    entries.push(PostProdPickerEntry::AddContextAction(automation.id.clone()));
+    entries.push(PostProdPickerEntry::Separator);
+
+    // Section: DEFAULT CONTEXT — skip if automation opts out
+    if !automation.skip_default_context {
+        let filtered_dc: Vec<_> = default_context_files
+            .iter()
+            .filter(|f| matches_query(&f.display_name))
+            .collect();
+        if !filtered_dc.is_empty() {
+            entries.push(PostProdPickerEntry::Header("DEFAULT CONTEXT".into()));
+            for f in filtered_dc {
+                entries.push(PostProdPickerEntry::DefaultContextFile(f.clone()));
+            }
+            entries.push(PostProdPickerEntry::Separator);
+        }
+    }
+
+    // Section: NOTES — default notes + notes assigned to this automation
+    let automation_id = &automation.id;
+    let relevant_notes: Vec<_> = note_matches
+        .iter()
+        .filter(|n| n.default || n.assigned_automations.iter().any(|a| a == automation_id))
+        .cloned()
+        .collect();
+    entries.push(PostProdPickerEntry::Header("NOTES".into()));
+    for note in relevant_notes {
+        entries.push(PostProdPickerEntry::Note(note));
+    }
+    entries.push(PostProdPickerEntry::AddNoteAction(automation.id.clone()));
+}
+
+/// Build picker entries for general mode (browse everything).
+fn build_general_entries(
+    prompt_files: &[PromptFileEntry],
+    default_context_files: &[PromptFileEntry],
+    note_matches: Vec<NoteMetadata>,
+    query_lower: &str,
+    entries: &mut Vec<PostProdPickerEntry>,
+) {
+    // Filter prompt files by query
+    let filtered_prompts: Vec<_> = if query_lower.is_empty() {
+        prompt_files.to_vec()
+    } else {
+        prompt_files
+            .iter()
+            .filter(|f| f.display_name.to_lowercase().contains(query_lower))
+            .cloned()
+            .collect()
+    };
+
+    // Filter default context files by query
+    let filtered_dc: Vec<_> = if query_lower.is_empty() {
+        default_context_files.to_vec()
+    } else {
+        default_context_files
+            .iter()
+            .filter(|f| f.display_name.to_lowercase().contains(query_lower))
+            .cloned()
+            .collect()
+    };
+
+    // Section: PROMPTS
+    if !filtered_prompts.is_empty() {
+        entries.push(PostProdPickerEntry::Header("PROMPTS".into()));
+        for f in filtered_prompts {
+            entries.push(PostProdPickerEntry::PromptFile(f));
+        }
+        entries.push(PostProdPickerEntry::Separator);
+    }
+
+    // Section: NOTES
+    let (default_notes, other_notes): (Vec<_>, Vec<_>) =
+        note_matches.into_iter().partition(|note| note.default);
+
+    if !default_notes.is_empty() || !other_notes.is_empty() {
+        entries.push(PostProdPickerEntry::Header("NOTES".into()));
+        for note in default_notes {
+            entries.push(PostProdPickerEntry::Note(note));
+        }
+        for note in other_notes {
+            entries.push(PostProdPickerEntry::Note(note));
+        }
+        entries.push(PostProdPickerEntry::Separator);
+    }
+
+    // Section: DEFAULT CONTEXT
+    if !filtered_dc.is_empty() {
+        entries.push(PostProdPickerEntry::Header("DEFAULT CONTEXT".into()));
+        for f in filtered_dc {
+            entries.push(PostProdPickerEntry::DefaultContextFile(f));
+        }
+    }
+}
+
+/// Scan for executable scripts in a directory.
+fn scan_scripts(dir: &Path) -> Vec<String> {
+    let read_dir = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return Vec::new(),
+    };
+    let mut scripts: Vec<String> = read_dir
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.is_file() {
+                Some(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string(),
+                )
+            } else {
+                None
+            }
+        })
+        .collect();
+    scripts.sort();
+    scripts
+}
+
 fn entry_id_for_picker_entry(entry: &PostProdPickerEntry) -> Option<ActiveEntryId> {
     match entry {
         PostProdPickerEntry::Note(n) => Some(ActiveEntryId::Note(n.id)),
         PostProdPickerEntry::PromptFile(f) | PostProdPickerEntry::DefaultContextFile(f) => {
             Some(ActiveEntryId::File(f.path.clone()))
+        }
+        PostProdPickerEntry::ContextSource(c) | PostProdPickerEntry::FolderChild(c) => {
+            if c.is_directory {
+                None // Directories are grouping nodes, not selectable for editing
+            } else {
+                Some(ActiveEntryId::File(c.resolved_path.clone()))
+            }
         }
         _ => None,
     }
@@ -373,7 +675,9 @@ impl PickerDelegate for PostProdPickerDelegate {
         match self.filtered_entries.get(ix) {
             Some(PostProdPickerEntry::Note(_))
             | Some(PostProdPickerEntry::PromptFile(_))
-            | Some(PostProdPickerEntry::DefaultContextFile(_)) => true,
+            | Some(PostProdPickerEntry::DefaultContextFile(_))
+            | Some(PostProdPickerEntry::FolderChild(_)) => true,
+            Some(PostProdPickerEntry::ContextSource(c)) => !c.is_directory,
             _ => false,
         }
     }
@@ -397,6 +701,8 @@ impl PickerDelegate for PostProdPickerDelegate {
 
         let prompt_files = self.prompt_files.clone();
         let default_context_files = self.default_context_files.clone();
+        let scoped_automation = self.scoped_automation.clone();
+        let expanded_folders = self.expanded_folders.clone();
 
         let prev_entry_id = self
             .filtered_entries
@@ -409,65 +715,28 @@ impl PickerDelegate for PostProdPickerDelegate {
                     let note_matches = search.await;
                     let query_lower = query.to_lowercase();
 
-                    // Filter prompt files by query
-                    let filtered_prompts: Vec<_> = if query.is_empty() {
-                        prompt_files
-                    } else {
-                        prompt_files
-                            .into_iter()
-                            .filter(|f| f.display_name.to_lowercase().contains(&query_lower))
-                            .collect()
-                    };
-
-                    // Filter default context files by query
-                    let filtered_dc: Vec<_> = if query.is_empty() {
-                        default_context_files
-                    } else {
-                        default_context_files
-                            .into_iter()
-                            .filter(|f| f.display_name.to_lowercase().contains(&query_lower))
-                            .collect()
-                    };
-
                     let mut filtered_entries = Vec::new();
 
-                    // Section: PROMPTS
-                    if !filtered_prompts.is_empty() {
-                        filtered_entries
-                            .push(PostProdPickerEntry::Header("PROMPTS".into()));
-                        for f in filtered_prompts {
-                            filtered_entries.push(PostProdPickerEntry::PromptFile(f));
-                        }
-                        filtered_entries.push(PostProdPickerEntry::Separator);
-                    }
-
-                    // Section: NOTES
-                    let (default_notes, other_notes): (Vec<_>, Vec<_>) =
-                        note_matches.into_iter().partition(|note| note.default);
-
-                    if !default_notes.is_empty() || !other_notes.is_empty() {
-                        filtered_entries
-                            .push(PostProdPickerEntry::Header("NOTES".into()));
-
-                        if !default_notes.is_empty() {
-                            for note in default_notes {
-                                filtered_entries.push(PostProdPickerEntry::Note(note));
-                            }
-                        }
-                        for note in other_notes {
-                            filtered_entries.push(PostProdPickerEntry::Note(note));
-                        }
-                        filtered_entries.push(PostProdPickerEntry::Separator);
-                    }
-
-                    // Section: DEFAULT CONTEXT
-                    if !filtered_dc.is_empty() {
-                        filtered_entries
-                            .push(PostProdPickerEntry::Header("DEFAULT CONTEXT".into()));
-                        for f in filtered_dc {
-                            filtered_entries
-                                .push(PostProdPickerEntry::DefaultContextFile(f));
-                        }
+                    if let Some(ref automation) = scoped_automation {
+                        // --- Scoped mode: 4 sections from one automation ---
+                        build_scoped_entries(
+                            automation,
+                            &prompt_files,
+                            &default_context_files,
+                            &note_matches,
+                            &expanded_folders,
+                            &query_lower,
+                            &mut filtered_entries,
+                        );
+                    } else {
+                        // --- General mode: all prompts, notes, default context ---
+                        build_general_entries(
+                            &prompt_files,
+                            &default_context_files,
+                            note_matches,
+                            &query_lower,
+                            &mut filtered_entries,
+                        );
                     }
 
                     let selected_index = prev_entry_id
@@ -610,7 +879,7 @@ impl PickerDelegate for PostProdPickerDelegate {
                 )
             }
             PostProdPickerEntry::PromptFile(file) => {
-                let label: SharedString = file.display_name.clone().into();
+                let label: SharedString = file.filename.clone().into();
                 Some(
                     ListItem::new(ix)
                         .inset(true)
@@ -621,17 +890,19 @@ impl PickerDelegate for PostProdPickerDelegate {
                                 .size(IconSize::Small)
                                 .color(Color::Muted),
                         )
-                        .child(Label::new(label).truncate().mr_10())
-                        .end_slot::<Label>(Some(
-                            Label::new(file.filename.clone())
-                                .color(Color::Muted)
-                                .size(LabelSize::Small),
-                        ))
+                        .child(Label::new(label).truncate())
                         .into_any_element(),
                 )
             }
             PostProdPickerEntry::DefaultContextFile(file) => {
-                let label: SharedString = file.display_name.clone().into();
+                let label: SharedString = file.filename.clone().into();
+                let symlink_target = if file.is_symlink {
+                    std::fs::read_link(&file.path)
+                        .ok()
+                        .map(|t| SharedString::from(format!("symlink to {}", t.display())))
+                } else {
+                    None
+                };
                 Some(
                     ListItem::new(ix)
                         .inset(true)
@@ -642,7 +913,7 @@ impl PickerDelegate for PostProdPickerDelegate {
                                 .size(IconSize::Small)
                                 .color(Color::Muted),
                         )
-                        .child(Label::new(label).truncate().mr_10())
+                        .child(Label::new(label).truncate())
                         .when(file.is_symlink, |this| {
                             this.end_slot::<Label>(Some(
                                 Label::new("symlink")
@@ -650,6 +921,187 @@ impl PickerDelegate for PostProdPickerDelegate {
                                     .size(LabelSize::XSmall),
                             ))
                         })
+                        .when_some(symlink_target, |this, target| {
+                            this.tooltip(Tooltip::text(target))
+                        })
+                        .into_any_element(),
+                )
+            }
+            PostProdPickerEntry::ContextSource(entry) => {
+                let label: SharedString = entry.filename.clone().into();
+                let icon = if entry.is_directory {
+                    IconName::Folder
+                } else if entry.source_type == "script" {
+                    IconName::Terminal
+                } else {
+                    IconName::File
+                };
+                let is_expanded = self.expanded_folders.contains(&entry.resolved_path);
+                let path = entry.resolved_path.clone();
+                let full_path: SharedString = path.display().to_string().into();
+                let toml_ix = entry.toml_index;
+                let ctx_count = self
+                    .scoped_automation
+                    .as_ref()
+                    .map_or(0, |a| a.contexts.len());
+                let is_first = toml_ix == 0;
+                let is_last = toml_ix + 1 >= ctx_count;
+
+                let auto_id_up = entry.automation_id.clone();
+                let auto_id_down = entry.automation_id.clone();
+                let auto_id_rm = entry.automation_id.clone();
+
+                let item = ListItem::new(ix)
+                    .inset(true)
+                    .spacing(ListItemSpacing::Sparse)
+                    .toggle_state(selected)
+                    .start_slot(
+                        Icon::new(icon).size(IconSize::Small).color(Color::Muted),
+                    )
+                    .child(Label::new(label).truncate())
+                    .tooltip(Tooltip::text(full_path))
+                    .end_slot_on_hover(
+                        h_flex()
+                            .gap_0p5()
+                            .when(!is_first, |this| {
+                                this.child(
+                                    IconButton::new(
+                                        SharedString::from(format!("ctx-up-{ix}")),
+                                        IconName::ArrowUp,
+                                    )
+                                    .icon_size(IconSize::XSmall)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(Tooltip::text("Move Up"))
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.emit(PostProdPickerEvent::ContextReorder {
+                                            automation_id: auto_id_up.clone(),
+                                            toml_index: toml_ix,
+                                            direction: -1,
+                                        });
+                                    })),
+                                )
+                            })
+                            .when(!is_last, |this| {
+                                this.child(
+                                    IconButton::new(
+                                        SharedString::from(format!("ctx-down-{ix}")),
+                                        IconName::ArrowDown,
+                                    )
+                                    .icon_size(IconSize::XSmall)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(Tooltip::text("Move Down"))
+                                    .on_click(cx.listener(move |_, _, _, cx| {
+                                        cx.emit(PostProdPickerEvent::ContextReorder {
+                                            automation_id: auto_id_down.clone(),
+                                            toml_index: toml_ix,
+                                            direction: 1,
+                                        });
+                                    })),
+                                )
+                            })
+                            .child(
+                                IconButton::new(
+                                    SharedString::from(format!("ctx-remove-{ix}")),
+                                    IconName::Trash,
+                                )
+                                .icon_size(IconSize::XSmall)
+                                .icon_color(Color::Muted)
+                                .tooltip(Tooltip::text("Remove"))
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.emit(PostProdPickerEvent::ContextRemove {
+                                        automation_id: auto_id_rm.clone(),
+                                        toml_index: toml_ix,
+                                    });
+                                })),
+                            ),
+                    );
+
+                if entry.is_directory {
+                    Some(
+                        item.end_slot::<Icon>(Some(
+                            Icon::new(if is_expanded {
+                                IconName::ChevronDown
+                            } else {
+                                IconName::ChevronRight
+                            })
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                        ))
+                        .on_click(cx.listener(move |this, _, _window, cx| {
+                            this.delegate.toggle_folder_expansion(&path, cx);
+                        }))
+                        .into_any_element(),
+                    )
+                } else {
+                    Some(item.into_any_element())
+                }
+            }
+            PostProdPickerEntry::FolderChild(entry) => {
+                let label: SharedString = entry.filename.clone().into();
+                let full_path: SharedString =
+                    entry.resolved_path.display().to_string().into();
+                Some(
+                    ListItem::new(ix)
+                        .inset(true)
+                        .spacing(ListItemSpacing::Sparse)
+                        .toggle_state(selected)
+                        .start_slot(
+                            div().pl_4().child(
+                                Icon::new(IconName::File)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted),
+                            ),
+                        )
+                        .child(Label::new(label).truncate().mr_10())
+                        .tooltip(Tooltip::text(full_path))
+                        .into_any_element(),
+                )
+            }
+            PostProdPickerEntry::AddContextAction(automation_id) => {
+                let auto_id = automation_id.clone();
+                Some(
+                    ListItem::new(ix)
+                        .inset(true)
+                        .spacing(ListItemSpacing::Sparse)
+                        .start_slot(
+                            Icon::new(IconName::Plus)
+                                .size(IconSize::Small)
+                                .color(Color::Accent),
+                        )
+                        .child(
+                            Label::new("Add Context")
+                                .color(Color::Accent)
+                                .size(LabelSize::Small),
+                        )
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(PostProdPickerEvent::AddContextFile {
+                                automation_id: auto_id.clone(),
+                            });
+                        }))
+                        .into_any_element(),
+                )
+            }
+            PostProdPickerEntry::AddNoteAction(automation_id) => {
+                let auto_id = automation_id.clone();
+                Some(
+                    ListItem::new(ix)
+                        .inset(true)
+                        .spacing(ListItemSpacing::Sparse)
+                        .start_slot(
+                            Icon::new(IconName::Plus)
+                                .size(IconSize::Small)
+                                .color(Color::Accent),
+                        )
+                        .child(
+                            Label::new("Add Note")
+                                .color(Color::Accent)
+                                .size(LabelSize::Small),
+                        )
+                        .on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(PostProdPickerEvent::AddScopedNote {
+                                automation_id: auto_id.clone(),
+                            });
+                        }))
                         .into_any_element(),
                 )
             }
@@ -690,7 +1142,7 @@ impl PostProdRules {
         config_root: PathBuf,
         automations: Vec<AutomationInfo>,
         context_callbacks: Option<Arc<ContextCallbacks>>,
-        selection: Option<SelectionTarget>,
+        mode: WindowMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -701,10 +1153,17 @@ impl PostProdRules {
             PickerSection::DefaultContext,
         );
 
+        let scoped_automation = match &mode {
+            WindowMode::Scoped(info) => Some(info.clone()),
+            WindowMode::General(_) => None,
+        };
+
         let picker_delegate = PostProdPickerDelegate {
             store: store.clone(),
             prompt_files,
             default_context_files,
+            scoped_automation,
+            expanded_folders: collections::HashSet::default(),
             selected_index: 0,
             filtered_entries: Vec::new(),
         };
@@ -726,6 +1185,7 @@ impl PostProdRules {
             store,
             language_registry,
             config_root,
+            mode,
             automations,
             context_callbacks,
             note_editors: HashMap::default(),
@@ -737,17 +1197,68 @@ impl PostProdRules {
             picker,
         };
 
-        match selection {
-            Some(SelectionTarget::Note(id)) => {
-                this.load_note(id, true, window, cx);
-            }
-            Some(SelectionTarget::PromptFile(filename)) => {
-                this.select_prompt_file(&filename, window, cx);
-            }
-            None => {}
+        // Extract initial selection to avoid borrow conflict with &mut self methods
+        enum InitialSelection {
+            PromptFile(String),
+            Note(NoteId),
+            None,
+        }
+        let initial = match &this.mode {
+            WindowMode::Scoped(info) => match &info.prompt_file {
+                Some(pf) => InitialSelection::PromptFile(pf.clone()),
+                None => InitialSelection::None,
+            },
+            WindowMode::General(sel) => match sel {
+                Some(SelectionTarget::Note(id)) => InitialSelection::Note(*id),
+                Some(SelectionTarget::PromptFile(f)) => InitialSelection::PromptFile(f.clone()),
+                None => InitialSelection::None,
+            },
+        };
+        match initial {
+            InitialSelection::PromptFile(f) => this.select_prompt_file(&f, window, cx),
+            InitialSelection::Note(id) => this.load_note(id, true, window, cx),
+            InitialSelection::None => {}
         }
 
         this
+    }
+
+    /// Returns the scoped automation ID, if the window is in scoped mode.
+    pub fn scoped_automation_id(&self) -> Option<&str> {
+        match &self.mode {
+            WindowMode::Scoped(info) => Some(&info.id),
+            WindowMode::General(_) => None,
+        }
+    }
+
+    /// Returns true if the window is in scoped mode.
+    pub fn is_scoped(&self) -> bool {
+        matches!(self.mode, WindowMode::Scoped(_))
+    }
+
+    /// Update the scoped automation info (called by Dashboard during 10s poll).
+    /// If the automation no longer exists, close the window.
+    pub fn update_automation(
+        &mut self,
+        info: Option<AutomationInfo>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match info {
+            Some(info) => {
+                self.picker.update(cx, |picker, cx| {
+                    picker.delegate.scoped_automation = Some(info.clone());
+                    picker.refresh(window, cx);
+                });
+                if let WindowMode::Scoped(ref mut current) = self.mode {
+                    *current = info;
+                }
+            }
+            None => {
+                // Automation was deleted — close the window
+                window.remove_window();
+            }
+        }
     }
 
     fn handle_picker_event(
@@ -769,6 +1280,36 @@ impl PostProdRules {
             }
             PostProdPickerEvent::Deleted { note_id } => {
                 self.delete_note(*note_id, window, cx);
+            }
+            PostProdPickerEvent::ContextReorder {
+                automation_id,
+                toml_index,
+                direction,
+            } => {
+                if let Some(callbacks) = &self.context_callbacks {
+                    (callbacks.reorder)(automation_id, *toml_index, *direction, cx);
+                    self.picker
+                        .update(cx, |picker, cx| picker.refresh(window, cx));
+                }
+            }
+            PostProdPickerEvent::ContextRemove {
+                automation_id,
+                toml_index,
+            } => {
+                if let Some(callbacks) = &self.context_callbacks {
+                    (callbacks.remove)(automation_id, *toml_index, cx);
+                    self.picker
+                        .update(cx, |picker, cx| picker.refresh(window, cx));
+                }
+            }
+            PostProdPickerEvent::AddContextFile { automation_id } => {
+                self.add_context_file(automation_id.clone(), window, cx);
+            }
+            PostProdPickerEvent::AddContextScript { automation_id } => {
+                self.add_context_script(automation_id.clone(), window, cx);
+            }
+            PostProdPickerEvent::AddScopedNote { automation_id } => {
+                self.new_note_for_automation(automation_id.clone(), window, cx);
             }
         }
     }
@@ -819,6 +1360,95 @@ impl PostProdRules {
         let note_id = NoteId::new();
         let save = self.store.update(cx, |store, cx| {
             store.save(note_id, None, false, Vec::new(), "".into(), cx)
+        });
+        self.picker
+            .update(cx, |picker, cx| picker.refresh(window, cx));
+        cx.spawn_in(window, async move |this, cx| {
+            save.await?;
+            this.update_in(cx, |this, window, cx| {
+                this.load_note(note_id, true, window, cx)
+            })
+        })
+        .detach_and_log_err(cx);
+    }
+
+    /// Open the system file picker and add the selected file as a context entry.
+    fn add_context_file(
+        &mut self,
+        automation_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let callbacks = self.context_callbacks.clone();
+        let picker = self.picker.clone();
+        let receiver = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: true,
+            directories: true,
+            multiple: false,
+            prompt: None,
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let result = receiver.await;
+            if let Ok(Ok(Some(paths))) = result {
+                if let Some(path) = paths.into_iter().next() {
+                    cx.update(|_window, cx| {
+                        if let Some(callbacks) = &callbacks {
+                            (callbacks.add_path)(&automation_id, path, cx);
+                        }
+                    })?;
+                    this.update_in(cx, |_this, window, cx| {
+                        picker.update(cx, |picker, cx| picker.refresh(window, cx));
+                    })?;
+                }
+            }
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
+    /// Add a script as context entry by scanning available scripts.
+    fn add_context_script(
+        &mut self,
+        automation_id: String,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let scripts_dir = self.config_root.join("config/context-scripts");
+        let scripts = scan_scripts(&scripts_dir);
+        if scripts.is_empty() {
+            log::info!("No context scripts found in {}", scripts_dir.display());
+            return;
+        }
+        // If only one script, add it directly
+        if scripts.len() == 1 {
+            if let Some(callbacks) = &self.context_callbacks {
+                (callbacks.add_script)(&automation_id, scripts[0].clone(), cx);
+            }
+            return;
+        }
+        // For multiple scripts, add the first one (future: show a sub-picker)
+        if let Some(callbacks) = &self.context_callbacks {
+            (callbacks.add_script)(&automation_id, scripts[0].clone(), cx);
+        }
+    }
+
+    /// Create a new note pre-assigned to the given automation.
+    fn new_note_for_automation(
+        &mut self,
+        automation_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let note_id = NoteId::new();
+        let save = self.store.update(cx, |store, cx| {
+            store.save(
+                note_id,
+                None,
+                false,
+                vec![automation_id],
+                "".into(),
+                cx,
+            )
         });
         self.picker
             .update(cx, |picker, cx| picker.refresh(window, cx));
@@ -1161,16 +1791,20 @@ impl PostProdRules {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string()
-                .trim_end_matches(".md")
-                .replace(['-', '_'], " ")
                 .into();
 
+            let file_path_for_lang = path.clone();
             self.pending_load = cx.spawn_in(window, async move |this, cx| {
                 let content = cx
                     .background_executor()
                     .spawn(async move { std::fs::read_to_string(&load_path) })
                     .await;
-                let markdown = language_registry.language_for_name("Markdown").await;
+                let lang_name = language_registry
+                    .language_for_file_path(&file_path_for_lang)
+                    .map(|l| l.name());
+                let language = language_registry
+                    .language_for_name(lang_name.as_ref().map_or("Markdown", |n| n.as_ref()))
+                    .await;
 
                 this.update_in(cx, |this, window, cx| match content {
                     Ok(content) => {
@@ -1178,7 +1812,7 @@ impl PostProdRules {
                         let body_editor = cx.new(|cx| {
                             let buffer = cx.new(|cx| {
                                 let mut buffer = Buffer::local(content, cx);
-                                buffer.set_language(markdown.log_err(), cx);
+                                buffer.set_language(language.log_err(), cx);
                                 buffer.set_language_registry(language_registry);
                                 buffer
                             });
@@ -1894,9 +2528,13 @@ impl PostProdRules {
                             is_symlink,
                             cx,
                         );
-                        if let Some(automation) = &automation {
-                            if !automation.contexts.is_empty() {
-                                panel = panel.child(self.render_context_list(automation, cx));
+                        // In general mode, show context list below editor.
+                        // In scoped mode, context is in the picker.
+                        if !self.is_scoped() {
+                            if let Some(automation) = &automation {
+                                if !automation.contexts.is_empty() {
+                                    panel = panel.child(self.render_context_list(automation, cx));
+                                }
                             }
                         }
                         Some(panel)
@@ -2339,5 +2977,324 @@ mod tests {
     fn scan_missing_dir() {
         let entries = scan_md_files(Path::new("/nonexistent/path"), PickerSection::Prompt);
         assert!(entries.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 9 — Scoped picker tests
+    // -----------------------------------------------------------------------
+
+    fn make_test_prompt_files(dir: &Path) -> Vec<PromptFileEntry> {
+        for name in &["alpha.md", "beta.md", "gamma.md"] {
+            std::fs::write(dir.join(name), format!("# {name}")).unwrap();
+        }
+        scan_md_files(dir, PickerSection::Prompt)
+    }
+
+    fn make_test_default_context(dir: &Path) -> Vec<PromptFileEntry> {
+        for name in &["project-notes.md", "tier-guidelines.md"] {
+            std::fs::write(dir.join(name), format!("# {name}")).unwrap();
+        }
+        scan_md_files(dir, PickerSection::DefaultContext)
+    }
+
+    fn count_entries_of_type(entries: &[PostProdPickerEntry], section: &str) -> usize {
+        let mut in_section = false;
+        let mut count = 0;
+        for entry in entries {
+            match entry {
+                PostProdPickerEntry::Header(h) if h.as_ref() == section => in_section = true,
+                PostProdPickerEntry::Header(_) | PostProdPickerEntry::Separator => {
+                    if in_section {
+                        break;
+                    }
+                }
+                _ if in_section => count += 1,
+                _ => {}
+            }
+        }
+        count
+    }
+
+    #[test]
+    fn scoped_picker_shows_only_target_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join("config/prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        let prompt_files = make_test_prompt_files(&prompts_dir);
+        let dc_dir = dir.path().join("config/default-context");
+        std::fs::create_dir_all(&dc_dir).unwrap();
+        let dc_files = make_test_default_context(&dc_dir);
+
+        let automation = AutomationInfo {
+            id: "test-auto".into(),
+            label: "Test Auto".into(),
+            prompt_file: Some("beta.md".into()),
+            contexts: vec![],
+            skip_default_context: false,
+        };
+
+        let mut entries = Vec::new();
+        build_scoped_entries(
+            &automation,
+            &prompt_files,
+            &dc_files,
+            &[],
+            &collections::HashSet::default(),
+            "",
+            &mut entries,
+        );
+
+        // Should have exactly 1 prompt file (beta.md)
+        let prompt_count = count_entries_of_type(&entries, "PROMPT");
+        assert_eq!(prompt_count, 1);
+
+        // Verify it's the right one
+        let prompt_entry = entries.iter().find_map(|e| match e {
+            PostProdPickerEntry::PromptFile(f) => Some(f),
+            _ => None,
+        });
+        assert_eq!(
+            prompt_entry.map(|f| f.filename.as_str()),
+            Some("beta.md")
+        );
+    }
+
+    #[test]
+    fn scoped_picker_shows_context_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join("config/prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        let prompt_files = make_test_prompt_files(&prompts_dir);
+        let dc_dir = dir.path().join("config/default-context");
+        std::fs::create_dir_all(&dc_dir).unwrap();
+        let dc_files = make_test_default_context(&dc_dir);
+
+        // Create test context files
+        let ctx_file1 = dir.path().join("context1.md");
+        let ctx_file2 = dir.path().join("context2.sh");
+        std::fs::write(&ctx_file1, "context content").unwrap();
+        std::fs::write(&ctx_file2, "#!/bin/bash").unwrap();
+
+        let automation = AutomationInfo {
+            id: "test-auto".into(),
+            label: "Test Auto".into(),
+            prompt_file: Some("alpha.md".into()),
+            contexts: vec![
+                ContextInfo {
+                    source_type: "path".into(),
+                    label: "context1.md".into(),
+                    resolved_path: ctx_file1,
+                    required: true,
+                },
+                ContextInfo {
+                    source_type: "script".into(),
+                    label: "context2.sh".into(),
+                    resolved_path: ctx_file2,
+                    required: false,
+                },
+            ],
+            skip_default_context: false,
+        };
+
+        let mut entries = Vec::new();
+        build_scoped_entries(
+            &automation,
+            &prompt_files,
+            &dc_files,
+            &[],
+            &collections::HashSet::default(),
+            "",
+            &mut entries,
+        );
+
+        // Context sources: 2 entries + 1 AddContextAction
+        let ctx_count = count_entries_of_type(&entries, "CONTEXT SOURCES");
+        assert_eq!(ctx_count, 3); // 2 sources + 1 add action
+    }
+
+    #[test]
+    fn scoped_picker_skips_default_context_when_flagged() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join("config/prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        let prompt_files = make_test_prompt_files(&prompts_dir);
+        let dc_dir = dir.path().join("config/default-context");
+        std::fs::create_dir_all(&dc_dir).unwrap();
+        let dc_files = make_test_default_context(&dc_dir);
+
+        let automation = AutomationInfo {
+            id: "test-auto".into(),
+            label: "Test Auto".into(),
+            prompt_file: Some("alpha.md".into()),
+            contexts: vec![],
+            skip_default_context: true,
+        };
+
+        let mut entries = Vec::new();
+        build_scoped_entries(
+            &automation,
+            &prompt_files,
+            &dc_files,
+            &[],
+            &collections::HashSet::default(),
+            "",
+            &mut entries,
+        );
+
+        // No DEFAULT CONTEXT header should exist
+        let has_dc = entries.iter().any(|e| matches!(e, PostProdPickerEntry::Header(h) if h.as_ref() == "DEFAULT CONTEXT"));
+        assert!(!has_dc);
+    }
+
+    #[test]
+    fn scoped_picker_shows_assigned_and_default_notes() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join("config/prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        let prompt_files = make_test_prompt_files(&prompts_dir);
+
+        let default_note = NoteMetadata {
+            id: NoteId::new(),
+            title: Some("Default Note".into()),
+            default: true,
+            assigned_automations: vec![],
+            saved_at: chrono::Utc::now(),
+        };
+        let assigned_note = NoteMetadata {
+            id: NoteId::new(),
+            title: Some("Assigned Note".into()),
+            default: false,
+            assigned_automations: vec!["test-auto".into()],
+            saved_at: chrono::Utc::now(),
+        };
+        let unrelated_note = NoteMetadata {
+            id: NoteId::new(),
+            title: Some("Unrelated Note".into()),
+            default: false,
+            assigned_automations: vec!["other-auto".into()],
+            saved_at: chrono::Utc::now(),
+        };
+        let all_notes = vec![default_note, assigned_note, unrelated_note];
+
+        let automation = AutomationInfo {
+            id: "test-auto".into(),
+            label: "Test Auto".into(),
+            prompt_file: Some("alpha.md".into()),
+            contexts: vec![],
+            skip_default_context: true,
+        };
+
+        let mut entries = Vec::new();
+        build_scoped_entries(
+            &automation,
+            &prompt_files,
+            &[],
+            &all_notes,
+            &collections::HashSet::default(),
+            "",
+            &mut entries,
+        );
+
+        // Notes section should show 2 notes (default + assigned) + 1 AddNoteAction
+        let note_count = count_entries_of_type(&entries, "NOTES");
+        assert_eq!(note_count, 3); // 2 notes + 1 add action
+    }
+
+    #[test]
+    fn folder_expansion_inserts_children() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("reference");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("doc_a.md"), "a").unwrap();
+        std::fs::write(folder.join("doc_b.md"), "b").unwrap();
+
+        let automation = AutomationInfo {
+            id: "test-auto".into(),
+            label: "Test Auto".into(),
+            prompt_file: None,
+            contexts: vec![ContextInfo {
+                source_type: "path".into(),
+                label: "reference/".into(),
+                resolved_path: folder.clone(),
+                required: true,
+            }],
+            skip_default_context: true,
+        };
+
+        let mut expanded = collections::HashSet::default();
+        expanded.insert(folder);
+
+        let mut entries = Vec::new();
+        build_scoped_entries(
+            &automation,
+            &[],
+            &[],
+            &[],
+            &expanded,
+            "",
+            &mut entries,
+        );
+
+        let folder_children: Vec<_> = entries
+            .iter()
+            .filter(|e| matches!(e, PostProdPickerEntry::FolderChild(_)))
+            .collect();
+        assert_eq!(folder_children.len(), 2);
+    }
+
+    #[test]
+    fn folder_expansion_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("empty-folder");
+        std::fs::create_dir_all(&folder).unwrap();
+
+        let automation = AutomationInfo {
+            id: "test-auto".into(),
+            label: "Test Auto".into(),
+            prompt_file: None,
+            contexts: vec![ContextInfo {
+                source_type: "path".into(),
+                label: "empty-folder/".into(),
+                resolved_path: folder.clone(),
+                required: true,
+            }],
+            skip_default_context: true,
+        };
+
+        let mut expanded = collections::HashSet::default();
+        expanded.insert(folder);
+
+        let mut entries = Vec::new();
+        build_scoped_entries(
+            &automation,
+            &[],
+            &[],
+            &[],
+            &expanded,
+            "",
+            &mut entries,
+        );
+
+        let folder_children: Vec<_> = entries
+            .iter()
+            .filter(|e| matches!(e, PostProdPickerEntry::FolderChild(_)))
+            .collect();
+        assert_eq!(folder_children.len(), 0);
+    }
+
+    #[test]
+    fn scan_scripts_finds_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("gather.sh"), "#!/bin/bash").unwrap();
+        std::fs::write(dir.path().join("collect.py"), "#!/usr/bin/env python3").unwrap();
+        let sub = dir.path().join("subdir");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("nested.sh"), "#!/bin/bash").unwrap();
+
+        let scripts = scan_scripts(dir.path());
+        // Only files in the directory, not subdirs
+        assert_eq!(scripts.len(), 2);
+        assert_eq!(scripts[0], "collect.py");
+        assert_eq!(scripts[1], "gather.sh");
     }
 }
