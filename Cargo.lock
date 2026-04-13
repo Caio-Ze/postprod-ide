@@ -13379,6 +13379,7 @@ dependencies = [
  "rope",
  "serde",
  "settings",
+ "tempfile",
  "theme_settings",
  "toml_edit 0.22.27",
  "ui",

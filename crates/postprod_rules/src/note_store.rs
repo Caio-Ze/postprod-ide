@@ -322,3 +322,355 @@ impl NoteStore {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Entity, TestAppContext};
+    use rope::Rope;
+
+    async fn create_test_store(cx: &mut TestAppContext) -> Entity<NoteStore> {
+        cx.executor().allow_parking();
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("notes-db");
+        let store = cx.update(|cx| NoteStore::new(db_path, cx)).await.unwrap();
+        // Leak temp_dir so the database directory outlives the store
+        std::mem::forget(temp_dir);
+        cx.new(|_cx| store)
+    }
+
+    // -----------------------------------------------------------------------
+    // 8.1 — CRUD tests
+    // -----------------------------------------------------------------------
+
+    #[gpui::test]
+    async fn create_and_load(cx: &mut TestAppContext) {
+        let store = create_test_store(cx).await;
+
+        let id = NoteId::new();
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    id,
+                    Some("Test Note".into()),
+                    false,
+                    vec![],
+                    Rope::from("Hello, world!"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        let body = store.update(cx, |s, _cx| s.load_body_sync(id)).unwrap();
+        assert_eq!(body, "Hello, world!");
+
+        let meta = store.update(cx, |s, _cx| s.metadata(id)).unwrap();
+        assert_eq!(meta.title, Some(SharedString::from("Test Note")));
+        assert!(!meta.default);
+        assert!(meta.assigned_automations.is_empty());
+    }
+
+    #[gpui::test]
+    async fn update_title_and_body(cx: &mut TestAppContext) {
+        let store = create_test_store(cx).await;
+
+        let id = NoteId::new();
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    id,
+                    Some("Original".into()),
+                    false,
+                    vec![],
+                    Rope::from("original body"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    id,
+                    Some("Updated".into()),
+                    false,
+                    vec![],
+                    Rope::from("updated body"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        let meta = store.update(cx, |s, _cx| s.metadata(id)).unwrap();
+        assert_eq!(meta.title, Some(SharedString::from("Updated")));
+
+        let body = store.update(cx, |s, _cx| s.load_body_sync(id)).unwrap();
+        assert_eq!(body, "updated body");
+    }
+
+    #[gpui::test]
+    async fn delete_removes(cx: &mut TestAppContext) {
+        let store = create_test_store(cx).await;
+
+        let id = NoteId::new();
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    id,
+                    Some("Doomed".into()),
+                    false,
+                    vec![],
+                    Rope::from("bye"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        store
+            .update(cx, |s, cx| s.delete(id, cx))
+            .await
+            .unwrap();
+
+        let meta = store.update(cx, |s, _cx| s.metadata(id));
+        assert!(meta.is_none());
+
+        let body = store.update(cx, |s, _cx| s.load_body_sync(id));
+        assert!(body.is_err());
+    }
+
+    #[gpui::test]
+    async fn all_metadata_returns_all(cx: &mut TestAppContext) {
+        let store = create_test_store(cx).await;
+
+        for i in 0..3 {
+            store
+                .update(cx, |s, cx| {
+                    s.save(
+                        NoteId::new(),
+                        Some(SharedString::from(format!("Note {i}"))),
+                        false,
+                        vec![],
+                        Rope::from("body"),
+                        cx,
+                    )
+                })
+                .await
+                .unwrap();
+        }
+
+        let all = store.update(cx, |s, _cx| s.all_metadata());
+        assert_eq!(all.len(), 3);
+    }
+
+    #[gpui::test]
+    async fn first_returns_alphabetically(cx: &mut TestAppContext) {
+        let store = create_test_store(cx).await;
+
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    NoteId::new(),
+                    Some("Zebra".into()),
+                    false,
+                    vec![],
+                    Rope::from("z"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    NoteId::new(),
+                    Some("Alpha".into()),
+                    false,
+                    vec![],
+                    Rope::from("a"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        let first = store.update(cx, |s, _cx| s.first()).unwrap();
+        assert_eq!(first.title, Some(SharedString::from("Alpha")));
+    }
+
+    // -----------------------------------------------------------------------
+    // 8.2 — Query tests
+    // -----------------------------------------------------------------------
+
+    #[gpui::test]
+    async fn default_metadata_filters(cx: &mut TestAppContext) {
+        let store = create_test_store(cx).await;
+
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    NoteId::new(),
+                    Some("Default note".into()),
+                    true,
+                    vec![],
+                    Rope::from("d"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    NoteId::new(),
+                    Some("Regular note".into()),
+                    false,
+                    vec![],
+                    Rope::from("r"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        let defaults = store.update(cx, |s, _cx| s.default_metadata());
+        assert_eq!(defaults.len(), 1);
+        assert_eq!(defaults[0].title, Some(SharedString::from("Default note")));
+    }
+
+    #[gpui::test]
+    async fn notes_for_automation_filters(cx: &mut TestAppContext) {
+        let store = create_test_store(cx).await;
+
+        // A default note (applies to all)
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    NoteId::new(),
+                    Some("Default".into()),
+                    true,
+                    vec![],
+                    Rope::from("d"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        // Assigned to "build-report"
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    NoteId::new(),
+                    Some("Build rules".into()),
+                    false,
+                    vec!["build-report".into()],
+                    Rope::from("b"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        // Assigned to "mix-check"
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    NoteId::new(),
+                    Some("Mix rules".into()),
+                    false,
+                    vec!["mix-check".into()],
+                    Rope::from("m"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        let build_notes =
+            store.update(cx, |s, _cx| s.notes_for_automation("build-report"));
+        assert_eq!(build_notes.len(), 2); // default + assigned
+
+        let unknown_notes =
+            store.update(cx, |s, _cx| s.notes_for_automation("unknown"));
+        assert_eq!(unknown_notes.len(), 1); // default only
+    }
+
+    // -----------------------------------------------------------------------
+    // 8.3 — Assignment round-trip tests
+    // -----------------------------------------------------------------------
+
+    #[gpui::test]
+    async fn save_metadata_updates_assignments(cx: &mut TestAppContext) {
+        let store = create_test_store(cx).await;
+
+        let id = NoteId::new();
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    id,
+                    Some("Note".into()),
+                    false,
+                    vec!["a".into(), "b".into()],
+                    Rope::from("body"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        store
+            .update(cx, |s, cx| {
+                s.save_metadata(
+                    id,
+                    Some("Note".into()),
+                    false,
+                    vec!["b".into(), "c".into()],
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        let meta = store.update(cx, |s, _cx| s.metadata(id)).unwrap();
+        assert_eq!(meta.assigned_automations, vec!["b", "c"]);
+    }
+
+    #[gpui::test]
+    async fn clear_assignments(cx: &mut TestAppContext) {
+        let store = create_test_store(cx).await;
+
+        let id = NoteId::new();
+        store
+            .update(cx, |s, cx| {
+                s.save(
+                    id,
+                    Some("Note".into()),
+                    false,
+                    vec!["a".into()],
+                    Rope::from("body"),
+                    cx,
+                )
+            })
+            .await
+            .unwrap();
+
+        store
+            .update(cx, |s, cx| {
+                s.save_metadata(id, Some("Note".into()), false, vec![], cx)
+            })
+            .await
+            .unwrap();
+
+        let notes = store.update(cx, |s, _cx| s.notes_for_automation("a"));
+        assert!(
+            notes.iter().all(|n| n.id != id),
+            "cleared note should not appear for automation 'a'"
+        );
+    }
+}
