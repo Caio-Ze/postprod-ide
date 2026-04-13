@@ -115,6 +115,7 @@ struct PromptFileEntry {
     filename: String,
     display_name: String,
     path: PathBuf,
+    #[allow(dead_code)]
     section: PickerSection,
     is_symlink: bool,
 }
@@ -224,6 +225,7 @@ pub struct PostProdRules {
     title_bar: Option<Entity<PlatformTitleBar>>,
     store: Entity<NoteStore>,
     language_registry: Arc<LanguageRegistry>,
+    #[allow(dead_code)]
     config_root: PathBuf,
     automations: Vec<AutomationInfo>,
     context_callbacks: Option<Arc<ContextCallbacks>>,
@@ -250,6 +252,7 @@ struct FileEditor {
     title: SharedString,
     body_editor: Entity<Editor>,
     is_symlink: bool,
+    #[allow(dead_code)]
     path: PathBuf,
     token_count: Option<u64>,
     pending_token_count: Task<Option<()>>,
@@ -309,8 +312,7 @@ fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
             .to_string();
         let display_name = filename
             .trim_end_matches(".md")
-            .replace('-', " ")
-            .replace('_', " ");
+            .replace(['-', '_'], " ");
         let is_symlink = std::fs::symlink_metadata(&path)
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false);
@@ -703,8 +705,8 @@ impl PostProdRules {
 
         let picker_delegate = PostProdPickerDelegate {
             store: store.clone(),
-            prompt_files: prompt_files.clone(),
-            default_context_files: default_context_files.clone(),
+            prompt_files,
+            default_context_files,
             selected_index: 0,
             filtered_entries: Vec::new(),
         };
@@ -1162,8 +1164,7 @@ impl PostProdRules {
                 .to_string_lossy()
                 .to_string()
                 .trim_end_matches(".md")
-                .replace('-', " ")
-                .replace('_', " ")
+                .replace(['-', '_'], " ")
                 .into();
 
             self.pending_load = cx.spawn_in(window, async move |this, cx| {
