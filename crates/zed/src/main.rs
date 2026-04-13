@@ -802,6 +802,7 @@ fn main() {
         cx.set_menus(menus);
         dashboard::init(cx);
         dashboard::init_global_hotkeys(cx);
+        postprod_rules::init(cx);
         initialize_workspace(app_state.clone(), cx);
 
         cx.activate(true);
