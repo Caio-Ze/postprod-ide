@@ -30,9 +30,7 @@ use util::{ResultExt, TryFutureExt};
 use workspace::{MultiWorkspace, Workspace, WorkspaceSettings, client_side_decorations};
 use zed_actions::assistant::InlineAssist;
 
-pub fn init(cx: &mut App) {
-    cx.observe_new::<Workspace>(|_, _, _cx| {}).detach();
-}
+pub fn init(_cx: &mut App) {}
 
 actions!(
     postprod_rules,
@@ -105,19 +103,19 @@ pub struct ContextCallbacks {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug, PartialEq)]
-enum PickerSection {
+pub(crate) enum PickerSection {
     Prompt,
     DefaultContext,
 }
 
 #[derive(Clone, Debug)]
-struct PromptFileEntry {
-    filename: String,
-    display_name: String,
-    path: PathBuf,
+pub(crate) struct PromptFileEntry {
+    pub(crate) filename: String,
+    pub(crate) display_name: String,
+    pub(crate) path: PathBuf,
     #[allow(dead_code)]
-    section: PickerSection,
-    is_symlink: bool,
+    pub(crate) section: PickerSection,
+    pub(crate) is_symlink: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -294,7 +292,7 @@ impl EventEmitter<PostProdPickerEvent> for Picker<PostProdPickerDelegate> {}
 // File scanning helpers
 // ---------------------------------------------------------------------------
 
-fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
+pub(crate) fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
     let mut entries = Vec::new();
     let read_dir = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -2288,5 +2286,58 @@ impl Render for PostProdRules {
             cx,
             Tiling::default(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_finds_md_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("foo.md"), "# Foo").unwrap();
+        std::fs::write(dir.path().join("bar.md"), "# Bar").unwrap();
+        std::fs::write(dir.path().join("ignored.txt"), "nope").unwrap();
+
+        let entries = scan_md_files(dir.path(), PickerSection::Prompt);
+        assert_eq!(entries.len(), 2);
+        // Sorted by display_name: "bar" < "foo"
+        assert_eq!(entries[0].display_name, "bar");
+        assert_eq!(entries[1].display_name, "foo");
+        assert!(!entries[0].is_symlink);
+        assert!(!entries[1].is_symlink);
+    }
+
+    #[test]
+    fn scan_detects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real_path = dir.path().join("real.md");
+        std::fs::write(&real_path, "# Real").unwrap();
+        symlink(&real_path, dir.path().join("linked.md")).unwrap();
+
+        let entries = scan_md_files(dir.path(), PickerSection::DefaultContext);
+        assert_eq!(entries.len(), 2);
+
+        let real_entry = entries.iter().find(|e| e.filename == "real.md").unwrap();
+        let link_entry = entries.iter().find(|e| e.filename == "linked.md").unwrap();
+
+        assert!(!real_entry.is_symlink);
+        assert!(link_entry.is_symlink);
+    }
+
+    #[test]
+    fn scan_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries = scan_md_files(dir.path(), PickerSection::Prompt);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn scan_missing_dir() {
+        let entries = scan_md_files(Path::new("/nonexistent/path"), PickerSection::Prompt);
+        assert!(entries.is_empty());
     }
 }
