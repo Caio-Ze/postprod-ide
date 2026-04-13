@@ -13284,6 +13284,7 @@ dependencies = [
  "paths",
  "picker",
  "pkg-config",
+ "postprod_rules",
  "pretty_assertions",
  "profiling",
  "project",
@@ -13351,6 +13352,39 @@ dependencies = [
  "zlog",
  "zlog_settings",
  "ztracing",
+]
+
+[[package]]
+name = "postprod_rules"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "collections",
+ "editor",
+ "futures 0.3.32",
+ "fuzzy",
+ "gpui",
+ "heed",
+ "language",
+ "language_model",
+ "log",
+ "menu",
+ "parking_lot",
+ "picker",
+ "platform_title_bar",
+ "release_channel",
+ "rope",
+ "serde",
+ "settings",
+ "theme_settings",
+ "toml_edit 0.22.27",
+ "ui",
+ "ui_input",
+ "util",
+ "uuid",
+ "workspace",
+ "zed_actions",
 ]
 
 [[package]]
