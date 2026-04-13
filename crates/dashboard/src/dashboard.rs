@@ -36,7 +36,6 @@ use card::CardRenderContext;
 
 use agent_settings::AgentProfileId;
 use agent_ui::{AgentPanel, InlineAssistant};
-use language::LanguageRegistry;
 use menu;
 use postprod_rules::note_store::NoteStore;
 use editor::{Editor, EditorEvent};
@@ -4162,6 +4161,16 @@ impl Render for Dashboard {
                             )
                             .child(
                                 Headline::new("PostProd Tools").size(HeadlineSize::Small),
+                            )
+                            .child(div().flex_grow())
+                            .child(
+                                IconButton::new("open-postprod-rules", IconName::Notepad)
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(Tooltip::text("Prompts & Notes"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_postprod_rules(None, window, cx);
+                                    })),
                             ),
                     )
                     // Session status bar
