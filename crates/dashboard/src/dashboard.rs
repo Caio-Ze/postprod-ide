@@ -881,7 +881,7 @@ impl Dashboard {
 
     pub(crate) fn open_postprod_rules(
         &mut self,
-        note_to_select: Option<postprod_rules::note_store::NoteId>,
+        selection: Option<postprod_rules::SelectionTarget>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -891,6 +891,17 @@ impl Dashboard {
         };
 
         let workspace = self.workspace.clone();
+        let config_root = self.config_root.clone();
+        let automations: Vec<postprod_rules::AutomationInfo> = self
+            .automations
+            .iter()
+            .map(|a| postprod_rules::AutomationInfo {
+                id: a.id.clone(),
+                label: a.label.clone(),
+                prompt_file: a.prompt_file.clone(),
+            })
+            .collect();
+
         let task = cx.spawn_in(window, async move |this, cx| {
             let language_registry = cx.update(|_window, cx| {
                 workspace.upgrade()
@@ -909,7 +920,9 @@ impl Dashboard {
                     store,
                     language_registry,
                     inline_delegate,
-                    note_to_select,
+                    config_root,
+                    automations,
+                    selection,
                     cx,
                 )
             })?.await?;
