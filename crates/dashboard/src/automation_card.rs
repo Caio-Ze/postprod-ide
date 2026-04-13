@@ -75,6 +75,7 @@ pub fn render_automation_card(
     let prompt_entity = entity.clone();
     let prompt_id = entry_id.clone();
     let prompt_file = entry.prompt_file.clone();
+    let prompt_automation_id = entry_id.clone();
 
     let edit_entity = entity;
     let edit_id = entry_id.clone();
@@ -165,15 +166,12 @@ pub fn render_automation_card(
                         .icon_color(Color::Muted)
                         .tooltip(Tooltip::text("Edit Prompt"))
                         .on_click(move |_, window, cx| {
-                            if let Some(ref pf) = prompt_file {
+                            if prompt_file.is_some() {
+                                let auto_id = prompt_automation_id.clone();
                                 prompt_entity
                                     .update(cx, |this, cx| {
-                                        this.open_postprod_rules(
-                                            Some(postprod_rules::SelectionTarget::PromptFile(
-                                                pf.clone(),
-                                            )),
-                                            window,
-                                            cx,
+                                        this.open_postprod_rules_scoped(
+                                            &auto_id, window, cx,
                                         );
                                     })
                                     .log_err();

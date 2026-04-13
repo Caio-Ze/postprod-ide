@@ -878,9 +878,35 @@ impl Dashboard {
         })
     }
 
+    /// Open the PostProd Rules window in general mode (header button / keybinding).
     pub(crate) fn open_postprod_rules(
         &mut self,
         selection: Option<postprod_rules::SelectionTarget>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let mode = postprod_rules::WindowMode::General(selection);
+        self.open_postprod_rules_with_mode(mode, window, cx);
+    }
+
+    /// Open the PostProd Rules window in scoped mode for a specific automation.
+    pub(crate) fn open_postprod_rules_scoped(
+        &mut self,
+        automation_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(info) = self.build_automation_info(automation_id) else {
+            log::warn!("Automation '{}' not found for scoped edit", automation_id);
+            return;
+        };
+        let mode = postprod_rules::WindowMode::Scoped(info);
+        self.open_postprod_rules_with_mode(mode, window, cx);
+    }
+
+    fn open_postprod_rules_with_mode(
+        &mut self,
+        mode: postprod_rules::WindowMode,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -891,47 +917,8 @@ impl Dashboard {
 
         let workspace = self.workspace.clone();
         let config_root = self.config_root.clone();
-        let automations: Vec<postprod_rules::AutomationInfo> = self
-            .automations
-            .iter()
-            .map(|a| postprod_rules::AutomationInfo {
-                id: a.id.clone(),
-                label: a.label.clone(),
-                prompt_file: a.prompt_file.clone(),
-                contexts: a
-                    .contexts
-                    .iter()
-                    .map(|c| postprod_rules::ContextInfo {
-                        source_type: c.source_type.clone(),
-                        label: c.label.clone(),
-                        required: c.required,
-                    })
-                    .collect(),
-                skip_default_context: a.skip_default_context,
-            })
-            .collect();
-
-        let dashboard_weak = cx.entity().downgrade();
-        let context_callbacks = Arc::new(postprod_rules::ContextCallbacks {
-            reorder: {
-                let weak = dashboard_weak.clone();
-                Box::new(move |automation_id: &str, from: usize, direction: i32, cx: &mut App| {
-                    let auto_id = automation_id.to_string();
-                    weak.update(cx, |dashboard, cx| {
-                        dashboard.reorder_context_entry(&auto_id, from, direction, cx);
-                    }).log_err();
-                })
-            },
-            remove: {
-                let weak = dashboard_weak;
-                Box::new(move |automation_id: &str, index: usize, cx: &mut App| {
-                    let auto_id = automation_id.to_string();
-                    weak.update(cx, |dashboard, cx| {
-                        dashboard.remove_context_entry(&auto_id, index, cx);
-                    }).log_err();
-                })
-            },
-        });
+        let automations = self.build_all_automation_infos();
+        let context_callbacks = self.build_context_callbacks(cx);
 
         let task = cx.spawn_in(window, async move |this, cx| {
             let language_registry = cx.update(|_window, cx| {
@@ -954,7 +941,7 @@ impl Dashboard {
                     config_root,
                     automations,
                     Some(context_callbacks),
-                    selection,
+                    mode,
                     cx,
                 )
             })?.await?;
@@ -966,6 +953,118 @@ impl Dashboard {
             anyhow::Ok(())
         });
         task.detach_and_log_err(cx);
+    }
+
+    /// Resolve a context entry's path to an absolute PathBuf.
+    fn resolve_context_path(&self, entry: &config::ContextEntry) -> Option<PathBuf> {
+        match entry.source_type.as_str() {
+            "path" => {
+                let raw = entry.path.as_deref().or(Some(&entry.label))?;
+                let path = if let Some(rest) = raw.strip_prefix("~/") {
+                    dirs::home_dir()
+                        .unwrap_or_else(|| PathBuf::from("/"))
+                        .join(rest)
+                } else if raw == "~" {
+                    dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+                } else if std::path::Path::new(raw).is_absolute() {
+                    PathBuf::from(raw)
+                } else {
+                    self.config_root.join(raw)
+                };
+                // Accept both files and directories
+                if path.exists() { Some(path) } else { None }
+            }
+            "script" => {
+                let script = entry.script.as_deref().or(Some(&entry.label))?;
+                let path = self.config_root.join("config/context-scripts").join(script);
+                if path.exists() { Some(path) } else { None }
+            }
+            _ => None,
+        }
+    }
+
+    /// Build AutomationInfo for a single automation by ID, with resolved paths.
+    fn build_automation_info(&self, automation_id: &str) -> Option<postprod_rules::AutomationInfo> {
+        let entry = self.automations.iter().find(|a| a.id == automation_id)?;
+        Some(postprod_rules::AutomationInfo {
+            id: entry.id.clone(),
+            label: entry.label.clone(),
+            prompt_file: entry.prompt_file.clone(),
+            contexts: entry.contexts.iter().filter_map(|c| {
+                let resolved_path = self.resolve_context_path(c)?;
+                Some(postprod_rules::ContextInfo {
+                    source_type: c.source_type.clone(),
+                    label: c.label.clone(),
+                    resolved_path,
+                    required: c.required,
+                })
+            }).collect(),
+            skip_default_context: entry.skip_default_context,
+        })
+    }
+
+    /// Build AutomationInfo for all automations (for general mode note assignment UI).
+    fn build_all_automation_infos(&self) -> Vec<postprod_rules::AutomationInfo> {
+        self.automations.iter().map(|a| {
+            postprod_rules::AutomationInfo {
+                id: a.id.clone(),
+                label: a.label.clone(),
+                prompt_file: a.prompt_file.clone(),
+                contexts: a.contexts.iter().filter_map(|c| {
+                    let resolved_path = self.resolve_context_path(c)?;
+                    Some(postprod_rules::ContextInfo {
+                        source_type: c.source_type.clone(),
+                        label: c.label.clone(),
+                        resolved_path,
+                        required: c.required,
+                    })
+                }).collect(),
+                skip_default_context: a.skip_default_context,
+            }
+        }).collect()
+    }
+
+    /// Build context callbacks for the PostProd Rules window.
+    fn build_context_callbacks(&self, cx: &mut Context<Self>) -> Arc<postprod_rules::ContextCallbacks> {
+        let dashboard_weak = cx.entity().downgrade();
+        Arc::new(postprod_rules::ContextCallbacks {
+            reorder: {
+                let weak = dashboard_weak.clone();
+                Box::new(move |automation_id: &str, from: usize, direction: i32, cx: &mut App| {
+                    let auto_id = automation_id.to_string();
+                    weak.update(cx, |dashboard, cx| {
+                        dashboard.reorder_context_entry(&auto_id, from, direction, cx);
+                    }).log_err();
+                })
+            },
+            remove: {
+                let weak = dashboard_weak.clone();
+                Box::new(move |automation_id: &str, index: usize, cx: &mut App| {
+                    let auto_id = automation_id.to_string();
+                    weak.update(cx, |dashboard, cx| {
+                        dashboard.remove_context_entry(&auto_id, index, cx);
+                    }).log_err();
+                })
+            },
+            add_path: {
+                let weak = dashboard_weak.clone();
+                Box::new(move |automation_id: &str, path: PathBuf, cx: &mut App| {
+                    let auto_id = automation_id.to_string();
+                    weak.update(cx, |dashboard, cx| {
+                        dashboard.add_context_path_entry(&auto_id, path, cx);
+                    }).log_err();
+                })
+            },
+            add_script: {
+                let weak = dashboard_weak;
+                Box::new(move |automation_id: &str, script_name: String, cx: &mut App| {
+                    let auto_id = automation_id.to_string();
+                    weak.update(cx, |dashboard, cx| {
+                        dashboard.add_context_script_entry(&auto_id, script_name, cx);
+                    }).log_err();
+                })
+            },
+        })
     }
 
     pub(crate) fn spawn_tool_entry(
@@ -2316,6 +2415,26 @@ Rules for the completion report:
         self.automations = automations;
         self.automations_error = automations_error;
         self.default_contexts = config::load_default_contexts(&self.config_root);
+
+        // Refresh scoped PostProd Rules window if open
+        if let Some(handle) = self.postprod_rules_window {
+            let scoped_id: Option<String> = handle
+                .update(cx, |rules, _window, _cx| {
+                    rules.scoped_automation_id().map(String::from)
+                })
+                .ok()
+                .flatten();
+
+            if let Some(automation_id) = scoped_id {
+                let info = self.build_automation_info(&automation_id);
+                handle
+                    .update(cx, |rules, window, cx| {
+                        rules.update_automation(info, window, cx);
+                    })
+                    .log_err();
+            }
+        }
+
         cx.notify();
     }
 
