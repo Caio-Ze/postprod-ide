@@ -1186,6 +1186,40 @@ impl Dashboard {
 
 
 
+    /// Gather all notes (default + assigned) for a given automation.
+    /// Returns a formatted string for injection into the prompt.
+    /// Only used for standalone runs, not pipeline/scheduler paths.
+    fn gather_notes_for_automation(&self, automation_id: &str, cx: &App) -> String {
+        let Some(store) = &self.note_store else {
+            return String::new();
+        };
+        let store_ref = store.read(cx);
+        let matching_notes = store_ref.notes_for_automation(automation_id);
+
+        if matching_notes.is_empty() {
+            return String::new();
+        }
+
+        let mut parts = vec!["=== Notes ===".to_string()];
+        for note in &matching_notes {
+            let title = note
+                .title
+                .as_ref()
+                .map(|t| t.as_ref())
+                .unwrap_or("Untitled");
+            match store_ref.load_body_sync(note.id) {
+                Ok(body) => {
+                    parts.push(format!("{}:\n{}", title, body));
+                }
+                Err(err) => {
+                    log::warn!("Failed to load note body for '{}': {:?}", title, err);
+                }
+            }
+        }
+        parts.push("=== End of notes ===".to_string());
+        parts.join("\n\n")
+    }
+
     pub(crate) fn run_automation(
         &self,
         entry_id: &str,
@@ -1217,6 +1251,9 @@ impl Dashboard {
         } else {
             None
         };
+
+        // Gather notes for standalone run (LMDB reads are microseconds)
+        let notes_section = self.gather_notes_for_automation(entry_id, cx);
 
         // Capture values needed by the async block
         let workspace = self.workspace.clone();
@@ -1295,8 +1332,10 @@ impl Dashboard {
             };
 
             let enriched_prompt = match context_result {
-                Ok(ctx) if ctx.is_empty() => fallback_prompt.clone(),
-                Ok(ctx) => format!("{ctx}\n=== End of pre-loaded context ===\n\n{fallback_prompt}"),
+                Ok(ctx) if ctx.is_empty() && notes_section.is_empty() => fallback_prompt.clone(),
+                Ok(ctx) if ctx.is_empty() => format!("{notes_section}\n\n{fallback_prompt}"),
+                Ok(ctx) if notes_section.is_empty() => format!("{ctx}\n=== End of pre-loaded context ===\n\n{fallback_prompt}"),
+                Ok(ctx) => format!("{ctx}\n=== End of pre-loaded context ===\n\n{notes_section}\n\n{fallback_prompt}"),
                 Err(reason) => {
                     log::warn!("context gathering failed for '{}': {reason}", entry_id);
                     let ws_for_toast = workspace.clone();
