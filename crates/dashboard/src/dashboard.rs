@@ -142,6 +142,12 @@ struct ContextLauncherToast;
 /// Marker type for the auto-disable toast notification ID.
 struct AutoDisableToast;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AutomationRunStatus {
+    GatheringContext,
+    Failed(String),
+}
+
 // ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
@@ -324,6 +330,7 @@ pub struct Dashboard {
     _scheduler_subscription: Subscription,
     // Pipelines
     active_pipelines: HashSet<String>,
+    automation_status: HashMap<String, AutomationRunStatus>,
     pipelines_in_edit_mode: HashSet<String>,
     pipeline_cancel_flags: HashMap<String, Arc<AtomicBool>>,
     pipelines_pending_delete: HashSet<String>,
@@ -595,6 +602,7 @@ impl Dashboard {
                             if dashboard.config_root != loaded_from { return; }
                             dashboard.automations = merged;
                             dashboard.automations_error = error;
+                            dashboard.prune_stale_automation_status();
                             dashboard.section_order = read_section_order(&dashboard.config_root);
                             // Seed defaults for new params and clean stale editors
                             for entry in &dashboard.automations {
@@ -863,6 +871,7 @@ impl Dashboard {
                 window_handle: None,
                 _scheduler_subscription,
                 active_pipelines: HashSet::new(),
+                automation_status: HashMap::new(),
                 pipelines_in_edit_mode: HashSet::new(),
                 pipeline_cancel_flags: HashMap::new(),
                 pipelines_pending_delete: HashSet::new(),
@@ -1250,6 +1259,7 @@ impl Dashboard {
         self._param_editor_subscriptions.clear();
         self._param_write_task = None;
         self.expanded_automations.clear();
+        self.automation_status.clear();
         self.pending_new_pipeline = None;
         self._pending_pipeline_subscription = None;
 
@@ -1319,13 +1329,20 @@ impl Dashboard {
     }
 
     pub(crate) fn run_automation(
-        &self,
+        &mut self,
         entry_id: &str,
         entry_label: &str,
         prompt: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if matches!(
+            self.automation_status.get(entry_id),
+            Some(AutomationRunStatus::GatheringContext)
+        ) {
+            return;
+        }
+
         let fallback_prompt = self.resolve_variables(prompt, entry_id);
 
         // Check if this automation has chain config (for terminal backends only)
@@ -1411,7 +1428,11 @@ impl Dashboard {
             }
         }
 
-        cx.spawn_in(window, async move |_this, cx| {
+        self.automation_status
+            .insert(entry_id.to_string(), AutomationRunStatus::GatheringContext);
+        cx.notify();
+
+        cx.spawn_in(window, async move |this, cx| {
             // Phase 1: Gather context on background thread.
             let context_result: Result<String, String> = if contexts.is_empty() {
                 Ok(String::new())
@@ -1485,9 +1506,23 @@ impl Dashboard {
                             cx,
                         );
                     }).log_err();
+
+                    let failed_id = entry_id.clone();
+                    this.update(cx, |dashboard, cx| {
+                        dashboard
+                            .automation_status
+                            .insert(failed_id, AutomationRunStatus::Failed(reason));
+                        cx.notify();
+                    }).log_err();
                     return;
                 }
             };
+
+            let done_id = entry_id.clone();
+            this.update(cx, |dashboard, cx| {
+                dashboard.automation_status.remove(&done_id);
+                cx.notify();
+            }).log_err();
 
             // Phase 2: Route to backend.
             if agent_backend == AgentBackend::Native {
@@ -2410,11 +2445,17 @@ Rules for the completion report:
         });
     }
 
+    fn prune_stale_automation_status(&mut self) {
+        let live_ids: HashSet<&str> = self.automations.iter().map(|a| a.id.as_str()).collect();
+        self.automation_status.retain(|id, _| live_ids.contains(id.as_str()));
+    }
+
     fn reload_automations(&mut self, cx: &mut Context<Self>) {
         let (automations, automations_error) = load_automations_registry(&self.config_root);
         self.automations = automations;
         self.automations_error = automations_error;
         self.default_contexts = config::load_default_contexts(&self.config_root);
+        self.prune_stale_automation_status();
 
         // Refresh scoped PostProd Rules window if open
         if let Some(handle) = self.postprod_rules_window {
@@ -3674,6 +3715,7 @@ Rules for the completion report:
             None
         };
 
+        let run_status = self.automation_status.get(&entry.id);
         let ctx = CardRenderContext {
             entry,
             idx,
@@ -3682,6 +3724,7 @@ Rules for the completion report:
             is_scheduled,
             is_pending_delete,
             entity: cx.entity().downgrade(),
+            run_status,
         };
 
         automation_card::render_automation_card(
@@ -3747,6 +3790,7 @@ Rules for the completion report:
             is_scheduled,
             is_pending_delete,
             entity,
+            run_status: None,
         };
 
         pipeline_card::render_pipeline_card(
@@ -4556,6 +4600,53 @@ fn build_temp_file_terminal_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_automation_run_status_equality_and_clone() {
+        let gathering = AutomationRunStatus::GatheringContext;
+        let gathering_copy = gathering.clone();
+        let failed = AutomationRunStatus::Failed("boom".into());
+        let failed_copy = failed.clone();
+        assert_eq!(gathering, gathering_copy);
+        assert_eq!(failed, failed_copy);
+        assert_ne!(gathering, failed);
+    }
+
+    #[test]
+    fn test_reentry_guard_pattern_only_matches_gathering() {
+        let gathering = Some(AutomationRunStatus::GatheringContext);
+        let failed = Some(AutomationRunStatus::Failed("x".into()));
+        let idle: Option<AutomationRunStatus> = None;
+
+        assert!(matches!(
+            gathering.as_ref(),
+            Some(AutomationRunStatus::GatheringContext)
+        ));
+        assert!(!matches!(
+            failed.as_ref(),
+            Some(AutomationRunStatus::GatheringContext)
+        ));
+        assert!(!matches!(
+            idle.as_ref(),
+            Some(AutomationRunStatus::GatheringContext)
+        ));
+    }
+
+    #[test]
+    fn test_automation_status_retain_drops_stale_ids() {
+        let mut status: HashMap<String, AutomationRunStatus> = HashMap::new();
+        status.insert("live-1".to_string(), AutomationRunStatus::GatheringContext);
+        status.insert("stale".to_string(), AutomationRunStatus::Failed("err".into()));
+        status.insert("live-2".to_string(), AutomationRunStatus::GatheringContext);
+
+        let live_ids: HashSet<&str> = ["live-1", "live-2"].into_iter().collect();
+        status.retain(|id, _| live_ids.contains(id.as_str()));
+
+        assert_eq!(status.len(), 2);
+        assert!(status.contains_key("live-1"));
+        assert!(status.contains_key("live-2"));
+        assert!(!status.contains_key("stale"));
+    }
 
     #[test]
     fn test_schedule_config_deserialize_default() {
