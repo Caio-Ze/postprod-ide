@@ -4,14 +4,18 @@
 //! `DashboardCard` (ListItem-based) — replacing the old `render_card_shell`
 //! manual layout for automation entries.
 
-use gpui::{AnyElement, App, IntoElement, MouseButton, ParentElement, SharedString, Styled};
+use gpui::{
+    AnyElement, App, ElementId, InteractiveElement, IntoElement, MouseButton, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled,
+};
 use ui::{
-    Color, Disclosure, DynamicSpacing, IconButton, IconName, IconSize, Label, LabelSize, Tooltip,
-    prelude::*,
+    Color, CommonAnimationExt, Disclosure, DynamicSpacing, Icon, IconButton, IconName, IconSize,
+    Label, LabelSize, Tooltip, prelude::*,
 };
 use util::ResultExt as _;
 use workspace::OpenOptions;
 
+use crate::AutomationRunStatus;
 use crate::card::{CardIcon, CardRenderContext, DashboardCard};
 use crate::config::icon_for_automation;
 use crate::paths::automations_dir_for;
@@ -98,22 +102,50 @@ pub fn render_automation_card(
                     cx.stop_propagation();
                 })
                 .child(
-                    IconButton::new(
-                        format!("run-automation-{}", run_id),
-                        IconName::PlayFilled,
-                    )
-                    .icon_size(IconSize::Small)
-                    .icon_color(Color::Muted)
-                    .tooltip(Tooltip::text("Run automation"))
-                    .on_click(move |_, window, cx| {
-                        run_entity
-                            .update(cx, |this, cx| {
-                                this.run_automation(
-                                    &run_id, &run_label, &run_prompt, window, cx,
-                                );
-                            })
-                            .log_err();
-                    }),
+                    if matches!(
+                        ctx.run_status,
+                        Some(AutomationRunStatus::GatheringContext)
+                    ) {
+                        h_flex()
+                            .id(SharedString::from(format!(
+                                "run-spinner-wrap-{}",
+                                run_id
+                            )))
+                            .size(IconSize::Small.rems())
+                            .items_center()
+                            .justify_center()
+                            .tooltip(Tooltip::text("Gathering context…"))
+                            .child(
+                                Icon::new(IconName::LoadCircle)
+                                    .size(IconSize::Small)
+                                    .color(Color::Muted)
+                                    .with_keyed_rotate_animation(
+                                        ElementId::Name(
+                                            format!("automation-spinner-{}", run_id).into(),
+                                        ),
+                                        2,
+                                    ),
+                            )
+                            .into_any_element()
+                    } else {
+                        IconButton::new(
+                            format!("run-automation-{}", run_id),
+                            IconName::PlayFilled,
+                        )
+                        .icon_size(IconSize::Small)
+                        .icon_color(Color::Muted)
+                        .tooltip(Tooltip::text("Run automation"))
+                        .on_click(move |_, window, cx| {
+                            run_entity
+                                .update(cx, |this, cx| {
+                                    this.run_automation(
+                                        &run_id, &run_label, &run_prompt, window, cx,
+                                    );
+                                })
+                                .log_err();
+                        })
+                        .into_any_element()
+                    },
                 )
                 .child(
                     IconButton::new(

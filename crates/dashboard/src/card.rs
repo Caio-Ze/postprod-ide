@@ -20,8 +20,8 @@ use ui::{
     prelude::*,
 };
 
-use crate::Dashboard;
 use crate::config::AutomationEntry;
+use crate::{AutomationRunStatus, Dashboard};
 
 // ---------------------------------------------------------------------------
 // CardRenderContext
@@ -40,6 +40,7 @@ pub(crate) struct CardRenderContext<'a> {
     pub is_scheduled: bool,
     pub is_pending_delete: bool,
     pub entity: WeakEntity<Dashboard>,
+    pub run_status: Option<&'a AutomationRunStatus>,
 }
 
 // ---------------------------------------------------------------------------
