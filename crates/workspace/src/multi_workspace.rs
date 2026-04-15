@@ -907,14 +907,9 @@ impl MultiWorkspace {
 
         cx.emit(MultiWorkspaceEvent::ActiveWorkspaceChanged);
         self.serialize(cx);
-        // Emit Activate on the new workspace so the Dashboard panel's
-        // workspace::Event::Activate subscription re-applies its settings_profile
-        // (see crates/dashboard/src/dashboard.rs:846-862).
-        // Recursion-safe: subscription handler calls activate() with same workspace,
-        // which exits early at the self.workspace() == &workspace guard.
-        // Also re-apply the per-worktree settings profile so switching
-        // workspaces via the sidebar activates the focused worktree's
-        // `active_profile` (see Workspace::apply_local_active_profile).
+        // Preserve the existing Activate emission and also re-apply the
+        // per-worktree settings profile so sidebar workspace switches
+        // track the newly active worktree.
         self.workspace().update(cx, |workspace, cx| {
             cx.emit(WorkspaceEvent::Activate);
             workspace.apply_local_active_profile(cx);

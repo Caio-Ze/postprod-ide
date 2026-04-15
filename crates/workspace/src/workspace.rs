@@ -5684,46 +5684,21 @@ impl Workspace {
         self.follower_states.contains_key(&id.into())
     }
 
-    /// Apply the `active_profile` declared in the effective active
-    /// worktree's root `.zed/settings.json` as the active settings profile.
+    /// Apply the effective active worktree's root `.zed/settings.json`
+    /// `active_profile` as the runtime settings profile.
     ///
-    /// The "effective active worktree" is identified using the same
-    /// ordered logic as `TitleBar::effective_active_worktree`, so the
-    /// profile and the title bar always agree on "which worktree is
-    /// active":
-    /// 1. `active_worktree_override` if set — the user's explicit pick
-    ///    via the project dropdown.
-    /// 2. The worktree containing `Project::active_repository` — the
-    ///    repository of the currently active file (via the
-    ///    most-specific-repo resolution from PR #51898).
-    /// 3. First visible worktree as a final fallback.
+    /// Uses the same ordered worktree resolution as
+    /// `TitleBar::effective_active_worktree`:
+    /// 1. `active_worktree_override`
+    /// 2. Worktree containing `Project::active_repository`
+    /// 3. First visible worktree
     ///
-    /// Called from `Workspace::new`'s deferred setup (initial activation),
-    /// `set_active_worktree_override` / `clear_active_worktree_override`
-    /// (project dropdown picker), and `MultiWorkspace::activate` (sidebar
-    /// workspace switch). Not called on pane/tab focus changes — individual
-    /// file clicks should not change the active profile, consistent with
-    /// how the title bar name behaves.
+    /// Called on initial activation, worktree override changes, and
+    /// sidebar workspace switches. Not called on file focus changes.
     ///
-    /// Graceful semantics: if the named profile is not defined in the
-    /// user's global `profiles` section, `UserSettingsContentExt::for_profile`
-    /// returns `None` during recompute and no overrides apply — so
-    /// collaborators who clone a project without the profile defined see
-    /// default behavior rather than an error. Idempotent: no-op if the
-    /// target equals the current profile.
-    ///
-    /// Interaction with `settings_profile_selector` (the profile picker):
-    /// the picker and this function both mutate the runtime global
-    /// `ActiveSettingsProfileName`. When the effective worktree declares
-    /// an `active_profile`, the declaration wins on every activation
-    /// event — any transient picker override is replaced. When the
-    /// effective worktree does *not* declare one, this function is a
-    /// no-op: a manual picker selection is preserved until the user
-    /// moves focus to a worktree that declares its own profile. This
-    /// mirrors how `theme` composes with the Theme Selector: declarative
-    /// state is a project-level default, imperative picker actions are
-    /// overrides that survive until a new declarative value asserts
-    /// itself.
+    /// If the effective worktree declares no `active_profile`, this is a
+    /// no-op so a manual picker selection is preserved. If it does
+    /// declare one, that declaration wins on activation.
     pub(crate) fn apply_local_active_profile(&self, cx: &mut App) {
         let Some(worktree_id) = self.effective_active_worktree_id(cx) else {
             return;
@@ -5743,18 +5718,14 @@ impl Workspace {
             (Some(new_name), _) => {
                 cx.set_global(ActiveSettingsProfileName(new_name));
             }
-            // Worktree declares no `active_profile`: leave the global
-            // alone so a manual picker selection is preserved. See the
-            // doc comment above for the declarative/imperative rationale.
+            // Preserve a manual picker selection until a worktree
+            // declares its own `active_profile`.
             (None, _) => {}
         }
     }
 
-    /// Identify the effective active worktree using the same three-tier
-    /// logic as `TitleBar::effective_active_worktree`. Duplicated here to
-    /// keep this PR focused on the new field and its activation — a
-    /// follow-up could extract `effective_active_worktree` onto Workspace
-    /// and have both call sites share it.
+    /// Mirror `TitleBar::effective_active_worktree` for profile
+    /// activation without changing the title bar code path.
     fn effective_active_worktree_id(&self, cx: &App) -> Option<WorktreeId> {
         let project = self.project.read(cx);
 
@@ -5769,9 +5740,7 @@ impl Workspace {
             let repo_path = &repo.work_directory_abs_path;
             for worktree in project.visible_worktrees(cx) {
                 let worktree_path = worktree.read(cx).abs_path();
-                if worktree_path == *repo_path
-                    || worktree_path.starts_with(repo_path.as_ref())
-                {
+                if worktree_path == *repo_path || worktree_path.starts_with(repo_path.as_ref()) {
                     return Some(worktree.read(cx).id());
                 }
             }
@@ -15189,9 +15158,8 @@ mod tests {
             .await;
 
         let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
-        let (workspace, cx) = cx.add_window_view(|window, cx| {
-            Workspace::test_new(project.clone(), window, cx)
-        });
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
         cx.run_until_parked();
 
         let worktree_id = project.update(cx, |project, cx| {
@@ -15254,9 +15222,8 @@ mod tests {
             .await;
 
         let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
-        let (workspace, cx) = cx.add_window_view(|window, cx| {
-            Workspace::test_new(project.clone(), window, cx)
-        });
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
         cx.run_until_parked();
 
         // Simulate a manual selection made through settings_profile_selector:
@@ -15293,9 +15260,8 @@ mod tests {
             .await;
 
         let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
-        let (workspace, cx) = cx.add_window_view(|window, cx| {
-            Workspace::test_new(project.clone(), window, cx)
-        });
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
         cx.run_until_parked();
 
         let worktree_id = project.update(cx, |project, cx| {
@@ -15332,6 +15298,70 @@ mod tests {
                     .map(|p| p.0.clone()),
                 Some("Studio".to_string()),
                 "a declared active_profile should override a manual picker selection on activation"
+            );
+        });
+    }
+
+    #[gpui::test]
+    async fn test_set_active_worktree_override_applies_local_active_profile(
+        cx: &mut TestAppContext,
+    ) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(path!("/root-a"), json!({ "main.rs": "" }))
+            .await;
+        fs.insert_tree(path!("/root-b"), json!({ "main.rs": "" }))
+            .await;
+
+        let project = Project::test(
+            fs,
+            [path!("/root-a").as_ref(), path!("/root-b").as_ref()],
+            cx,
+        )
+        .await;
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
+        cx.run_until_parked();
+
+        let override_worktree_id = project.update(cx, |project, cx| {
+            project
+                .worktrees(cx)
+                .find_map(|worktree| {
+                    let worktree = worktree.read(cx);
+                    (worktree.root_name_str() == "root-b").then_some(worktree.id())
+                })
+                .unwrap()
+        });
+
+        cx.update(|_, cx| {
+            cx.set_global(ActiveSettingsProfileName("Streaming".to_string()));
+        });
+
+        cx.update(|_, cx| {
+            SettingsStore::update_global(cx, |store, cx| {
+                store
+                    .set_local_settings(
+                        override_worktree_id,
+                        LocalSettingsPath::InWorktree(rel_path("").into()),
+                        LocalSettingsKind::Settings,
+                        Some(r#"{"active_profile": "Studio"}"#),
+                        cx,
+                    )
+                    .unwrap();
+            });
+        });
+
+        workspace.update(cx, |workspace, cx| {
+            workspace.set_active_worktree_override(Some(override_worktree_id), cx);
+        });
+
+        cx.update(|_, cx| {
+            assert_eq!(
+                cx.try_global::<ActiveSettingsProfileName>()
+                    .map(|profile| profile.0.clone()),
+                Some("Studio".to_string()),
+                "setting a worktree override should re-apply the selected worktree's active_profile"
             );
         });
     }
