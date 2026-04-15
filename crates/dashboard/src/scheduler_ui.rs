@@ -1,15 +1,12 @@
 use crate::Dashboard;
 
-use gpui::{
-    App, Context, IntoElement, ParentElement, SharedString, Styled, Window, prelude::*,
-};
+use gpui::{App, Context, IntoElement, ParentElement, SharedString, Styled, Window, prelude::*};
 use postprod_scheduler::RunResult;
 use ui::{
     ButtonLike, ButtonSize, ButtonStyle, Color, ContextMenu, DropdownMenu, DropdownStyle, Icon,
     IconButton, IconName, IconSize, Label, LabelSize, Tooltip, prelude::*,
 };
 use util::ResultExt as _;
-
 
 // ---------------------------------------------------------------------------
 // Schedule helpers (pure functions, no Dashboard access)
@@ -116,7 +113,13 @@ pub(crate) fn dom_from_cron(cron: &str) -> u32 {
 }
 
 pub(crate) const DAY_OF_WEEK_LABELS: &[&str] = &[
-    "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
 ];
 
 pub(crate) fn format_dom(day: u32) -> String {
@@ -142,7 +145,11 @@ pub(crate) fn schedule_summary(cron: &str) -> String {
         }
         "Every month" => {
             let dom = dom_from_cron(cron);
-            format!("Every month on the {} at {}", format_dom(dom), format_hour_ampm(hour))
+            format!(
+                "Every month on the {} at {}",
+                format_dom(dom),
+                format_hour_ampm(hour)
+            )
         }
         _ => format!("{} at {}", interval, format_hour_ampm(hour)),
     }
@@ -153,11 +160,10 @@ pub(crate) fn schedule_summary(cron: &str) -> String {
 // ---------------------------------------------------------------------------
 
 impl Dashboard {
-    pub(crate) fn render_scheduled_section(
-        &self,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let scheduled: Vec<_> = self.automations.iter()
+    pub(crate) fn render_scheduled_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let scheduled: Vec<_> = self
+            .automations
+            .iter()
             .filter(|a| a.schedule.as_ref().is_some_and(|s| s.enabled))
             .collect();
 
@@ -172,13 +178,16 @@ impl Dashboard {
         let mut rows: Vec<gpui::AnyElement> = Vec::new();
         if is_open {
             for entry in &scheduled {
-                let cron = entry.schedule.as_ref()
+                let cron = entry
+                    .schedule
+                    .as_ref()
                     .map(|s| s.cron.as_str())
                     .unwrap_or("");
                 let summary: SharedString = schedule_summary(cron).into();
                 let status = status_map.get(&entry.id);
 
-                let (status_label, status_color) = match status.and_then(|s| s.last_result.as_ref()) {
+                let (status_label, status_color) = match status.and_then(|s| s.last_result.as_ref())
+                {
                     Some(RunResult::Success) => ("OK", Color::Success),
                     Some(RunResult::Failed { .. }) => ("Failed", Color::Error),
                     Some(RunResult::Timeout) => ("Timeout", Color::Warning),
@@ -210,7 +219,11 @@ impl Dashboard {
                     .child(
                         Label::new(entry.label.clone())
                             .size(LabelSize::Small)
-                            .color(if is_auto_disabled { Color::Disabled } else { Color::Default }),
+                            .color(if is_auto_disabled {
+                                Color::Disabled
+                            } else {
+                                Color::Default
+                            }),
                     )
                     .when(is_pipeline, |el| {
                         el.child(
@@ -235,22 +248,29 @@ impl Dashboard {
                         let re_enable_id = entry.id.clone();
                         move |el| {
                             el.child(
-                                ButtonLike::new(SharedString::from(format!("re-enable-{}", re_enable_id)))
-                                    .style(ButtonStyle::Outlined)
-                                    .child(
-                                        Label::new("Re-enable")
-                                            .size(LabelSize::XSmall)
-                                            .color(Color::Warning),
-                                    )
-                                    .on_click(move |_, _window, cx| {
+                                ButtonLike::new(SharedString::from(format!(
+                                    "re-enable-{}",
+                                    re_enable_id
+                                )))
+                                .style(ButtonStyle::Outlined)
+                                .child(
+                                    Label::new("Re-enable")
+                                        .size(LabelSize::XSmall)
+                                        .color(Color::Warning),
+                                )
+                                .on_click(
+                                    move |_, _window, cx| {
                                         let re_enable_id = re_enable_id.clone();
-                                        re_enable_entity.update(cx, |this, cx| {
-                                            this.scheduler.update(cx, |scheduler, cx| {
-                                                scheduler.re_enable(&re_enable_id, cx);
-                                            });
-                                            cx.notify();
-                                        }).log_err();
-                                    }),
+                                        re_enable_entity
+                                            .update(cx, |this, cx| {
+                                                this.scheduler.update(cx, |scheduler, cx| {
+                                                    scheduler.re_enable(&re_enable_id, cx);
+                                                });
+                                                cx.notify();
+                                            })
+                                            .log_err();
+                                    },
+                                ),
                             )
                         }
                     })
@@ -265,9 +285,11 @@ impl Dashboard {
                             .tooltip(Tooltip::text("Disable schedule"))
                             .on_click(move |_, _window, cx| {
                                 let pause_id = pause_id.clone();
-                                pause_entity.update(cx, |this, cx| {
-                                    this.toggle_schedule(&pause_id, cx);
-                                }).log_err();
+                                pause_entity
+                                    .update(cx, |this, cx| {
+                                        this.toggle_schedule(&pause_id, cx);
+                                    })
+                                    .log_err();
                             }),
                         )
                     });
@@ -328,15 +350,19 @@ impl Dashboard {
                         "Every month" => Some(current_day.unwrap_or(1)),
                         _ => None,
                     };
-                    menu = menu.entry(
-                        interval.to_string(),
-                        None,
-                        move |_window, cx: &mut App| {
-                            entity.update(cx, |this: &mut Dashboard, cx| {
-                                this.update_schedule_cron(&auto_id, &interval_str, interval_hour, day_for_interval, cx);
-                            }).log_err();
-                        },
-                    );
+                    menu = menu.entry(interval.to_string(), None, move |_window, cx: &mut App| {
+                        entity
+                            .update(cx, |this: &mut Dashboard, cx| {
+                                this.update_schedule_cron(
+                                    &auto_id,
+                                    &interval_str,
+                                    interval_hour,
+                                    day_for_interval,
+                                    cx,
+                                );
+                            })
+                            .log_err();
+                    });
                 }
                 menu
             }
@@ -354,15 +380,13 @@ impl Dashboard {
                     let auto_id = auto_id.clone();
                     let interval = interval.clone();
                     let label = format_hour_ampm(hour);
-                    menu = menu.entry(
-                        label,
-                        None,
-                        move |_window, cx: &mut App| {
-                            entity.update(cx, |this: &mut Dashboard, cx| {
+                    menu = menu.entry(label, None, move |_window, cx: &mut App| {
+                        entity
+                            .update(cx, |this: &mut Dashboard, cx| {
                                 this.update_schedule_cron(&auto_id, &interval, hour, day, cx);
-                            }).log_err();
-                        },
-                    );
+                            })
+                            .log_err();
+                    });
                 }
                 menu
             }
@@ -384,20 +408,27 @@ impl Dashboard {
                         let auto_id = auto_id.clone();
                         let interval = interval.clone();
                         let dow = idx as u32;
-                        menu = menu.entry(
-                            day_name.to_string(),
-                            None,
-                            move |_window, cx: &mut App| {
-                                entity.update(cx, |this: &mut Dashboard, cx| {
-                                    this.update_schedule_cron(&auto_id, &interval, interval_hour, Some(dow), cx);
-                                }).log_err();
-                            },
-                        );
+                        menu =
+                            menu.entry(day_name.to_string(), None, move |_window, cx: &mut App| {
+                                entity
+                                    .update(cx, |this: &mut Dashboard, cx| {
+                                        this.update_schedule_cron(
+                                            &auto_id,
+                                            &interval,
+                                            interval_hour,
+                                            Some(dow),
+                                            cx,
+                                        );
+                                    })
+                                    .log_err();
+                            });
                     }
                     menu
                 }
             });
-            let dow_label = DAY_OF_WEEK_LABELS.get(current_dow as usize).unwrap_or(&"Monday");
+            let dow_label = DAY_OF_WEEK_LABELS
+                .get(current_dow as usize)
+                .unwrap_or(&"Monday");
             Some((dow_menu, dow_label.to_string()))
         } else {
             None
@@ -414,15 +445,19 @@ impl Dashboard {
                         let auto_id = auto_id.clone();
                         let interval = interval.clone();
                         let label = format_dom(day);
-                        menu = menu.entry(
-                            label,
-                            None,
-                            move |_window, cx: &mut App| {
-                                entity.update(cx, |this: &mut Dashboard, cx| {
-                                    this.update_schedule_cron(&auto_id, &interval, interval_hour, Some(day), cx);
-                                }).log_err();
-                            },
-                        );
+                        menu = menu.entry(label, None, move |_window, cx: &mut App| {
+                            entity
+                                .update(cx, |this: &mut Dashboard, cx| {
+                                    this.update_schedule_cron(
+                                        &auto_id,
+                                        &interval,
+                                        interval_hour,
+                                        Some(day),
+                                        cx,
+                                    );
+                                })
+                                .log_err();
+                        });
                     }
                     menu
                 }
@@ -456,20 +491,16 @@ impl Dashboard {
                 .style(DropdownStyle::Outlined),
             )
             .when_some(dow_dropdown, |el, (menu, label)| {
-                el.child(
-                    Label::new("on")
-                        .color(Color::Muted)
-                        .size(LabelSize::XSmall),
-                )
-                .child(
-                    DropdownMenu::new(
-                        SharedString::from(format!("sched-dow-{}", auto_id_for_ids)),
-                        label,
-                        menu,
+                el.child(Label::new("on").color(Color::Muted).size(LabelSize::XSmall))
+                    .child(
+                        DropdownMenu::new(
+                            SharedString::from(format!("sched-dow-{}", auto_id_for_ids)),
+                            label,
+                            menu,
+                        )
+                        .trigger_size(ButtonSize::None)
+                        .style(DropdownStyle::Outlined),
                     )
-                    .trigger_size(ButtonSize::None)
-                    .style(DropdownStyle::Outlined),
-                )
             })
             .when_some(dom_dropdown, |el, (menu, label)| {
                 el.child(
@@ -488,20 +519,16 @@ impl Dashboard {
                 )
             })
             .when(show_time, |el| {
-                el.child(
-                    Label::new("at")
-                        .color(Color::Muted)
-                        .size(LabelSize::XSmall),
-                )
-                .child(
-                    DropdownMenu::new(
-                        SharedString::from(format!("sched-time-{}", auto_id_for_ids)),
-                        format_hour_ampm(current_hour),
-                        time_menu,
+                el.child(Label::new("at").color(Color::Muted).size(LabelSize::XSmall))
+                    .child(
+                        DropdownMenu::new(
+                            SharedString::from(format!("sched-time-{}", auto_id_for_ids)),
+                            format_hour_ampm(current_hour),
+                            time_menu,
+                        )
+                        .trigger_size(ButtonSize::None)
+                        .style(DropdownStyle::Outlined),
                     )
-                    .trigger_size(ButtonSize::None)
-                    .style(DropdownStyle::Outlined),
-                )
             })
     }
 }
@@ -592,10 +619,16 @@ mod tests {
     fn test_schedule_summary() {
         assert_eq!(schedule_summary("0 3 * * *"), "Every day at 3:00 AM");
         assert_eq!(schedule_summary("0 * * * *"), "Every hour");
-        assert_eq!(schedule_summary("0 14 1 * *"), "Every month on the 1st at 2:00 PM");
+        assert_eq!(
+            schedule_summary("0 14 1 * *"),
+            "Every month on the 1st at 2:00 PM"
+        );
         assert_eq!(schedule_summary("0 9 * * 3"), "Every Wednesday at 9:00 AM");
         assert_eq!(schedule_summary("0 9 * * 0"), "Every Sunday at 9:00 AM");
-        assert_eq!(schedule_summary("0 14 15 * *"), "Every month on the 15th at 2:00 PM");
+        assert_eq!(
+            schedule_summary("0 14 15 * *"),
+            "Every month on the 15th at 2:00 PM"
+        );
     }
 
     #[test]

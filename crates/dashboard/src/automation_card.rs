@@ -102,15 +102,9 @@ pub fn render_automation_card(
                     cx.stop_propagation();
                 })
                 .child(
-                    if matches!(
-                        ctx.run_status,
-                        Some(AutomationRunStatus::GatheringContext)
-                    ) {
+                    if matches!(ctx.run_status, Some(AutomationRunStatus::GatheringContext)) {
                         h_flex()
-                            .id(SharedString::from(format!(
-                                "run-spinner-wrap-{}",
-                                run_id
-                            )))
+                            .id(SharedString::from(format!("run-spinner-wrap-{}", run_id)))
                             .size(IconSize::Small.rems())
                             .items_center()
                             .justify_center()
@@ -128,23 +122,24 @@ pub fn render_automation_card(
                             )
                             .into_any_element()
                     } else {
-                        IconButton::new(
-                            format!("run-automation-{}", run_id),
-                            IconName::PlayFilled,
-                        )
-                        .icon_size(IconSize::Small)
-                        .icon_color(Color::Muted)
-                        .tooltip(Tooltip::text("Run automation"))
-                        .on_click(move |_, window, cx| {
-                            run_entity
-                                .update(cx, |this, cx| {
-                                    this.run_automation(
-                                        &run_id, &run_label, &run_prompt, window, cx,
-                                    );
-                                })
-                                .log_err();
-                        })
-                        .into_any_element()
+                        IconButton::new(format!("run-automation-{}", run_id), IconName::PlayFilled)
+                            .icon_size(IconSize::Small)
+                            .icon_color(Color::Muted)
+                            .tooltip(Tooltip::text("Run automation"))
+                            .on_click(move |_, window, cx| {
+                                run_entity
+                                    .update(cx, |this, cx| {
+                                        this.run_automation(
+                                            &run_id,
+                                            &run_label,
+                                            &run_prompt,
+                                            window,
+                                            cx,
+                                        );
+                                    })
+                                    .log_err();
+                            })
+                            .into_any_element()
                     },
                 )
                 .child(
@@ -172,74 +167,63 @@ pub fn render_automation_card(
                     }),
                 )
                 .child(
-                    IconButton::new(
-                        format!("gear-automation-{}", gear_id),
-                        IconName::Settings,
-                    )
-                    .icon_size(IconSize::Small)
-                    .icon_color(Color::Muted)
-                    .tooltip(Tooltip::text("Settings"))
-                    .on_click(move |_, _, cx| {
-                        gear_entity
-                            .update(cx, |this, cx| {
-                                this.expanded_automations.insert(gear_id.clone());
-                                this.toggle_context_edit_mode(&gear_id, cx);
-                            })
-                            .log_err();
-                    }),
+                    IconButton::new(format!("gear-automation-{}", gear_id), IconName::Settings)
+                        .icon_size(IconSize::Small)
+                        .icon_color(Color::Muted)
+                        .tooltip(Tooltip::text("Settings"))
+                        .on_click(move |_, _, cx| {
+                            gear_entity
+                                .update(cx, |this, cx| {
+                                    this.expanded_automations.insert(gear_id.clone());
+                                    this.toggle_context_edit_mode(&gear_id, cx);
+                                })
+                                .log_err();
+                        }),
                 )
                 .when(prompt_file.is_some(), |this| {
                     this.child(
-                        IconButton::new(
-                            format!("edit-prompt-{}", prompt_id),
-                            IconName::Pencil,
-                        )
-                        .icon_size(IconSize::Small)
-                        .icon_color(Color::Muted)
-                        .tooltip(Tooltip::text("Edit Prompt"))
-                        .on_click(move |_, window, cx| {
-                            if prompt_file.is_some() {
-                                let auto_id = prompt_automation_id.clone();
-                                prompt_entity
-                                    .update(cx, |this, cx| {
-                                        this.open_postprod_rules_scoped(
-                                            &auto_id, window, cx,
-                                        );
-                                    })
-                                    .log_err();
-                            }
-                        }),
+                        IconButton::new(format!("edit-prompt-{}", prompt_id), IconName::Pencil)
+                            .icon_size(IconSize::Small)
+                            .icon_color(Color::Muted)
+                            .tooltip(Tooltip::text("Edit Prompt"))
+                            .on_click(move |_, window, cx| {
+                                if prompt_file.is_some() {
+                                    let auto_id = prompt_automation_id.clone();
+                                    prompt_entity
+                                        .update(cx, |this, cx| {
+                                            this.open_postprod_rules_scoped(&auto_id, window, cx);
+                                        })
+                                        .log_err();
+                                }
+                            }),
                     )
                 })
                 .child(
-                    IconButton::new(
-                        format!("delete-automation-{}", delete_id),
-                        IconName::Trash,
-                    )
-                    .icon_size(IconSize::Small)
-                    .icon_color(if is_pending_delete {
-                        Color::Error
-                    } else {
-                        Color::Muted
-                    })
-                    .tooltip(Tooltip::text(if is_pending_delete {
-                        "Click again to confirm delete"
-                    } else {
-                        "Delete automation"
-                    }))
-                    .on_click(move |_, _, cx| {
-                        delete_entity
-                            .update(cx, |this, cx| {
-                                if this.automations_pending_delete.contains(&delete_id) {
-                                    this.automations_pending_delete.remove(&delete_id);
-                                    this.delete_automation_toml(&delete_id, cx);
-                                } else {
-                                    this.automations_pending_delete.insert(delete_id.clone());
-                                    cx.notify();
-                                }
-                            })
-                            .log_err();
-                    }),
+                    IconButton::new(format!("delete-automation-{}", delete_id), IconName::Trash)
+                        .icon_size(IconSize::Small)
+                        .icon_color(if is_pending_delete {
+                            Color::Error
+                        } else {
+                            Color::Muted
+                        })
+                        .tooltip(Tooltip::text(if is_pending_delete {
+                            "Click again to confirm delete"
+                        } else {
+                            "Delete automation"
+                        }))
+                        .on_click(move |_, _, cx| {
+                            delete_entity
+                                .update(cx, |this, cx| {
+                                    if this.automations_pending_delete.contains(&delete_id) {
+                                        this.automations_pending_delete.remove(&delete_id);
+                                        this.delete_automation_toml(&delete_id, cx);
+                                    } else {
+                                        this.automations_pending_delete.insert(delete_id.clone());
+                                        cx.notify();
+                                    }
+                                })
+                                .log_err();
+                        }),
                 )
                 .child(
                     Disclosure::new(
@@ -255,31 +239,26 @@ pub fn render_automation_card(
                     }),
                 )
                 .child(
-                    IconButton::new(
-                        format!("edit-automation-{}", edit_id),
-                        IconName::FileToml,
-                    )
-                    .icon_size(IconSize::Small)
-                    .icon_color(Color::Muted)
-                    .tooltip(Tooltip::text("Edit TOML"))
-                    .on_click(move |_, window, cx| {
-                        edit_entity
-                            .update(cx, |this, cx| {
-                                let path = this
-                                    .automations
-                                    .iter()
-                                    .find(|a| a.id == edit_id)
-                                    .and_then(|a| a.source_path.clone())
-                                    .unwrap_or_else(|| {
-                                        automations_dir_for(&this.config_root)
-                                            .join(format!("{}.toml", edit_id))
-                                    });
-                                let workspace = this.workspace.clone();
-                                cx.spawn_in(window, async move |_this, cx| {
-                                    workspace
-                                        .update_in(
-                                            cx,
-                                            |workspace, window, cx| {
+                    IconButton::new(format!("edit-automation-{}", edit_id), IconName::FileToml)
+                        .icon_size(IconSize::Small)
+                        .icon_color(Color::Muted)
+                        .tooltip(Tooltip::text("Edit TOML"))
+                        .on_click(move |_, window, cx| {
+                            edit_entity
+                                .update(cx, |this, cx| {
+                                    let path = this
+                                        .automations
+                                        .iter()
+                                        .find(|a| a.id == edit_id)
+                                        .and_then(|a| a.source_path.clone())
+                                        .unwrap_or_else(|| {
+                                            automations_dir_for(&this.config_root)
+                                                .join(format!("{}.toml", edit_id))
+                                        });
+                                    let workspace = this.workspace.clone();
+                                    cx.spawn_in(window, async move |_this, cx| {
+                                        workspace
+                                            .update_in(cx, |workspace, window, cx| {
                                                 workspace
                                                     .open_abs_path(
                                                         path,
@@ -288,14 +267,13 @@ pub fn render_automation_card(
                                                         cx,
                                                     )
                                                     .detach();
-                                            },
-                                        )
-                                        .log_err();
+                                            })
+                                            .log_err();
+                                    })
+                                    .detach();
                                 })
-                                .detach();
-                            })
-                            .log_err();
-                    }),
+                                .log_err();
+                        }),
                 ),
         );
 

@@ -30,7 +30,11 @@ pub(crate) fn read_active_folder(config_root: &Path) -> Option<PathBuf> {
 }
 
 pub(crate) fn write_active_folder(config_root: &Path, path: &Path) {
-    std::fs::write(active_folder_file(config_root), path.to_string_lossy().as_bytes()).log_err();
+    std::fs::write(
+        active_folder_file(config_root),
+        path.to_string_lossy().as_bytes(),
+    )
+    .log_err();
     add_to_recent_folders(config_root, path);
 }
 
@@ -103,7 +107,11 @@ pub(crate) fn read_recent_destinations(config_root: &Path) -> Vec<PathBuf> {
 }
 
 pub(crate) fn write_destination_folder(config_root: &Path, path: &Path) {
-    std::fs::write(destination_folder_file(config_root), path.to_string_lossy().as_bytes()).log_err();
+    std::fs::write(
+        destination_folder_file(config_root),
+        path.to_string_lossy().as_bytes(),
+    )
+    .log_err();
     add_to_destination_recent(config_root, path);
 }
 
@@ -210,9 +218,7 @@ where
 {
     let mut groups: BTreeMap<String, Vec<T>> = BTreeMap::new();
     for entry in entries {
-        let key = get_section(entry)
-            .unwrap_or("General")
-            .to_string();
+        let key = get_section(entry).unwrap_or("General").to_string();
         groups.entry(key).or_default().push(entry.clone());
     }
 
@@ -260,7 +266,10 @@ pub(crate) fn read_param_values(config_root: &Path) -> HashMap<String, HashMap<S
     }
 }
 
-pub(crate) fn write_param_values(config_root: &Path, values: &HashMap<String, HashMap<String, String>>) {
+pub(crate) fn write_param_values(
+    config_root: &Path,
+    values: &HashMap<String, HashMap<String, String>>,
+) {
     if let Ok(content) = toml::to_string(values) {
         std::fs::write(param_values_file(config_root), content).log_err();
     }

@@ -7,16 +7,16 @@ mod context_editor;
 mod folder_bar;
 mod hotkeys;
 mod paths;
-mod pipeline_card;
 pub(crate) mod persistence;
+mod pipeline_card;
 mod scheduler_ui;
 mod section;
 mod tool_card;
 
 use config::{
     AgentEntry, AutomationEntry, BackendEntry, FolderTarget, ParamEntry, ParamType, PipelineStep,
-    ScheduleConfig, ToolEntry, ToolSource, ToolTier,
-    load_agents_config, load_automations_registry, load_tools_registry,
+    ScheduleConfig, ToolEntry, ToolSource, ToolTier, load_agents_config, load_automations_registry,
+    load_tools_registry,
 };
 use paths::{
     DeliveryStatus, automations_dir_for, ensure_config_extracted, ensure_workspace_dirs,
@@ -30,36 +30,34 @@ use persistence::{
     write_destination_folder, write_param_values,
 };
 
-pub use hotkeys::init_global_hotkeys;
-use hotkeys::GlobalShortcutModal;
 use card::CardRenderContext;
+use hotkeys::GlobalShortcutModal;
+pub use hotkeys::init_global_hotkeys;
 
 use agent_settings::AgentProfileId;
 use agent_ui::{AgentPanel, InlineAssistant};
-use menu;
-use postprod_rules::note_store::NoteStore;
 use editor::{Editor, EditorEvent};
 use gpui::{
     Action, AnyWindowHandle, App, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
-    ExternalPaths, FocusHandle, Focusable, IntoElement,
-    ParentElement, PathPromptOptions, Render, ScrollHandle, SharedString, Styled, Subscription,
-    UpdateGlobal, WeakEntity, Window, WindowHandle, actions,
+    ExternalPaths, FocusHandle, Focusable, IntoElement, ParentElement, PathPromptOptions, Render,
+    ScrollHandle, SharedString, Styled, Subscription, UpdateGlobal, WeakEntity, Window,
+    WindowHandle, actions,
 };
+use menu;
+use postprod_rules::note_store::NoteStore;
+use project::WorktreeId;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use settings::{RegisterSetting, Settings, update_settings_file};
 use task::{RevealStrategy, SpawnInTerminal, TaskId};
 use ui::{
-    ButtonLike, ButtonStyle, ContextMenu, Disclosure, Divider, DividerColor,
-    DropdownMenu, DropdownStyle, Headline, HeadlineSize, Icon, IconButton, IconName, IconSize,
-    Indicator, Label, LabelSize,
-    ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip, WithScrollbar as _,
-    prelude::*,
+    ButtonLike, ButtonStyle, ContextMenu, Disclosure, Divider, DividerColor, DropdownMenu,
+    DropdownStyle, Headline, HeadlineSize, Icon, IconButton, IconName, IconSize, Indicator, Label,
+    LabelSize, ToggleButtonGroup, ToggleButtonGroupStyle, ToggleButtonSimple, Tooltip,
+    WithScrollbar as _, prelude::*,
 };
-use project::WorktreeId;
 use workspace::{
-    DraggedSelection, OpenOptions, ProToolsSessionName, Toast,
-    Workspace,
+    DraggedSelection, OpenOptions, ProToolsSessionName, Toast, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::NotificationId,
 };
@@ -171,7 +169,6 @@ pub fn init(cx: &mut App) {
 }
 
 const DASHBOARD_PANEL_KEY: &str = "Dashboard";
-
 
 // ---------------------------------------------------------------------------
 // Agent backend selector
@@ -931,7 +928,8 @@ impl Dashboard {
 
         let task = cx.spawn_in(window, async move |this, cx| {
             let language_registry = cx.update(|_window, cx| {
-                workspace.upgrade()
+                workspace
+                    .upgrade()
                     .map(|ws| ws.read(cx).app_state().languages.clone())
             })?;
             let Some(language_registry) = language_registry else {
@@ -942,18 +940,20 @@ impl Dashboard {
                 workspace: workspace.clone(),
             });
 
-            let window_handle = cx.update(|_window, cx| {
-                postprod_rules::open_postprod_rules(
-                    store,
-                    language_registry,
-                    inline_delegate,
-                    config_root,
-                    automations,
-                    Some(context_callbacks),
-                    mode,
-                    cx,
-                )
-            })?.await?;
+            let window_handle = cx
+                .update(|_window, cx| {
+                    postprod_rules::open_postprod_rules(
+                        store,
+                        language_registry,
+                        inline_delegate,
+                        config_root,
+                        automations,
+                        Some(context_callbacks),
+                        mode,
+                        cx,
+                    )
+                })?
+                .await?;
 
             this.update(cx, |dashboard, _cx| {
                 dashboard.postprod_rules_window = Some(window_handle);
@@ -999,27 +999,10 @@ impl Dashboard {
             id: entry.id.clone(),
             label: entry.label.clone(),
             prompt_file: entry.prompt_file.clone(),
-            contexts: entry.contexts.iter().filter_map(|c| {
-                let resolved_path = self.resolve_context_path(c)?;
-                Some(postprod_rules::ContextInfo {
-                    source_type: c.source_type.clone(),
-                    label: c.label.clone(),
-                    resolved_path,
-                    required: c.required,
-                })
-            }).collect(),
-            skip_default_context: entry.skip_default_context,
-        })
-    }
-
-    /// Build AutomationInfo for all automations (for general mode note assignment UI).
-    fn build_all_automation_infos(&self) -> Vec<postprod_rules::AutomationInfo> {
-        self.automations.iter().map(|a| {
-            postprod_rules::AutomationInfo {
-                id: a.id.clone(),
-                label: a.label.clone(),
-                prompt_file: a.prompt_file.clone(),
-                contexts: a.contexts.iter().filter_map(|c| {
+            contexts: entry
+                .contexts
+                .iter()
+                .filter_map(|c| {
                     let resolved_path = self.resolve_context_path(c)?;
                     Some(postprod_rules::ContextInfo {
                         source_type: c.source_type.clone(),
@@ -1027,24 +1010,56 @@ impl Dashboard {
                         resolved_path,
                         required: c.required,
                     })
-                }).collect(),
+                })
+                .collect(),
+            skip_default_context: entry.skip_default_context,
+        })
+    }
+
+    /// Build AutomationInfo for all automations (for general mode note assignment UI).
+    fn build_all_automation_infos(&self) -> Vec<postprod_rules::AutomationInfo> {
+        self.automations
+            .iter()
+            .map(|a| postprod_rules::AutomationInfo {
+                id: a.id.clone(),
+                label: a.label.clone(),
+                prompt_file: a.prompt_file.clone(),
+                contexts: a
+                    .contexts
+                    .iter()
+                    .filter_map(|c| {
+                        let resolved_path = self.resolve_context_path(c)?;
+                        Some(postprod_rules::ContextInfo {
+                            source_type: c.source_type.clone(),
+                            label: c.label.clone(),
+                            resolved_path,
+                            required: c.required,
+                        })
+                    })
+                    .collect(),
                 skip_default_context: a.skip_default_context,
-            }
-        }).collect()
+            })
+            .collect()
     }
 
     /// Build context callbacks for the PostProd Rules window.
-    fn build_context_callbacks(&self, cx: &mut Context<Self>) -> Arc<postprod_rules::ContextCallbacks> {
+    fn build_context_callbacks(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> Arc<postprod_rules::ContextCallbacks> {
         let dashboard_weak = cx.entity().downgrade();
         Arc::new(postprod_rules::ContextCallbacks {
             reorder: {
                 let weak = dashboard_weak.clone();
-                Box::new(move |automation_id: &str, from: usize, direction: i32, cx: &mut App| {
-                    let auto_id = automation_id.to_string();
-                    weak.update(cx, |dashboard, cx| {
-                        dashboard.reorder_context_entry(&auto_id, from, direction, cx);
-                    }).log_err();
-                })
+                Box::new(
+                    move |automation_id: &str, from: usize, direction: i32, cx: &mut App| {
+                        let auto_id = automation_id.to_string();
+                        weak.update(cx, |dashboard, cx| {
+                            dashboard.reorder_context_entry(&auto_id, from, direction, cx);
+                        })
+                        .log_err();
+                    },
+                )
             },
             remove: {
                 let weak = dashboard_weak.clone();
@@ -1052,7 +1067,8 @@ impl Dashboard {
                     let auto_id = automation_id.to_string();
                     weak.update(cx, |dashboard, cx| {
                         dashboard.remove_context_entry(&auto_id, index, cx);
-                    }).log_err();
+                    })
+                    .log_err();
                 })
             },
             add_path: {
@@ -1061,17 +1077,21 @@ impl Dashboard {
                     let auto_id = automation_id.to_string();
                     weak.update(cx, |dashboard, cx| {
                         dashboard.add_context_path_entry(&auto_id, path, cx);
-                    }).log_err();
+                    })
+                    .log_err();
                 })
             },
             add_script: {
                 let weak = dashboard_weak;
-                Box::new(move |automation_id: &str, script_name: String, cx: &mut App| {
-                    let auto_id = automation_id.to_string();
-                    weak.update(cx, |dashboard, cx| {
-                        dashboard.add_context_script_entry(&auto_id, script_name, cx);
-                    }).log_err();
-                })
+                Box::new(
+                    move |automation_id: &str, script_name: String, cx: &mut App| {
+                        let auto_id = automation_id.to_string();
+                        weak.update(cx, |dashboard, cx| {
+                            dashboard.add_context_script_entry(&auto_id, script_name, cx);
+                        })
+                        .log_err();
+                    },
+                )
             },
         })
     }
@@ -1267,32 +1287,34 @@ impl Dashboard {
         if let Some(window_handle) = self.postprod_rules_window.take() {
             cx.update_window(window_handle.into(), |_, window, _cx| {
                 window.remove_window();
-            }).log_err();
+            })
+            .log_err();
         }
 
         // Recreate NoteStore for the new config_root
         self.note_store = None;
         let db_path = state_dir_for(&self.config_root).join("notes.mdb");
         let note_store_task = NoteStore::new(db_path, cx);
-        self._note_store_init = Some(cx.spawn(async move |dashboard, cx: &mut AsyncApp| {
-            match note_store_task.await {
-                Ok(store) => {
-                    dashboard.update(cx, |dashboard, cx| {
-                        dashboard.note_store = Some(cx.new(|_| store));
-                        dashboard._note_store_init = None;
-                        cx.notify();
-                    }).log_err();
-                }
-                Err(err) => {
-                    log::error!("Failed to reinitialize NoteStore: {:?}", err);
-                }
-            }
-        }));
+        self._note_store_init =
+            Some(cx.spawn(
+                async move |dashboard, cx: &mut AsyncApp| match note_store_task.await {
+                    Ok(store) => {
+                        dashboard
+                            .update(cx, |dashboard, cx| {
+                                dashboard.note_store = Some(cx.new(|_| store));
+                                dashboard._note_store_init = None;
+                                cx.notify();
+                            })
+                            .log_err();
+                    }
+                    Err(err) => {
+                        log::error!("Failed to reinitialize NoteStore: {:?}", err);
+                    }
+                },
+            ));
 
         cx.notify();
     }
-
-
 
     /// Gather all notes (default + assigned) for a given automation.
     /// Returns a formatted string for injection into the prompt.
@@ -1346,7 +1368,9 @@ impl Dashboard {
         let fallback_prompt = self.resolve_variables(prompt, entry_id);
 
         // Check if this automation has chain config (for terminal backends only)
-        let has_chain = self.automations.iter()
+        let has_chain = self
+            .automations
+            .iter()
             .find(|a| a.id == entry_id)
             .and_then(|a| a.chain.as_ref())
             .is_some_and(|c| !c.triggers.is_empty());
@@ -1394,13 +1418,21 @@ impl Dashboard {
         };
         let config_root = self.config_root.clone();
         let session_path_for_env = self.session_path.clone().unwrap_or_default();
-        let active_folder_for_env = self.active_folder.as_ref()
+        let active_folder_for_env = self
+            .active_folder
+            .as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let destination_for_env = self.destination_folder.as_ref()
+        let destination_for_env = self
+            .destination_folder
+            .as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let param_values_for_env = self.param_values.get(&entry_id).cloned().unwrap_or_default();
+        let param_values_for_env = self
+            .param_values
+            .get(&entry_id)
+            .cloned()
+            .unwrap_or_default();
 
         // If chain is configured but backend can't support it, warn
         if has_chain && matches!(agent_backend, AgentBackend::Native | AgentBackend::CopyOnly) {
@@ -1413,7 +1445,9 @@ impl Dashboard {
         // Spawn the completion poller before the async block (needs &self + Context)
         if let Some(marker_path) = &chain_marker {
             if !matches!(agent_backend, AgentBackend::Native | AgentBackend::CopyOnly) {
-                let timeout_secs = self.automations.iter()
+                let timeout_secs = self
+                    .automations
+                    .iter()
                     .find(|a| a.id == entry_id)
                     .and_then(|a| a.schedule.as_ref())
                     .map(|s| s.timeout)
@@ -1641,10 +1675,16 @@ impl Dashboard {
         let config_root = self.config_root.clone();
         let session_for_env = self.session_path.clone().unwrap_or_default();
         let folder_for_env = active_folder.to_string_lossy().to_string();
-        let dest_for_env = self.destination_folder.as_ref()
+        let dest_for_env = self
+            .destination_folder
+            .as_ref()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let params_for_env = self.param_values.get(&entry.id).cloned().unwrap_or_default();
+        let params_for_env = self
+            .param_values
+            .get(&entry.id)
+            .cloned()
+            .unwrap_or_default();
 
         let command = resolve_bin(&backend_config.command);
         let flags = backend_config.flags;
@@ -1763,13 +1803,21 @@ impl Dashboard {
         };
 
         let automation_id_owned = automation_id.to_string();
-        let timeout_secs = self.scheduler.read(cx)
+        let timeout_secs = self
+            .scheduler
+            .read(cx)
             .entries()
             .get(&automation_id_owned)
             .map(|e| e.timeout_secs)
             .unwrap_or(3600);
 
-        self.spawn_completion_poller(automation_id_owned, marker_path, timeout_secs, chain_depth, cx);
+        self.spawn_completion_poller(
+            automation_id_owned,
+            marker_path,
+            timeout_secs,
+            chain_depth,
+            cx,
+        );
     }
 
     fn run_pipeline(
@@ -1797,7 +1845,8 @@ impl Dashboard {
 
         self.active_pipelines.insert(pipeline_id.clone());
         let cancel_flag = Arc::new(AtomicBool::new(false));
-        self.pipeline_cancel_flags.insert(pipeline_id.clone(), cancel_flag.clone());
+        self.pipeline_cancel_flags
+            .insert(pipeline_id.clone(), cancel_flag.clone());
         cx.notify();
 
         let steps = pipeline_entry.steps.clone();
@@ -2057,51 +2106,53 @@ impl Dashboard {
     ) {
         let scheduler = self.scheduler.downgrade();
 
-        cx.spawn(async move |_this, cx: &mut AsyncApp| -> anyhow::Result<()> {
-            // Poll for the completion marker file instead of awaiting the terminal process.
-            // The agent writes this JSON file as its final action.
-            let poll_interval = Duration::from_secs(10);
-            let marker = marker_path.clone();
-            let executor = cx.background_executor().clone();
-            let completion = async {
-                loop {
-                    executor.timer(poll_interval).await;
-                    if marker.exists() {
-                        return CompletionReport::from_marker(&marker);
+        cx.spawn(
+            async move |_this, cx: &mut AsyncApp| -> anyhow::Result<()> {
+                // Poll for the completion marker file instead of awaiting the terminal process.
+                // The agent writes this JSON file as its final action.
+                let poll_interval = Duration::from_secs(10);
+                let marker = marker_path.clone();
+                let executor = cx.background_executor().clone();
+                let completion = async {
+                    loop {
+                        executor.timer(poll_interval).await;
+                        if marker.exists() {
+                            return CompletionReport::from_marker(&marker);
+                        }
                     }
-                }
-            };
-            let timeout = async {
-                executor
-                    .timer(Duration::from_secs(timeout_secs))
-                    .await;
-                None::<(CompletionReport, RunResult)>
-            };
+                };
+                let timeout = async {
+                    executor.timer(Duration::from_secs(timeout_secs)).await;
+                    None::<(CompletionReport, RunResult)>
+                };
 
-            let outcome = smol::future::or(completion, timeout).await;
+                let outcome = smol::future::or(completion, timeout).await;
 
-            let (report, result) = match outcome {
-                Some((report, result)) => {
-                    // Clean up the marker file
-                    std::fs::remove_file(&marker_path).log_err();
-                    (Some(report), result)
-                }
-                None => (None, RunResult::Timeout),
-            };
+                let (report, result) = match outcome {
+                    Some((report, result)) => {
+                        // Clean up the marker file
+                        std::fs::remove_file(&marker_path).log_err();
+                        (Some(report), result)
+                    }
+                    None => (None, RunResult::Timeout),
+                };
 
-            // Report result back to scheduler
-            scheduler.update(cx, |scheduler, cx| {
-                scheduler.report_completion(
-                    &automation_id,
-                    &result,
-                    report.as_ref(),
-                    chain_depth,
-                    cx,
-                );
-            }).log_err();
+                // Report result back to scheduler
+                scheduler
+                    .update(cx, |scheduler, cx| {
+                        scheduler.report_completion(
+                            &automation_id,
+                            &result,
+                            report.as_ref(),
+                            chain_depth,
+                            cx,
+                        );
+                    })
+                    .log_err();
 
-            Ok(())
-        })
+                Ok(())
+            },
+        )
         .detach();
     }
 
@@ -2153,7 +2204,8 @@ impl Dashboard {
                         this.active_folder = Some(path);
                         this.recent_folders = read_recent_folders(&this.config_root);
                         cx.notify();
-                    }).log_err();
+                    })
+                    .log_err();
                 }
             }
         })
@@ -2177,7 +2229,8 @@ impl Dashboard {
                         this.destination_folder = Some(path);
                         this.recent_destinations = read_recent_destinations(&this.config_root);
                         cx.notify();
-                    }).log_err();
+                    })
+                    .log_err();
                 }
             }
         })
@@ -2193,13 +2246,17 @@ impl Dashboard {
     ) {
         let workspace = self.workspace.clone();
         let config_root = self.config_root.clone();
-        workspace.update(cx, |workspace, cx| {
-            workspace.toggle_modal(window, cx, {
-                let tool_id = tool_id.clone();
-                let tool_label = tool_label.clone();
-                move |window, cx| GlobalShortcutModal::new(tool_id, tool_label, config_root, window, cx)
-            });
-        }).log_err();
+        workspace
+            .update(cx, |workspace, cx| {
+                workspace.toggle_modal(window, cx, {
+                    let tool_id = tool_id.clone();
+                    let tool_label = tool_label.clone();
+                    move |window, cx| {
+                        GlobalShortcutModal::new(tool_id, tool_label, config_root, window, cx)
+                    }
+                });
+            })
+            .log_err();
     }
 
     // -- Param editor helpers --
@@ -2254,7 +2311,8 @@ impl Dashboard {
 
     fn completion_report_instruction(marker_path: &Path) -> String {
         let marker_display = marker_path.display();
-        format!(r#"
+        format!(
+            r#"
 
 FINAL STEP — COMPLETION REPORT (mandatory):
 When ALL tasks above are complete, create this JSON file using the Bash tool:
@@ -2275,7 +2333,8 @@ Rules for the completion report:
 - "outputs" should list the files you created or modified during this run.
 - "message" is for anything the user should see (warnings, suggestions, etc.). Leave empty if none.
 - This is your FINAL action. Do not do anything after writing this file.
-"#)
+"#
+        )
     }
 
     fn schedule_param_write(&mut self, cx: &mut Context<Self>) {
@@ -2285,7 +2344,8 @@ Rules for the completion report:
                 .await;
             this.update(cx, |this, _cx| {
                 write_param_values(&this.config_root, &this.param_values);
-            }).log_err();
+            })
+            .log_err();
         }));
     }
 
@@ -2361,10 +2421,8 @@ Rules for the completion report:
                     catch_up: s.catch_up.clone(),
                     timeout_secs: s.timeout,
                     auto_disable_after: s.auto_disable_after,
-                    chain: a.chain.as_ref().map(|c| {
-                        postprod_scheduler::ChainConfig {
-                            triggers: c.triggers.clone(),
-                        }
+                    chain: a.chain.as_ref().map(|c| postprod_scheduler::ChainConfig {
+                        triggers: c.triggers.clone(),
                     }),
                 })
             })
@@ -2394,8 +2452,12 @@ Rules for the completion report:
             None => return,
         };
 
-        let Some(source_path) = &entry.source_path else { return };
-        let Some(schedule) = &entry.schedule else { return };
+        let Some(source_path) = &entry.source_path else {
+            return;
+        };
+        let Some(schedule) = &entry.schedule else {
+            return;
+        };
 
         // Capture values for the background task
         let source_path = source_path.clone();
@@ -2430,13 +2492,18 @@ Rules for the completion report:
             }
 
             if let Err(error) = std::fs::write(&source_path, doc.to_string()) {
-                log::warn!("Failed to write schedule to {}: {error}", source_path.display());
+                log::warn!(
+                    "Failed to write schedule to {}: {error}",
+                    source_path.display()
+                );
             }
         })
         .detach();
 
         // Sync updated schedule to scheduler (immediate — scheduler state is in-memory)
-        let default_folder = self.active_folder.clone()
+        let default_folder = self
+            .active_folder
+            .clone()
             .unwrap_or_else(|| self.config_root.clone());
         let sync_entries = Self::build_sync_entries(&self.automations);
         let unscheduled = Self::build_unscheduled_entries(&self.automations, &default_folder);
@@ -2447,7 +2514,8 @@ Rules for the completion report:
 
     fn prune_stale_automation_status(&mut self) {
         let live_ids: HashSet<&str> = self.automations.iter().map(|a| a.id.as_str()).collect();
-        self.automation_status.retain(|id, _| live_ids.contains(id.as_str()));
+        self.automation_status
+            .retain(|id, _| live_ids.contains(id.as_str()));
     }
 
     fn reload_automations(&mut self, cx: &mut Context<Self>) {
@@ -2479,12 +2547,19 @@ Rules for the completion report:
         cx.notify();
     }
 
-    fn write_pipeline_steps(&self, pipeline_id: &str, steps: &[PipelineStep], cx: &mut Context<Self>) {
+    fn write_pipeline_steps(
+        &self,
+        pipeline_id: &str,
+        steps: &[PipelineStep],
+        cx: &mut Context<Self>,
+    ) {
         let entry = match self.automations.iter().find(|a| a.id == pipeline_id) {
             Some(e) => e,
             None => return,
         };
-        let Some(source_path) = &entry.source_path else { return };
+        let Some(source_path) = &entry.source_path else {
+            return;
+        };
         let source_path = source_path.clone();
         let steps = steps.to_vec();
 
@@ -2524,7 +2599,10 @@ Rules for the completion report:
             }
 
             if let Err(error) = std::fs::write(&source_path, doc.to_string()) {
-                log::warn!("Failed to write pipeline steps to {}: {error}", source_path.display());
+                log::warn!(
+                    "Failed to write pipeline steps to {}: {error}",
+                    source_path.display()
+                );
             }
         })
         .detach();
@@ -2616,10 +2694,18 @@ Rules for the completion report:
         }
     }
 
-    fn reorder_context_entry(&mut self, automation_id: &str, from: usize, direction: i32, cx: &mut Context<Self>) {
+    fn reorder_context_entry(
+        &mut self,
+        automation_id: &str,
+        from: usize,
+        direction: i32,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(entry) = self.automations.iter_mut().find(|a| a.id == automation_id) {
             let to_signed = from as i32 + direction;
-            if to_signed < 0 { return; }
+            if to_signed < 0 {
+                return;
+            }
             let to = to_signed as usize;
             if from < entry.contexts.len() && to < entry.contexts.len() {
                 entry.contexts.swap(from, to);
@@ -2630,8 +2716,14 @@ Rules for the completion report:
         }
     }
 
-    fn add_context_path_entry(&mut self, automation_id: &str, path: PathBuf, cx: &mut Context<Self>) {
-        let label = path.file_name()
+    fn add_context_path_entry(
+        &mut self,
+        automation_id: &str,
+        path: PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let label = path
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.to_string_lossy().to_string());
         let new_entry = config::ContextEntry {
@@ -2650,7 +2742,12 @@ Rules for the completion report:
     }
 
     #[allow(dead_code)] // Used by automation_picker's AddContextScript mode; will be used in context edit mode
-    fn add_context_script_entry(&mut self, automation_id: &str, script_name: String, cx: &mut Context<Self>) {
+    fn add_context_script_entry(
+        &mut self,
+        automation_id: &str,
+        script_name: String,
+        cx: &mut Context<Self>,
+    ) {
         let label = std::path::Path::new(&script_name)
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -2671,19 +2768,29 @@ Rules for the completion report:
     }
 
     fn toggle_skip_default_context(&mut self, automation_id: &str, cx: &mut Context<Self>) {
-        let Some(entry) = self.automations.iter_mut().find(|a| a.id == automation_id) else { return };
+        let Some(entry) = self.automations.iter_mut().find(|a| a.id == automation_id) else {
+            return;
+        };
         entry.skip_default_context = !entry.skip_default_context;
         let new_value = entry.skip_default_context;
-        let Some(source_path) = entry.source_path.clone() else { return };
+        let Some(source_path) = entry.source_path.clone() else {
+            return;
+        };
 
         cx.background_spawn(async move {
             let content = match std::fs::read_to_string(&source_path) {
                 Ok(c) => c,
-                Err(e) => { log::warn!("Failed to read {}: {e}", source_path.display()); return; }
+                Err(e) => {
+                    log::warn!("Failed to read {}: {e}", source_path.display());
+                    return;
+                }
             };
             let mut doc = match content.parse::<toml_edit::DocumentMut>() {
                 Ok(d) => d,
-                Err(e) => { log::warn!("Failed to parse {}: {e}", source_path.display()); return; }
+                Err(e) => {
+                    log::warn!("Failed to parse {}: {e}", source_path.display());
+                    return;
+                }
             };
             if new_value {
                 doc.insert("skip_default_context", toml_edit::value(true));
@@ -2693,34 +2800,49 @@ Rules for the completion report:
             if let Err(e) = std::fs::write(&source_path, doc.to_string()) {
                 log::warn!("Failed to write {}: {e}", source_path.display());
             }
-        }).detach();
+        })
+        .detach();
         cx.notify();
     }
 
     fn toggle_context_edit_mode(&mut self, automation_id: &str, cx: &mut Context<Self>) {
         if !self.automations_in_context_edit.remove(automation_id) {
-            self.automations_in_context_edit.insert(automation_id.to_string());
+            self.automations_in_context_edit
+                .insert(automation_id.to_string());
         }
         cx.notify();
     }
 
-    fn write_context_entries(&self, automation_id: &str, contexts: &[config::ContextEntry], cx: &mut Context<Self>) {
+    fn write_context_entries(
+        &self,
+        automation_id: &str,
+        contexts: &[config::ContextEntry],
+        cx: &mut Context<Self>,
+    ) {
         let entry = match self.automations.iter().find(|a| a.id == automation_id) {
             Some(e) => e,
             None => return,
         };
-        let Some(source_path) = &entry.source_path else { return };
+        let Some(source_path) = &entry.source_path else {
+            return;
+        };
         let source_path = source_path.clone();
         let contexts = contexts.to_vec();
 
         cx.background_spawn(async move {
             let content = match std::fs::read_to_string(&source_path) {
                 Ok(c) => c,
-                Err(e) => { log::warn!("Failed to read {}: {e}", source_path.display()); return; }
+                Err(e) => {
+                    log::warn!("Failed to read {}: {e}", source_path.display());
+                    return;
+                }
             };
             let mut doc = match content.parse::<toml_edit::DocumentMut>() {
                 Ok(d) => d,
-                Err(e) => { log::warn!("Failed to parse {}: {e}", source_path.display()); return; }
+                Err(e) => {
+                    log::warn!("Failed to parse {}: {e}", source_path.display());
+                    return;
+                }
             };
 
             doc.remove("context");
@@ -2745,9 +2867,13 @@ Rules for the completion report:
             }
 
             if let Err(e) = std::fs::write(&source_path, doc.to_string()) {
-                log::warn!("Failed to write context entries to {}: {e}", source_path.display());
+                log::warn!(
+                    "Failed to write context entries to {}: {e}",
+                    source_path.display()
+                );
             }
-        }).detach();
+        })
+        .detach();
     }
 
     // ------------------------------------------------------------------
@@ -2755,7 +2881,8 @@ Rules for the completion report:
     // ------------------------------------------------------------------
 
     fn create_automation_toml(&mut self, name: &str, cx: &mut Context<Self>) -> String {
-        let mut id = name.to_lowercase()
+        let mut id = name
+            .to_lowercase()
             .chars()
             .map(|c| if c.is_alphanumeric() { c } else { '-' })
             .collect::<String>();
@@ -2822,7 +2949,9 @@ Rules for the completion report:
     }
 
     fn delete_automation_toml(&mut self, automation_id: &str, cx: &mut Context<Self>) {
-        if let Some(path) = self.automations.iter()
+        if let Some(path) = self
+            .automations
+            .iter()
             .find(|a| a.id == automation_id)
             .and_then(|a| a.source_path.clone())
         {
@@ -2833,7 +2962,9 @@ Rules for the completion report:
     }
 
     fn delete_pipeline_toml(&mut self, pipeline_id: &str, cx: &mut Context<Self>) {
-        if let Some(path) = self.automations.iter()
+        if let Some(path) = self
+            .automations
+            .iter()
             .find(|a| a.id == pipeline_id)
             .and_then(|a| a.source_path.clone())
         {
@@ -2843,7 +2974,12 @@ Rules for the completion report:
         }
     }
 
-    fn remove_pipeline_step(&mut self, pipeline_id: &str, step_index: usize, cx: &mut Context<Self>) {
+    fn remove_pipeline_step(
+        &mut self,
+        pipeline_id: &str,
+        step_index: usize,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(entry) = self.automations.iter_mut().find(|a| a.id == pipeline_id) {
             if step_index < entry.steps.len() {
                 entry.steps.remove(step_index);
@@ -2854,10 +2990,18 @@ Rules for the completion report:
         }
     }
 
-    fn reorder_pipeline_step(&mut self, pipeline_id: &str, from: usize, direction: i32, cx: &mut Context<Self>) {
+    fn reorder_pipeline_step(
+        &mut self,
+        pipeline_id: &str,
+        from: usize,
+        direction: i32,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(entry) = self.automations.iter_mut().find(|a| a.id == pipeline_id) {
             let to_signed = from as i32 + direction;
-            if to_signed < 0 { return; }
+            if to_signed < 0 {
+                return;
+            }
             let to = to_signed as usize;
             if from < entry.steps.len() && to < entry.steps.len() {
                 entry.steps.swap(from, to);
@@ -3037,7 +3181,13 @@ Rules for the completion report:
         section_id: &str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        section::section_header(title, section_id, &self.collapsed_sections, cx.entity().downgrade(), cx)
+        section::section_header(
+            title,
+            section_id,
+            &self.collapsed_sections,
+            cx.entity().downgrade(),
+            cx,
+        )
     }
 
     fn sub_section_header(
@@ -3046,7 +3196,13 @@ Rules for the completion report:
         section_id: &str,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        section::sub_section_header(title, section_id, &self.collapsed_sections, cx.entity().downgrade(), cx)
+        section::sub_section_header(
+            title,
+            section_id,
+            &self.collapsed_sections,
+            cx.entity().downgrade(),
+            cx,
+        )
     }
 
     /// Build a click handler closure for running a tool (background or terminal).
@@ -3074,33 +3230,37 @@ Rules for the completion report:
             let session_path = session_path.clone();
             let tool_param_values = tool_param_values.clone();
             if is_background {
-                workspace.update(cx, |_workspace, cx| {
-                    Self::spawn_tool_background(
-                        &tool,
-                        &runtime_path,
-                        &agent_tools_path,
-                        &config_root,
-                        &session_path,
-                        &active_folder,
-                        &tool_param_values,
-                        cx,
-                    );
-                }).log_err();
+                workspace
+                    .update(cx, |_workspace, cx| {
+                        Self::spawn_tool_background(
+                            &tool,
+                            &runtime_path,
+                            &agent_tools_path,
+                            &config_root,
+                            &session_path,
+                            &active_folder,
+                            &tool_param_values,
+                            cx,
+                        );
+                    })
+                    .log_err();
             } else {
-                workspace.update(cx, |workspace, cx| {
-                    Self::spawn_tool_entry(
-                        &tool,
-                        &runtime_path,
-                        &agent_tools_path,
-                        &config_root,
-                        &session_path,
-                        &active_folder,
-                        &tool_param_values,
-                        workspace,
-                        window,
-                        cx,
-                    );
-                }).log_err();
+                workspace
+                    .update(cx, |workspace, cx| {
+                        Self::spawn_tool_entry(
+                            &tool,
+                            &runtime_path,
+                            &agent_tools_path,
+                            &config_root,
+                            &session_path,
+                            &active_folder,
+                            &tool_param_values,
+                            workspace,
+                            window,
+                            cx,
+                        );
+                    })
+                    .log_err();
             }
         }
     }
@@ -3145,15 +3305,17 @@ Rules for the completion report:
                 }))
                 .on_click(move |_, _, cx| {
                     let tool_id = toggle_tool_id.clone();
-                    toggle_entity.update(cx, |this, cx| {
-                        if this.background_tools.contains(&tool_id) {
-                            this.background_tools.remove(&tool_id);
-                        } else {
-                            this.background_tools.insert(tool_id);
-                        }
-                        write_background_tools(&this.config_root, &this.background_tools);
-                        cx.notify();
-                    }).log_err();
+                    toggle_entity
+                        .update(cx, |this, cx| {
+                            if this.background_tools.contains(&tool_id) {
+                                this.background_tools.remove(&tool_id);
+                            } else {
+                                this.background_tools.insert(tool_id);
+                            }
+                            write_background_tools(&this.config_root, &this.background_tools);
+                            cx.notify();
+                        })
+                        .log_err();
                 })
                 .visible_on_hover(group_name.clone()),
             )
@@ -3168,9 +3330,11 @@ Rules for the completion report:
                 .on_click(move |_, window, cx| {
                     let tool_id = globe_tool_id.clone();
                     let tool_label = globe_tool_label.clone();
-                    globe_entity.update(cx, |this, cx| {
-                        this.open_global_shortcut_modal(tool_id, tool_label, window, cx);
-                    }).log_err();
+                    globe_entity
+                        .update(cx, |this, cx| {
+                            this.open_global_shortcut_modal(tool_id, tool_label, window, cx);
+                        })
+                        .log_err();
                 })
                 .visible_on_hover(group_name),
             )
@@ -3201,9 +3365,9 @@ Rules for the completion report:
                 });
                 let tool_id = tool.id.clone();
                 let tool_label = tool.label.clone();
-                let action_buttons =
-                    self.tool_action_buttons(&tool_id, &tool_label, group_name, cx)
-                        .into_any_element();
+                let action_buttons = self
+                    .tool_action_buttons(&tool_id, &tool_label, group_name, cx)
+                    .into_any_element();
 
                 tool_card::render_featured_tool(
                     &tool,
@@ -3262,9 +3426,9 @@ Rules for the completion report:
 
                 let tool_id = tool.id.clone();
                 let tool_label = tool.label.clone();
-                let action_buttons =
-                    self.tool_action_buttons(&tool_id, &tool_label, group_name, cx)
-                        .into_any_element();
+                let action_buttons = self
+                    .tool_action_buttons(&tool_id, &tool_label, group_name, cx)
+                    .into_any_element();
 
                 tool_card::render_standard_tool(
                     &tool,
@@ -3279,7 +3443,11 @@ Rules for the completion report:
     }
 
     /// Build Compact tool cards using the shared `DashboardCard` component.
-    fn build_compact_cards(&self, tools: &[ToolEntry], cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+    fn build_compact_cards(
+        &self,
+        tools: &[ToolEntry],
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
         let tools_owned: Vec<ToolEntry> = tools.to_vec();
         tools_owned
             .into_iter()
@@ -3288,16 +3456,11 @@ Rules for the completion report:
                 let click_handler = self.tool_click_handler(&tool, cx);
                 let tool_id = tool.id.clone();
                 let tool_label = tool.label.clone();
-                let action_buttons =
-                    self.tool_action_buttons(&tool_id, &tool_label, group_name, cx)
-                        .into_any_element();
+                let action_buttons = self
+                    .tool_action_buttons(&tool_id, &tool_label, group_name, cx)
+                    .into_any_element();
 
-                tool_card::render_compact_tool(
-                    &tool,
-                    action_buttons,
-                    click_handler,
-                    cx,
-                )
+                tool_card::render_compact_tool(&tool, action_buttons, click_handler, cx)
             })
             .collect()
     }
@@ -3370,12 +3533,7 @@ Rules for the completion report:
             return v_flex().w_full().gap_1().child(header);
         }
 
-        let all_tools: Vec<ToolEntry> = self
-            .tools
-            .iter()
-            .filter(|t| !t.hidden)
-            .cloned()
-            .collect();
+        let all_tools: Vec<ToolEntry> = self.tools.iter().filter(|t| !t.hidden).cloned().collect();
 
         let grouped = group_by_section(
             &all_tools,
@@ -3417,19 +3575,31 @@ Rules for the completion report:
                 if !featured.is_empty() {
                     let cards = self.build_featured_cards(&featured, window, cx);
                     section_elements.push(
-                        v_flex().w_full().gap(DynamicSpacing::Base06.rems(cx)).children(cards).into_any_element(),
+                        v_flex()
+                            .w_full()
+                            .gap(DynamicSpacing::Base06.rems(cx))
+                            .children(cards)
+                            .into_any_element(),
                     );
                 }
                 if !standard.is_empty() {
                     let cards = self.build_standard_cards(&standard, window, cx);
                     section_elements.push(
-                        v_flex().w_full().gap(DynamicSpacing::Base06.rems(cx)).children(cards).into_any_element(),
+                        v_flex()
+                            .w_full()
+                            .gap(DynamicSpacing::Base06.rems(cx))
+                            .children(cards)
+                            .into_any_element(),
                     );
                 }
                 if !compact.is_empty() {
                     let cards = self.build_compact_cards(&compact, cx);
                     section_elements.push(
-                        v_flex().w_full().gap(DynamicSpacing::Base04.rems(cx)).children(cards).into_any_element(),
+                        v_flex()
+                            .w_full()
+                            .gap(DynamicSpacing::Base04.rems(cx))
+                            .children(cards)
+                            .into_any_element(),
                     );
                 }
             }
@@ -3550,38 +3720,45 @@ Rules for the completion report:
                                     let entity = path_entity.clone();
                                     let entry_id = path_entry_id.clone();
                                     let param_key = path_param_key.clone();
-                                    entity.update(cx, |_this, cx| {
-                                        let receiver = cx.prompt_for_paths(PathPromptOptions {
-                                            files: false,
-                                            directories: true,
-                                            multiple: false,
-                                            prompt: None,
-                                        });
-                                        let entity = cx.entity().downgrade();
-                                        cx.spawn(async move |_this, cx| {
-                                            if let Ok(Ok(Some(paths))) = receiver.await {
-                                                if let Some(path) = paths.into_iter().next() {
-                                                    let path_str =
-                                                        path.to_string_lossy().to_string();
-                                                    entity.update(
-                                                        cx,
-                                                        |this: &mut Dashboard, cx| {
-                                                            this.param_values
-                                                                .entry(entry_id.clone())
-                                                                .or_default()
-                                                                .insert(
-                                                                    param_key.clone(),
-                                                                    path_str,
-                                                                );
-                                                            write_param_values(&this.config_root, &this.param_values);
-                                                            cx.notify();
-                                                        },
-                                                    ).log_err();
+                                    entity
+                                        .update(cx, |_this, cx| {
+                                            let receiver = cx.prompt_for_paths(PathPromptOptions {
+                                                files: false,
+                                                directories: true,
+                                                multiple: false,
+                                                prompt: None,
+                                            });
+                                            let entity = cx.entity().downgrade();
+                                            cx.spawn(async move |_this, cx| {
+                                                if let Ok(Ok(Some(paths))) = receiver.await {
+                                                    if let Some(path) = paths.into_iter().next() {
+                                                        let path_str =
+                                                            path.to_string_lossy().to_string();
+                                                        entity
+                                                            .update(
+                                                                cx,
+                                                                |this: &mut Dashboard, cx| {
+                                                                    this.param_values
+                                                                        .entry(entry_id.clone())
+                                                                        .or_default()
+                                                                        .insert(
+                                                                            param_key.clone(),
+                                                                            path_str,
+                                                                        );
+                                                                    write_param_values(
+                                                                        &this.config_root,
+                                                                        &this.param_values,
+                                                                    );
+                                                                    cx.notify();
+                                                                },
+                                                            )
+                                                            .log_err();
+                                                    }
                                                 }
-                                            }
+                                            })
+                                            .detach();
                                         })
-                                        .detach();
-                                    }).log_err();
+                                        .log_err();
                                 }),
                             )
                             .into_any_element()
@@ -3618,14 +3795,19 @@ Rules for the completion report:
                                         option.clone(),
                                         None,
                                         move |_window, cx: &mut App| {
-                                            entity.update(cx, |this: &mut Dashboard, cx| {
-                                                this.param_values
-                                                    .entry(entry_id.clone())
-                                                    .or_default()
-                                                    .insert(param_key.clone(), value.clone());
-                                                write_param_values(&this.config_root, &this.param_values);
-                                                cx.notify();
-                                            }).log_err();
+                                            entity
+                                                .update(cx, |this: &mut Dashboard, cx| {
+                                                    this.param_values
+                                                        .entry(entry_id.clone())
+                                                        .or_default()
+                                                        .insert(param_key.clone(), value.clone());
+                                                    write_param_values(
+                                                        &this.config_root,
+                                                        &this.param_values,
+                                                    );
+                                                    cx.notify();
+                                                })
+                                                .log_err();
                                         },
                                     );
                                 }
@@ -3670,7 +3852,9 @@ Rules for the completion report:
         let is_pending_delete = self.automations_pending_delete.contains(&entry.id);
         let (accent, _) = self.agent_backend.card_accent(cx);
 
-        let schedule_cron = entry.schedule.as_ref()
+        let schedule_cron = entry
+            .schedule
+            .as_ref()
             .map(|s| s.cron.clone())
             .unwrap_or_default();
 
@@ -3678,7 +3862,9 @@ Rules for the completion report:
         let context_rows = if is_expanded {
             let entity = cx.entity().downgrade();
             if self.automations_in_context_edit.contains(&entry.id) {
-                let automation_source_path = self.automations.iter()
+                let automation_source_path = self
+                    .automations
+                    .iter()
                     .find(|a| a.id == entry.id)
                     .and_then(|a| a.source_path.clone());
                 let scripts = config::collect_context_scripts(&self.config_root);
@@ -3751,12 +3937,16 @@ Rules for the completion report:
         let is_editing = self.pipelines_in_edit_mode.contains(&entry.id);
         let is_pending_delete = self.pipelines_pending_delete.contains(&entry.id);
         let is_scheduled = entry.schedule.as_ref().is_some_and(|s| s.enabled);
-        let schedule_cron = entry.schedule.as_ref()
+        let schedule_cron = entry
+            .schedule
+            .as_ref()
             .map(|s| s.cron.clone())
             .unwrap_or_default();
         let accent = cx.theme().colors().text_accent;
         let entity = cx.entity().downgrade();
-        let active_folder = self.active_folder.clone()
+        let active_folder = self
+            .active_folder
+            .clone()
             .unwrap_or_else(|| self.config_root.clone());
 
         let step_tree = if is_editing {
@@ -3778,9 +3968,7 @@ Rules for the completion report:
             )
         };
 
-        let sched_controls = self.render_schedule_controls(
-            &entry.id, &schedule_cron, window, cx,
-        );
+        let sched_controls = self.render_schedule_controls(&entry.id, &schedule_cron, window, cx);
 
         let ctx = CardRenderContext {
             entry,
@@ -3817,7 +4005,11 @@ Rules for the completion report:
             .collect();
 
         // Hide the section entirely if no pipelines exist and no automations dir
-        if pipelines.is_empty() && !automations_dir_for(&self.config_root).join("pipelines").exists() {
+        if pipelines.is_empty()
+            && !automations_dir_for(&self.config_root)
+                .join("pipelines")
+                .exists()
+        {
             return v_flex().w_full();
         }
 
@@ -3826,9 +4018,11 @@ Rules for the completion report:
         let disc_entity = cx.entity().downgrade();
         let disclosure = Disclosure::new(SharedString::from("disc-pipelines"), is_open).on_click(
             move |_, _, cx| {
-                disc_entity.update(cx, |this, cx| {
-                    this.toggle_section("pipelines", cx);
-                }).log_err();
+                disc_entity
+                    .update(cx, |this, cx| {
+                        this.toggle_section("pipelines", cx);
+                    })
+                    .log_err();
             },
         );
 
@@ -3868,9 +4062,7 @@ Rules for the completion report:
 
             if !self.collapsed_sections.contains(&collapse_key) {
                 for entry in section_pipelines {
-                    cards.push(
-                        self.render_pipeline_card(entry, card_idx, window, cx)
-                    );
+                    cards.push(self.render_pipeline_card(entry, card_idx, window, cx));
                     card_idx += 1;
                 }
             } else {
@@ -3906,17 +4098,21 @@ Rules for the completion report:
                     .render(cx),
                 )
                 .on_action(move |_: &menu::Confirm, _, cx| {
-                    confirm_entity.update(cx, |this, cx| {
-                        if let Some(editor) = &this.pending_new_pipeline {
-                            let text = editor.read(cx).text(cx).trim().to_string();
-                            this.finish_new_pipeline(text, cx);
-                        }
-                    }).log_err();
+                    confirm_entity
+                        .update(cx, |this, cx| {
+                            if let Some(editor) = &this.pending_new_pipeline {
+                                let text = editor.read(cx).text(cx).trim().to_string();
+                                this.finish_new_pipeline(text, cx);
+                            }
+                        })
+                        .log_err();
                 })
                 .on_action(move |_: &menu::Cancel, _, cx| {
-                    cancel_entity.update(cx, |this, cx| {
-                        this.cancel_new_pipeline(cx);
-                    }).log_err();
+                    cancel_entity
+                        .update(cx, |this, cx| {
+                            this.cancel_new_pipeline(cx);
+                        })
+                        .log_err();
                 })
         });
 
@@ -3928,8 +4124,16 @@ Rules for the completion report:
             .child(
                 h_flex()
                     .gap_1()
-                    .child(Icon::new(IconName::Plus).size(IconSize::XSmall).color(Color::Muted))
-                    .child(Label::new("New Pipeline").size(LabelSize::XSmall).color(Color::Muted)),
+                    .child(
+                        Icon::new(IconName::Plus)
+                            .size(IconSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Label::new("New Pipeline")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    ),
             )
             .on_click(cx.listener(|this, _, window, cx| {
                 this.start_new_pipeline(window, cx);
@@ -3939,7 +4143,12 @@ Rules for the completion report:
             .w_full()
             .gap_1()
             .child(header)
-            .child(v_flex().w_full().gap(DynamicSpacing::Base06.rems(cx)).children(cards))
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap(DynamicSpacing::Base06.rems(cx))
+                    .children(cards),
+            )
             .when_some(ghost_card, |el, card| el.child(card))
             .child(new_pipeline_button)
     }
@@ -3958,9 +4167,11 @@ Rules for the completion report:
         let disc_entity = cx.entity().downgrade();
         let disclosure = Disclosure::new(SharedString::from("disc-automations"), is_open).on_click(
             move |_, _, cx| {
-                disc_entity.update(cx, |this, cx| {
-                    this.toggle_section("automations", cx);
-                }).log_err();
+                disc_entity
+                    .update(cx, |this, cx| {
+                        this.toggle_section("automations", cx);
+                    })
+                    .log_err();
             },
         );
 
@@ -3987,28 +4198,36 @@ Rules for the completion report:
                     "agent-backend-toggle",
                     [
                         ToggleButtonSimple::new("Claude", move |_, _, cx| {
-                            entity_claude.update(cx, |this, cx| {
-                                this.agent_backend = AgentBackend::Claude;
-                                cx.notify();
-                            }).log_err();
+                            entity_claude
+                                .update(cx, |this, cx| {
+                                    this.agent_backend = AgentBackend::Claude;
+                                    cx.notify();
+                                })
+                                .log_err();
                         }),
                         ToggleButtonSimple::new("Gemini", move |_, _, cx| {
-                            entity_gemini.update(cx, |this, cx| {
-                                this.agent_backend = AgentBackend::Gemini;
-                                cx.notify();
-                            }).log_err();
+                            entity_gemini
+                                .update(cx, |this, cx| {
+                                    this.agent_backend = AgentBackend::Gemini;
+                                    cx.notify();
+                                })
+                                .log_err();
                         }),
                         ToggleButtonSimple::new("Copy", move |_, _, cx| {
-                            entity_copy.update(cx, |this, cx| {
-                                this.agent_backend = AgentBackend::CopyOnly;
-                                cx.notify();
-                            }).log_err();
+                            entity_copy
+                                .update(cx, |this, cx| {
+                                    this.agent_backend = AgentBackend::CopyOnly;
+                                    cx.notify();
+                                })
+                                .log_err();
                         }),
                         ToggleButtonSimple::new("Native", move |_, _, cx| {
-                            entity_native.update(cx, |this, cx| {
-                                this.agent_backend = AgentBackend::Native;
-                                cx.notify();
-                            }).log_err();
+                            entity_native
+                                .update(cx, |this, cx| {
+                                    this.agent_backend = AgentBackend::Native;
+                                    cx.notify();
+                                })
+                                .log_err();
                         }),
                     ],
                 )
@@ -4134,7 +4353,9 @@ Rules for the completion report:
                         .children(regular_elements),
                 )
             })
-            .when_some(self.render_new_automation_ghost(cx), |el, card| el.child(card))
+            .when_some(self.render_new_automation_ghost(cx), |el, card| {
+                el.child(card)
+            })
             .child(self.render_new_automation_button(cx))
     }
 
@@ -4167,17 +4388,21 @@ Rules for the completion report:
                     .render(cx),
                 )
                 .on_action(move |_: &menu::Confirm, _, cx| {
-                    confirm_entity.update(cx, |this, cx| {
-                        if let Some(editor) = &this.pending_new_automation {
-                            let text = editor.read(cx).text(cx).trim().to_string();
-                            this.finish_new_automation(text, cx);
-                        }
-                    }).log_err();
+                    confirm_entity
+                        .update(cx, |this, cx| {
+                            if let Some(editor) = &this.pending_new_automation {
+                                let text = editor.read(cx).text(cx).trim().to_string();
+                                this.finish_new_automation(text, cx);
+                            }
+                        })
+                        .log_err();
                 })
                 .on_action(move |_: &menu::Cancel, _, cx| {
-                    cancel_entity.update(cx, |this, cx| {
-                        this.cancel_new_automation(cx);
-                    }).log_err();
+                    cancel_entity
+                        .update(cx, |this, cx| {
+                            this.cancel_new_automation(cx);
+                        })
+                        .log_err();
                 })
                 .into_any_element(),
         )
@@ -4191,8 +4416,16 @@ Rules for the completion report:
             .child(
                 h_flex()
                     .gap_1()
-                    .child(Icon::new(IconName::Plus).size(IconSize::XSmall).color(Color::Muted))
-                    .child(Label::new("New Automation").size(LabelSize::XSmall).color(Color::Muted)),
+                    .child(
+                        Icon::new(IconName::Plus)
+                            .size(IconSize::XSmall)
+                            .color(Color::Muted),
+                    )
+                    .child(
+                        Label::new("New Automation")
+                            .size(LabelSize::XSmall)
+                            .color(Color::Muted),
+                    ),
             )
             .on_click(cx.listener(|this, _, window, cx| {
                 this.start_new_automation(window, cx);
@@ -4240,44 +4473,54 @@ impl Render for Dashboard {
                         .cloned()
                         .unwrap_or_default();
                     if is_background {
-                        this.workspace.update(cx, |_workspace, cx| {
-                            Self::spawn_tool_background(
-                                &tool,
-                                &runtime_path,
-                                &agent_tools_path,
-                                &config_root,
-                                &session_path,
-                                &active_folder,
-                                &tool_param_values,
-                                cx,
-                            );
-                        }).log_err();
+                        this.workspace
+                            .update(cx, |_workspace, cx| {
+                                Self::spawn_tool_background(
+                                    &tool,
+                                    &runtime_path,
+                                    &agent_tools_path,
+                                    &config_root,
+                                    &session_path,
+                                    &active_folder,
+                                    &tool_param_values,
+                                    cx,
+                                );
+                            })
+                            .log_err();
                     } else {
-                        this.workspace.update(cx, |workspace, cx| {
-                            Self::spawn_tool_entry(
-                                &tool,
-                                &runtime_path,
-                                &agent_tools_path,
-                                &config_root,
-                                &session_path,
-                                &active_folder,
-                                &tool_param_values,
-                                workspace,
-                                window,
-                                cx,
-                            );
-                        }).log_err();
+                        this.workspace
+                            .update(cx, |workspace, cx| {
+                                Self::spawn_tool_entry(
+                                    &tool,
+                                    &runtime_path,
+                                    &agent_tools_path,
+                                    &config_root,
+                                    &session_path,
+                                    &active_folder,
+                                    &tool_param_values,
+                                    workspace,
+                                    window,
+                                    cx,
+                                );
+                            })
+                            .log_err();
                     }
                 }
             }))
-            .on_action(cx.listener(|this, action: &RunDashboardAutomation, window, cx| {
-                if let Some(entry) = this.automations.iter().find(|a| a.id == action.automation_id) {
-                    let id = entry.id.clone();
-                    let label = entry.label.clone();
-                    let prompt = entry.prompt.clone();
-                    this.run_automation(&id, &label, &prompt, window, cx);
-                }
-            }))
+            .on_action(
+                cx.listener(|this, action: &RunDashboardAutomation, window, cx| {
+                    if let Some(entry) = this
+                        .automations
+                        .iter()
+                        .find(|a| a.id == action.automation_id)
+                    {
+                        let id = entry.id.clone();
+                        let label = entry.label.clone();
+                        let prompt = entry.prompt.clone();
+                        this.run_automation(&id, &label, &prompt, window, cx);
+                    }
+                }),
+            )
             .size_full()
             .overflow_hidden()
             .bg(cx.theme().colors().editor_background)
@@ -4304,9 +4547,7 @@ impl Render for Dashboard {
                                     .size(IconSize::Medium)
                                     .color(Color::Accent),
                             )
-                            .child(
-                                Headline::new("PostProd Tools").size(HeadlineSize::Small),
-                            )
+                            .child(Headline::new("PostProd Tools").size(HeadlineSize::Small))
                             .child(div().flex_grow())
                             .child(
                                 IconButton::new("open-postprod-rules", IconName::Notepad)
@@ -4365,10 +4606,18 @@ impl Panel for Dashboard {
     }
 
     fn position_is_valid(&self, position: DockPosition) -> bool {
-        matches!(position, DockPosition::Left | DockPosition::Right | DockPosition::Bottom)
+        matches!(
+            position,
+            DockPosition::Left | DockPosition::Right | DockPosition::Bottom
+        )
     }
 
-    fn set_position(&mut self, position: DockPosition, _window: &mut Window, cx: &mut Context<Self>) {
+    fn set_position(
+        &mut self,
+        position: DockPosition,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(fs) = self
             .workspace
             .upgrade()
@@ -4377,10 +4626,7 @@ impl Panel for Dashboard {
             return;
         };
         update_settings_file(fs, cx, move |settings, _| {
-            settings
-                .dashboard_panel
-                .get_or_insert_default()
-                .dock = Some(position.into());
+            settings.dashboard_panel.get_or_insert_default().dock = Some(position.into());
         });
     }
 
@@ -4415,11 +4661,7 @@ impl Panel for Dashboard {
 // Context gathering (runs on background thread)
 // ---------------------------------------------------------------------------
 
-fn apply_agent_profile_to_thread(
-    panel: &AgentPanel,
-    profile: &Option<String>,
-    cx: &mut App,
-) {
+fn apply_agent_profile_to_thread(panel: &AgentPanel, profile: &Option<String>, cx: &mut App) {
     if let Some(profile_name) = profile {
         let profile_id = AgentProfileId(profile_name.as_str().into());
         if let Some(cv) = panel.active_conversation_view() {
@@ -4457,7 +4699,10 @@ fn gather_context_blocking(
             "path" => {
                 let Some(path_str) = &entry.path else {
                     if entry.required {
-                        return Err(format!("context '{}': source=path but no path field", entry.label));
+                        return Err(format!(
+                            "context '{}': source=path but no path field",
+                            entry.label
+                        ));
                     }
                     continue;
                 };
@@ -4477,7 +4722,10 @@ fn gather_context_blocking(
             "script" => {
                 let Some(script_name) = &entry.script else {
                     if entry.required {
-                        return Err(format!("context '{}': source=script but no script field", entry.label));
+                        return Err(format!(
+                            "context '{}': source=script but no script field",
+                            entry.label
+                        ));
                     }
                     continue;
                 };
@@ -4496,16 +4744,17 @@ fn gather_context_blocking(
                 // This runs on a background thread via gather_context_blocking(),
                 // so blocking .output() is intentional and correct here.
                 #[allow(clippy::disallowed_methods)]
-                let result = Command::new("sh")
-                    .arg("-c")
-                    .arg(script_path.to_string_lossy().as_ref())
-                    .env("POSTPROD_ACTIVE_FOLDER", active_folder)
-                    .env("POSTPROD_SESSION_PATH", session_path)
-                    .env("POSTPROD_DESTINATION_FOLDER", destination_folder)
-                    .envs(param_values.iter().map(|(k, v)| {
-                        (format!("POSTPROD_PARAM_{}", k.to_uppercase()), v.as_str())
-                    }))
-                    .output();
+                let result =
+                    Command::new("sh")
+                        .arg("-c")
+                        .arg(script_path.to_string_lossy().as_ref())
+                        .env("POSTPROD_ACTIVE_FOLDER", active_folder)
+                        .env("POSTPROD_SESSION_PATH", session_path)
+                        .env("POSTPROD_DESTINATION_FOLDER", destination_folder)
+                        .envs(param_values.iter().map(|(k, v)| {
+                            (format!("POSTPROD_PARAM_{}", k.to_uppercase()), v.as_str())
+                        }))
+                        .output();
 
                 match result {
                     Ok(out) if out.status.success() => {
@@ -4513,7 +4762,11 @@ fn gather_context_blocking(
                     }
                     Ok(out) => {
                         let stderr = String::from_utf8_lossy(&out.stderr);
-                        let msg = format!("script exited {}: {}", out.status, stderr.lines().next().unwrap_or(""));
+                        let msg = format!(
+                            "script exited {}: {}",
+                            out.status,
+                            stderr.lines().next().unwrap_or("")
+                        );
                         if entry.required {
                             return Err(format!("context '{}': {msg}", entry.label));
                         }
@@ -4522,7 +4775,10 @@ fn gather_context_blocking(
                     }
                     Err(e) => {
                         if entry.required {
-                            return Err(format!("context '{}': failed to run script: {e}", entry.label));
+                            return Err(format!(
+                                "context '{}': failed to run script: {e}",
+                                entry.label
+                            ));
                         }
                         log::warn!("context '{}': {e} (skipping, not required)", entry.label);
                         continue;
@@ -4530,7 +4786,10 @@ fn gather_context_blocking(
                 }
             }
             other => {
-                log::warn!("context '{}': unknown source type '{other}', skipping", entry.label);
+                log::warn!(
+                    "context '{}': unknown source type '{other}', skipping",
+                    entry.label
+                );
                 continue;
             }
         };
@@ -4636,7 +4895,10 @@ mod tests {
     fn test_automation_status_retain_drops_stale_ids() {
         let mut status: HashMap<String, AutomationRunStatus> = HashMap::new();
         status.insert("live-1".to_string(), AutomationRunStatus::GatheringContext);
-        status.insert("stale".to_string(), AutomationRunStatus::Failed("err".into()));
+        status.insert(
+            "stale".to_string(),
+            AutomationRunStatus::Failed("err".into()),
+        );
         status.insert("live-2".to_string(), AutomationRunStatus::GatheringContext);
 
         let live_ids: HashSet<&str> = ["live-1", "live-2"].into_iter().collect();
@@ -4704,9 +4966,21 @@ triggers = ["review", "deploy"]
     #[test]
     fn test_collect_step_groups_sequential() {
         let steps = vec![
-            config::PipelineStep { automation: Some("a".into()), tool: None, group: None },
-            config::PipelineStep { automation: Some("b".into()), tool: None, group: None },
-            config::PipelineStep { automation: Some("c".into()), tool: None, group: None },
+            config::PipelineStep {
+                automation: Some("a".into()),
+                tool: None,
+                group: None,
+            },
+            config::PipelineStep {
+                automation: Some("b".into()),
+                tool: None,
+                group: None,
+            },
+            config::PipelineStep {
+                automation: Some("c".into()),
+                tool: None,
+                group: None,
+            },
         ];
         let groups = collect_step_groups(&steps);
         assert_eq!(groups.len(), 3);
@@ -4718,9 +4992,21 @@ triggers = ["review", "deploy"]
     #[test]
     fn test_collect_step_groups_parallel() {
         let steps = vec![
-            config::PipelineStep { automation: Some("a".into()), tool: None, group: Some(1) },
-            config::PipelineStep { automation: Some("b".into()), tool: None, group: Some(1) },
-            config::PipelineStep { automation: Some("c".into()), tool: None, group: Some(1) },
+            config::PipelineStep {
+                automation: Some("a".into()),
+                tool: None,
+                group: Some(1),
+            },
+            config::PipelineStep {
+                automation: Some("b".into()),
+                tool: None,
+                group: Some(1),
+            },
+            config::PipelineStep {
+                automation: Some("c".into()),
+                tool: None,
+                group: Some(1),
+            },
         ];
         let groups = collect_step_groups(&steps);
         assert_eq!(groups.len(), 1);
@@ -4730,11 +5016,31 @@ triggers = ["review", "deploy"]
     #[test]
     fn test_collect_step_groups_mixed() {
         let steps = vec![
-            config::PipelineStep { automation: Some("first".into()), tool: None, group: None },
-            config::PipelineStep { automation: Some("second".into()), tool: None, group: None },
-            config::PipelineStep { automation: Some("par-a".into()), tool: None, group: Some(3) },
-            config::PipelineStep { automation: Some("par-b".into()), tool: None, group: Some(3) },
-            config::PipelineStep { tool: Some("launcher".into()), automation: None, group: None },
+            config::PipelineStep {
+                automation: Some("first".into()),
+                tool: None,
+                group: None,
+            },
+            config::PipelineStep {
+                automation: Some("second".into()),
+                tool: None,
+                group: None,
+            },
+            config::PipelineStep {
+                automation: Some("par-a".into()),
+                tool: None,
+                group: Some(3),
+            },
+            config::PipelineStep {
+                automation: Some("par-b".into()),
+                tool: None,
+                group: Some(3),
+            },
+            config::PipelineStep {
+                tool: Some("launcher".into()),
+                automation: None,
+                group: None,
+            },
         ];
         let groups = collect_step_groups(&steps);
         assert_eq!(groups.len(), 4); // first, second, group-3 (2 steps), launcher
@@ -4752,9 +5058,21 @@ triggers = ["review", "deploy"]
     #[test]
     fn test_collect_step_groups_non_adjacent_same_group() {
         let steps = vec![
-            config::PipelineStep { automation: Some("a".into()), tool: None, group: Some(1) },
-            config::PipelineStep { automation: Some("middle".into()), tool: None, group: None },
-            config::PipelineStep { automation: Some("b".into()), tool: None, group: Some(1) },
+            config::PipelineStep {
+                automation: Some("a".into()),
+                tool: None,
+                group: Some(1),
+            },
+            config::PipelineStep {
+                automation: Some("middle".into()),
+                tool: None,
+                group: None,
+            },
+            config::PipelineStep {
+                automation: Some("b".into()),
+                tool: None,
+                group: Some(1),
+            },
         ];
         let groups = collect_step_groups(&steps);
         // group 1 collects both "a" and "b" even though "middle" is between them
@@ -4789,9 +5107,21 @@ automation = "review"
 
         // Modify steps via TOML writer
         let new_steps = vec![
-            config::PipelineStep { automation: Some("new-first".into()), tool: None, group: None },
-            config::PipelineStep { tool: Some("my-tool".into()), automation: None, group: Some(2) },
-            config::PipelineStep { automation: Some("par-auto".into()), tool: None, group: Some(2) },
+            config::PipelineStep {
+                automation: Some("new-first".into()),
+                tool: None,
+                group: None,
+            },
+            config::PipelineStep {
+                tool: Some("my-tool".into()),
+                automation: None,
+                group: Some(2),
+            },
+            config::PipelineStep {
+                automation: Some("par-auto".into()),
+                tool: None,
+                group: Some(2),
+            },
         ];
 
         // Write steps directly using toml_edit (same logic as write_pipeline_steps)
