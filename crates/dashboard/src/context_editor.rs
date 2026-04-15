@@ -7,10 +7,13 @@
 
 use std::path::PathBuf;
 
-use gpui::{AnyElement, App, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, WeakEntity};
+use gpui::{
+    AnyElement, App, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled,
+    WeakEntity,
+};
 use ui::{
-    ButtonLike, ButtonStyle, Color, DynamicSpacing, Icon, IconName, IconSize, Label,
-    LabelSize, prelude::*,
+    ButtonLike, ButtonStyle, Color, DynamicSpacing, Icon, IconName, IconSize, Label, LabelSize,
+    prelude::*,
 };
 use util::ResultExt as _;
 use workspace::Workspace;
@@ -53,12 +56,20 @@ pub(crate) fn render_context_summary(
                 .py(DynamicSpacing::Base02.rems(cx))
                 .rounded_sm()
                 .bg(cx.theme().colors().element_background)
-                .child(Label::new("defaults").size(LabelSize::XSmall).color(Color::Muted)),
+                .child(
+                    Label::new("defaults")
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                ),
         );
     }
 
     for ctx in contexts {
-        let badge = if ctx.source_type == "script" { "script" } else { "path" };
+        let badge = if ctx.source_type == "script" {
+            "script"
+        } else {
+            "path"
+        };
         let label_text = format!("{}  [{}]", ctx.label, badge);
         row = row.child(
             div()
@@ -66,7 +77,11 @@ pub(crate) fn render_context_summary(
                 .py(DynamicSpacing::Base02.rems(cx))
                 .rounded_sm()
                 .bg(cx.theme().colors().element_background)
-                .child(Label::new(label_text).size(LabelSize::XSmall).color(Color::Muted)),
+                .child(
+                    Label::new(label_text)
+                        .size(LabelSize::XSmall)
+                        .color(Color::Muted),
+                ),
         );
     }
 
@@ -74,11 +89,17 @@ pub(crate) fn render_context_summary(
     row = row.child(
         ButtonLike::new(format!("ctx-edit-gear-{gear_id}"))
             .style(ButtonStyle::Subtle)
-            .child(Icon::new(IconName::Settings).size(IconSize::XSmall).color(Color::Muted))
+            .child(
+                Icon::new(IconName::Settings)
+                    .size(IconSize::XSmall)
+                    .color(Color::Muted),
+            )
             .on_click(move |_, _, cx| {
-                entity.update(cx, |this, cx| {
-                    this.toggle_context_edit_mode(&gear_id, cx);
-                }).log_err();
+                entity
+                    .update(cx, |this, cx| {
+                        this.toggle_context_edit_mode(&gear_id, cx);
+                    })
+                    .log_err();
             }),
     );
 
@@ -108,7 +129,11 @@ pub(crate) fn render_context_editor(
     // "Use default context" toggle
     let toggle_entity = entity.clone();
     let toggle_id = automation_id.to_string();
-    let default_label: SharedString = if skip_default { "Default context: off".into() } else { "Default context: on".into() };
+    let default_label: SharedString = if skip_default {
+        "Default context: off".into()
+    } else {
+        "Default context: on".into()
+    };
     elements.push(
         h_flex()
             .gap(DynamicSpacing::Base04.rems(cx))
@@ -120,16 +145,33 @@ pub(crate) fn render_context_editor(
                     .child(
                         h_flex()
                             .gap(DynamicSpacing::Base04.rems(cx))
-                            .child(Icon::new(if skip_default { IconName::XCircle } else { IconName::Check })
+                            .child(
+                                Icon::new(if skip_default {
+                                    IconName::XCircle
+                                } else {
+                                    IconName::Check
+                                })
                                 .size(IconSize::XSmall)
-                                .color(if skip_default { Color::Muted } else { Color::Accent }))
-                            .child(Label::new(default_label).size(LabelSize::XSmall)
-                                .color(if skip_default { Color::Muted } else { Color::Accent })),
+                                .color(if skip_default {
+                                    Color::Muted
+                                } else {
+                                    Color::Accent
+                                }),
+                            )
+                            .child(Label::new(default_label).size(LabelSize::XSmall).color(
+                                if skip_default {
+                                    Color::Muted
+                                } else {
+                                    Color::Accent
+                                },
+                            )),
                     )
                     .on_click(move |_, _, cx| {
-                        toggle_entity.update(cx, |this, cx| {
-                            this.toggle_skip_default_context(&toggle_id, cx);
-                        }).log_err();
+                        toggle_entity
+                            .update(cx, |this, cx| {
+                                this.toggle_skip_default_context(&toggle_id, cx);
+                            })
+                            .log_err();
                     }),
             )
             .into_any_element(),
@@ -137,7 +179,11 @@ pub(crate) fn render_context_editor(
 
     // Context entry rows
     for (_i, ctx) in contexts.iter().enumerate() {
-        let badge = if ctx.source_type == "script" { "script" } else { "path" };
+        let badge = if ctx.source_type == "script" {
+            "script"
+        } else {
+            "path"
+        };
         let label_text = format!("{}  [{}]", ctx.label, badge);
 
         let row = h_flex()
@@ -147,7 +193,11 @@ pub(crate) fn render_context_editor(
             .child(
                 Label::new(label_text)
                     .size(LabelSize::XSmall)
-                    .color(if ctx.required { Color::Default } else { Color::Muted }),
+                    .color(if ctx.required {
+                        Color::Default
+                    } else {
+                        Color::Muted
+                    }),
             )
             .child(div().flex_1());
 
@@ -263,13 +313,23 @@ pub(crate) fn render_context_editor(
                     .child(
                         h_flex()
                             .gap(DynamicSpacing::Base04.rems(cx))
-                            .child(Icon::new(IconName::Check).size(IconSize::XSmall).color(Color::Accent))
-                            .child(Label::new("Done").size(LabelSize::XSmall).color(Color::Accent)),
+                            .child(
+                                Icon::new(IconName::Check)
+                                    .size(IconSize::XSmall)
+                                    .color(Color::Accent),
+                            )
+                            .child(
+                                Label::new("Done")
+                                    .size(LabelSize::XSmall)
+                                    .color(Color::Accent),
+                            ),
                     )
                     .on_click(move |_, _, cx| {
-                        done_entity.update(cx, |this, cx| {
-                            this.toggle_context_edit_mode(&done_id, cx);
-                        }).log_err();
+                        done_entity
+                            .update(cx, |this, cx| {
+                                this.toggle_context_edit_mode(&done_id, cx);
+                            })
+                            .log_err();
                     }),
             )
             .into_any_element(),

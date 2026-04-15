@@ -1,7 +1,7 @@
 use fuzzy::{StringMatch, StringMatchCandidate};
 use gpui::{
-    actions, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, Render, Subscription, Task, WeakEntity, Window,
+    App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, IntoElement, Render,
+    Subscription, Task, WeakEntity, Window, actions,
 };
 use picker::{Picker, PickerDelegate};
 use ui::{
@@ -104,7 +104,8 @@ impl PickerEntry {
     }
 
     pub(crate) fn new_context_script(script_path: PathBuf, config_root: Option<PathBuf>) -> Self {
-        let filename = script_path.file_name()
+        let filename = script_path
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         let label = std::path::Path::new(&filename)
@@ -128,12 +129,14 @@ impl PickerEntry {
 pub(crate) fn build_picker_entries(workspace: &Workspace, cx: &App) -> Vec<PickerEntry> {
     let mut entries: Vec<PickerEntry> = Vec::new();
 
-    let dashboard_data = workspace
-        .panel::<Dashboard>(cx)
-        .map(|d| {
-            let d = d.read(cx);
-            (d.tools.clone(), d.automations.clone(), d.config_root.clone())
-        });
+    let dashboard_data = workspace.panel::<Dashboard>(cx).map(|d| {
+        let d = d.read(cx);
+        (
+            d.tools.clone(),
+            d.automations.clone(),
+            d.config_root.clone(),
+        )
+    });
 
     let (current_tools, current_automations, current_config_root) =
         dashboard_data.unwrap_or_else(|| (Vec::new(), Vec::new(), crate::paths::suite_root()));
@@ -313,36 +316,39 @@ impl Render for AutomationModal {
                 }),
             )
             // Tab bar (hidden in AddContextScript mode since only scripts are shown)
-            .when(!matches!(self.mode, PickerMode::AddContextScript { .. }), |this| {
-                this.child(
-                    h_flex().p_2().pb_0p5().w_full().child(
-                        ToggleButtonGroup::<ToggleButtonSimple, 2>::single_row(
-                            "automation-tabs",
-                            [
-                                ToggleButtonSimple::new(
-                                    "Tools",
-                                    cx.listener(|this, _, window, cx| {
-                                        this.set_tab(PickerTab::Tools, window, cx);
-                                    }),
-                                ),
-                                ToggleButtonSimple::new(
-                                    "Automations",
-                                    cx.listener(|this, _, window, cx| {
-                                        this.set_tab(PickerTab::Automations, window, cx);
-                                    }),
-                                ),
-                            ],
-                        )
-                        .style(ui::ToggleButtonGroupStyle::Outlined)
-                        .label_size(LabelSize::Default)
-                        .auto_width()
-                        .selected_index(match self.active_tab {
-                            PickerTab::Tools => 0,
-                            PickerTab::Automations => 1,
-                        }),
-                    ),
-                )
-            })
+            .when(
+                !matches!(self.mode, PickerMode::AddContextScript { .. }),
+                |this| {
+                    this.child(
+                        h_flex().p_2().pb_0p5().w_full().child(
+                            ToggleButtonGroup::<ToggleButtonSimple, 2>::single_row(
+                                "automation-tabs",
+                                [
+                                    ToggleButtonSimple::new(
+                                        "Tools",
+                                        cx.listener(|this, _, window, cx| {
+                                            this.set_tab(PickerTab::Tools, window, cx);
+                                        }),
+                                    ),
+                                    ToggleButtonSimple::new(
+                                        "Automations",
+                                        cx.listener(|this, _, window, cx| {
+                                            this.set_tab(PickerTab::Automations, window, cx);
+                                        }),
+                                    ),
+                                ],
+                            )
+                            .style(ui::ToggleButtonGroupStyle::Outlined)
+                            .label_size(LabelSize::Default)
+                            .auto_width()
+                            .selected_index(match self.active_tab {
+                                PickerTab::Tools => 0,
+                                PickerTab::Automations => 1,
+                            }),
+                        ),
+                    )
+                },
+            )
             // Picker content
             .child(v_flex().child(self.picker.clone()))
             // Footer
@@ -360,8 +366,8 @@ impl Render for AutomationModal {
                             PickerMode::AddContextScript { .. } => "Add Script",
                             PickerMode::Run => "Spawn",
                         })
-                            .size(LabelSize::Small)
-                            .color(Color::Muted),
+                        .size(LabelSize::Small)
+                        .color(Color::Muted),
                     )
                     .child(KeyBinding::for_action(&menu::Confirm, cx)),
             )
@@ -498,7 +504,10 @@ impl PickerDelegate for AutomationPickerDelegate {
         };
 
         match &self.mode {
-            PickerMode::AddPipelineStep { pipeline_source_path, group } => {
+            PickerMode::AddPipelineStep {
+                pipeline_source_path,
+                group,
+            } => {
                 let step = match &entry.kind {
                     PickerEntryKind::Tool(tool) | PickerEntryKind::GlobalShortcutOnly(tool) => {
                         crate::config::PipelineStep {
@@ -507,13 +516,11 @@ impl PickerDelegate for AutomationPickerDelegate {
                             group: *group,
                         }
                     }
-                    PickerEntryKind::Automation(auto) => {
-                        crate::config::PipelineStep {
-                            automation: Some(auto.id.clone()),
-                            tool: None,
-                            group: *group,
-                        }
-                    }
+                    PickerEntryKind::Automation(auto) => crate::config::PipelineStep {
+                        automation: Some(auto.id.clone()),
+                        tool: None,
+                        group: *group,
+                    },
                     PickerEntryKind::ContextScript(_) => return,
                 };
                 if let Err(e) = append_step_to_pipeline(pipeline_source_path, &step) {
@@ -524,11 +531,10 @@ impl PickerDelegate for AutomationPickerDelegate {
             }
             PickerMode::AddContextScript { source_path, .. } => {
                 let script_name = match &entry.kind {
-                    PickerEntryKind::ContextScript(path) => {
-                        path.file_name()
-                            .map(|n| n.to_string_lossy().to_string())
-                            .unwrap_or_default()
-                    }
+                    PickerEntryKind::ContextScript(path) => path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default(),
                     _ => return,
                 };
                 if let Err(e) = append_context_script_to_toml_at(source_path, &script_name) {
@@ -536,39 +542,35 @@ impl PickerDelegate for AutomationPickerDelegate {
                 }
                 window.dispatch_action(Box::new(crate::ToggleFocus), cx);
             }
-            PickerMode::Run => {
-                match &entry.kind {
-                    PickerEntryKind::Tool(tool) | PickerEntryKind::GlobalShortcutOnly(tool) => {
-                        let config_root = entry
-                            .config_root
-                            .clone()
-                            .unwrap_or_else(crate::paths::suite_root);
-                        spawn_tool_from_picker(tool, &config_root, &self.workspace, window, cx);
-                    }
-                    PickerEntryKind::Automation(auto) => {
-                        let auto_id = auto.id.clone();
-                        if let Some(workspace) = self.workspace.upgrade() {
-                            workspace.update(cx, |workspace, cx| {
-                                if let Some(dashboard) = workspace.panel::<Dashboard>(cx) {
-                                    dashboard.update(cx, |d, cx| {
-                                        if let Some(entry) =
-                                            d.automations.iter().find(|a| a.id == auto_id)
-                                        {
-                                            let id = entry.id.clone();
-                                            let label = entry.label.clone();
-                                            let prompt = entry.prompt.clone();
-                                            d.run_automation(
-                                                &id, &label, &prompt, window, cx,
-                                            );
-                                        }
-                                    });
-                                }
-                            });
-                        }
-                    }
-                    PickerEntryKind::ContextScript(_) => {}
+            PickerMode::Run => match &entry.kind {
+                PickerEntryKind::Tool(tool) | PickerEntryKind::GlobalShortcutOnly(tool) => {
+                    let config_root = entry
+                        .config_root
+                        .clone()
+                        .unwrap_or_else(crate::paths::suite_root);
+                    spawn_tool_from_picker(tool, &config_root, &self.workspace, window, cx);
                 }
-            }
+                PickerEntryKind::Automation(auto) => {
+                    let auto_id = auto.id.clone();
+                    if let Some(workspace) = self.workspace.upgrade() {
+                        workspace.update(cx, |workspace, cx| {
+                            if let Some(dashboard) = workspace.panel::<Dashboard>(cx) {
+                                dashboard.update(cx, |d, cx| {
+                                    if let Some(entry) =
+                                        d.automations.iter().find(|a| a.id == auto_id)
+                                    {
+                                        let id = entry.id.clone();
+                                        let label = entry.label.clone();
+                                        let prompt = entry.prompt.clone();
+                                        d.run_automation(&id, &label, &prompt, window, cx);
+                                    }
+                                });
+                            }
+                        });
+                    }
+                }
+                PickerEntryKind::ContextScript(_) => {}
+            },
         }
 
         cx.emit(DismissEvent);
@@ -665,8 +667,8 @@ fn spawn_tool_from_picker(
     let agent_tools_path = resolve_agent_tools_path();
 
     let state_dir = state_dir_for(config_root);
-    let active_folder = crate::hotkeys::read_state_string_pub(&state_dir.join("active_folder"))
-        .map(PathBuf::from);
+    let active_folder =
+        crate::hotkeys::read_state_string_pub(&state_dir.join("active_folder")).map(PathBuf::from);
     let session_path = if tool.needs_session {
         crate::hotkeys::read_state_string_pub(&state_dir.join("session_path"))
     } else {
@@ -778,10 +780,7 @@ fn append_step_to_pipeline(
     Ok(())
 }
 
-fn append_context_script_to_toml_at(
-    source_path: &Path,
-    script_name: &str,
-) -> anyhow::Result<()> {
+fn append_context_script_to_toml_at(source_path: &Path, script_name: &str) -> anyhow::Result<()> {
     let content = std::fs::read_to_string(source_path)?;
     let mut doc = content.parse::<toml_edit::DocumentMut>()?;
 
