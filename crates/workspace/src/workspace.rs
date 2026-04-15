@@ -5791,45 +5791,18 @@ impl Workspace {
         self.follower_states.contains_key(&id.into())
     }
 
-    /// Apply the `active_profile` declared in the effective active
-    /// worktree's root `.zed/settings.json` as the active settings profile.
+    /// Uses the same ordered worktree resolution as
+    /// `TitleBar::effective_active_worktree`:
+    /// 1. Worktree containing `Project::active_repository` (folder picks
+    ///    flow here — PR #53645 sets active repository on pick)
+    /// 2. First visible worktree
     ///
-    /// The "effective active worktree" is identified using the same
-    /// ordered logic as `TitleBar::effective_active_worktree`, so the
-    /// profile and the title bar always agree on "which worktree is
-    /// active":
-    /// 1. The worktree containing `Project::active_repository` — the
-    ///    repository of the currently active file (via the
-    ///    most-specific-repo resolution from PR #51898). Picking a folder
-    ///    in the recent-project menu sets the active repository (PR #53645),
-    ///    so user picks flow through this tier.
-    /// 2. First visible worktree as a final fallback.
+    /// Called on initial activation and sidebar workspace switches. Not
+    /// called on file focus changes.
     ///
-    /// Called from `Workspace::new`'s deferred setup (initial activation)
-    /// and `MultiWorkspace::activate` (sidebar workspace switch). Not
-    /// called on pane/tab focus changes — individual file clicks should
-    /// not change the active profile, consistent with how the title bar
-    /// name behaves.
-    ///
-    /// Graceful semantics: if the named profile is not defined in the
-    /// user's global `profiles` section, `UserSettingsContentExt::for_profile`
-    /// returns `None` during recompute and no overrides apply — so
-    /// collaborators who clone a project without the profile defined see
-    /// default behavior rather than an error. Idempotent: no-op if the
-    /// target equals the current profile.
-    ///
-    /// Interaction with `settings_profile_selector` (the profile picker):
-    /// the picker and this function both mutate the runtime global
-    /// `ActiveSettingsProfileName`. When the effective worktree declares
-    /// an `active_profile`, the declaration wins on every activation
-    /// event — any transient picker override is replaced. When the
-    /// effective worktree does *not* declare one, this function is a
-    /// no-op: a manual picker selection is preserved until the user
-    /// moves focus to a worktree that declares its own profile. This
-    /// mirrors how `theme` composes with the Theme Selector: declarative
-    /// state is a project-level default, imperative picker actions are
-    /// overrides that survive until a new declarative value asserts
-    /// itself.
+    /// If the effective worktree declares no `active_profile`, this is a
+    /// no-op so a manual picker selection is preserved. If it does
+    /// declare one, that declaration wins on activation.
     pub(crate) fn apply_local_active_profile(&self, cx: &mut App) {
         let Some(worktree_id) = self.effective_active_worktree_id(cx) else {
             return;
@@ -5849,18 +5822,14 @@ impl Workspace {
             (Some(new_name), _) => {
                 cx.set_global(ActiveSettingsProfileName(new_name));
             }
-            // Worktree declares no `active_profile`: leave the global
-            // alone so a manual picker selection is preserved. See the
-            // doc comment above for the declarative/imperative rationale.
+            // Preserve a manual picker selection until a worktree
+            // declares its own `active_profile`.
             (None, _) => {}
         }
     }
 
-    /// Identify the effective active worktree using the same logic as
-    /// `TitleBar::effective_active_worktree`. Duplicated here to keep
-    /// this code focused on activation — a follow-up could extract
-    /// `effective_active_worktree` onto Workspace and have both call
-    /// sites share it.
+    /// Mirror `TitleBar::effective_active_worktree` for profile
+    /// activation without changing the title bar code path.
     fn effective_active_worktree_id(&self, cx: &App) -> Option<WorktreeId> {
         let project = self.project.read(cx);
 
@@ -5869,9 +5838,7 @@ impl Workspace {
             let repo_path = &repo.work_directory_abs_path;
             for worktree in project.visible_worktrees(cx) {
                 let worktree_path = worktree.read(cx).abs_path();
-                if worktree_path == *repo_path
-                    || worktree_path.starts_with(repo_path.as_ref())
-                {
+                if worktree_path == *repo_path || worktree_path.starts_with(repo_path.as_ref()) {
                     return Some(worktree.read(cx).id());
                 }
             }
@@ -15469,9 +15436,8 @@ mod tests {
             .await;
 
         let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
-        let (workspace, cx) = cx.add_window_view(|window, cx| {
-            Workspace::test_new(project.clone(), window, cx)
-        });
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
         cx.run_until_parked();
 
         let worktree_id = project.update(cx, |project, cx| {
@@ -15534,9 +15500,8 @@ mod tests {
             .await;
 
         let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
-        let (workspace, cx) = cx.add_window_view(|window, cx| {
-            Workspace::test_new(project.clone(), window, cx)
-        });
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
         cx.run_until_parked();
 
         // Simulate a manual selection made through settings_profile_selector:
@@ -15573,9 +15538,8 @@ mod tests {
             .await;
 
         let project = Project::test(fs, [path!("/root").as_ref()], cx).await;
-        let (workspace, cx) = cx.add_window_view(|window, cx| {
-            Workspace::test_new(project.clone(), window, cx)
-        });
+        let (workspace, cx) =
+            cx.add_window_view(|window, cx| Workspace::test_new(project.clone(), window, cx));
         cx.run_until_parked();
 
         let worktree_id = project.update(cx, |project, cx| {

@@ -490,13 +490,8 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                     language,
                 } => open_bundled_file(workspace, text.clone(), title, language, window, cx),
                 // Per-worktree settings profile activation runs directly in
-                // `MultiWorkspace::activate`: after emitting
-                // `WorkspaceEvent::Activate`, it calls
-                // `workspace.apply_local_active_profile(cx)` which reads the
-                // effective active worktree's root `.zed/settings.json`
-                // `active_profile` field and sets the
-                // `ActiveSettingsProfileName` global. Nothing else to do here.
-                // See `private/specs/persistent-active-profile.md`.
+                // `MultiWorkspace::activate`, so there's nothing else to do
+                // here.
                 workspace::Event::Activate => {}
                 _ => {}
             }
