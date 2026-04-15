@@ -92,8 +92,8 @@ impl CompletionReport {
     /// (the file's existence is the real signal).
     pub fn from_marker(path: &Path) -> Option<(Self, RunResult)> {
         let content = std::fs::read_to_string(path).ok()?;
-        let report: CompletionReport = serde_json::from_str(content.trim())
-            .unwrap_or_else(|_| CompletionReport {
+        let report: CompletionReport =
+            serde_json::from_str(content.trim()).unwrap_or_else(|_| CompletionReport {
                 status: "success".to_string(),
                 summary: String::new(),
                 outputs: Vec::new(),
@@ -593,9 +593,7 @@ fn validate_chains(
 
     for id in chains.keys() {
         if !visited.contains(id) {
-            if let Some(cycle_warning) =
-                detect_cycle(id, chains, &mut visited, &mut in_stack)
-            {
+            if let Some(cycle_warning) = detect_cycle(id, chains, &mut visited, &mut in_stack) {
                 warnings.push(cycle_warning);
             }
         }
@@ -945,7 +943,10 @@ mod tests {
         scheduler.read_with(cx, |s, _cx| {
             let status = &s.status["flaky-job"];
             assert_eq!(status.consecutive_failures, AUTO_DISABLE_THRESHOLD - 1);
-            assert!(!status.auto_disabled, "should not be disabled before threshold");
+            assert!(
+                !status.auto_disabled,
+                "should not be disabled before threshold"
+            );
         });
 
         // 5th failure triggers auto-disable
@@ -957,7 +958,10 @@ mod tests {
         scheduler.read_with(cx, |s, _cx| {
             let status = &s.status["flaky-job"];
             assert_eq!(status.consecutive_failures, AUTO_DISABLE_THRESHOLD);
-            assert!(status.auto_disabled, "should be auto-disabled after threshold");
+            assert!(
+                status.auto_disabled,
+                "should be auto-disabled after threshold"
+            );
         });
 
         // A success resets the counter
@@ -970,7 +974,10 @@ mod tests {
 
         scheduler.read_with(cx, |s, _cx| {
             let status = &s.status["flaky-job"];
-            assert_eq!(status.consecutive_failures, 0, "success should reset counter");
+            assert_eq!(
+                status.consecutive_failures, 0,
+                "success should reset counter"
+            );
             assert!(!status.auto_disabled);
         });
 
@@ -1037,9 +1044,13 @@ mod tests {
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
                 vec![
-                    make_sync("review", "0 3 * * *", Some(ChainConfig {
-                        triggers: vec!["deploy".to_string()],
-                    })),
+                    make_sync(
+                        "review",
+                        "0 3 * * *",
+                        Some(ChainConfig {
+                            triggers: vec!["deploy".to_string()],
+                        }),
+                    ),
                     make_sync("deploy", "0 6 * * *", None),
                 ],
                 vec![],
@@ -1092,9 +1103,13 @@ mod tests {
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
                 vec![
-                    make_sync("review", "0 3 * * *", Some(ChainConfig {
-                        triggers: vec!["deploy".to_string()],
-                    })),
+                    make_sync(
+                        "review",
+                        "0 3 * * *",
+                        Some(ChainConfig {
+                            triggers: vec!["deploy".to_string()],
+                        }),
+                    ),
                     make_sync("deploy", "0 6 * * *", None),
                 ],
                 vec![],
@@ -1145,9 +1160,13 @@ mod tests {
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
                 vec![
-                    make_sync("review", "0 3 * * *", Some(ChainConfig {
-                        triggers: vec!["deploy".to_string()],
-                    })),
+                    make_sync(
+                        "review",
+                        "0 3 * * *",
+                        Some(ChainConfig {
+                            triggers: vec!["deploy".to_string()],
+                        }),
+                    ),
                     make_sync("deploy", "0 6 * * *", None),
                 ],
                 vec![],
@@ -1196,11 +1215,13 @@ mod tests {
         // "review" is scheduled with a chain to "deploy", but "deploy" is unscheduled
         scheduler.update(cx, |s, _cx| {
             s.sync_entries(
-                vec![
-                    make_sync("review", "0 3 * * *", Some(ChainConfig {
+                vec![make_sync(
+                    "review",
+                    "0 3 * * *",
+                    Some(ChainConfig {
                         triggers: vec!["deploy".to_string()],
-                    })),
-                ],
+                    }),
+                )],
                 vec![ChainOnlyEntry {
                     automation_id: "deploy".to_string(),
                     active_folder: PathBuf::from("/projects"),
@@ -1377,11 +1398,7 @@ mod tests {
 
     #[test]
     fn test_completion_marker_path() {
-        let path = completion_marker_path(
-            Path::new("/state"),
-            "daily-scan",
-            1710104400,
-        );
+        let path = completion_marker_path(Path::new("/state"), "daily-scan", 1710104400);
         assert_eq!(
             path,
             PathBuf::from("/state/completed/daily-scan-1710104400.json")

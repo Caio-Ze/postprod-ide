@@ -6,28 +6,25 @@ use gpui::{
     App, AsyncApp, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, Keystroke, KeystrokeEvent, Render, Subscription, Window,
 };
+use task::{RevealStrategy, SpawnInTerminal, TaskId};
 use ui::{
-    Button, ButtonStyle, Label, LabelSize, Modal, ModalFooter, ModalHeader, Section,
-    prelude::*,
+    Button, ButtonStyle, Label, LabelSize, Modal, ModalFooter, ModalHeader, Section, prelude::*,
 };
+use util::ResultExt as _;
 use workspace::{
     ModalView, MultiWorkspace,
     notifications::{
-        NotificationId,
-        show_app_notification,
-        simple_message_notification::MessageNotification,
+        NotificationId, show_app_notification, simple_message_notification::MessageNotification,
     },
 };
-use task::{RevealStrategy, SpawnInTerminal, TaskId};
-use util::ResultExt as _;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::config::{
-    ToolEntry, ensure_global_hotkeys_config, global_hotkeys_toml_path,
-    load_global_hotkeys_config, load_tools_registry,
+    ToolEntry, ensure_global_hotkeys_config, global_hotkeys_toml_path, load_global_hotkeys_config,
+    load_tools_registry,
 };
 use crate::paths::{resolve_agent_tools_path, resolve_runtime_path, state_dir_for, suite_root};
 use crate::persistence::read_background_tools;
@@ -231,9 +228,7 @@ fn show_hotkey_error(cx: &mut App, message: String) {
     show_app_notification(
         NotificationId::unique::<GlobalHotkeyNotification>(),
         cx,
-        move |cx| {
-            cx.new(|cx| MessageNotification::new(message.clone(), cx))
-        },
+        move |cx| cx.new(|cx| MessageNotification::new(message.clone(), cx)),
     );
 }
 
@@ -241,16 +236,18 @@ fn show_hotkey_error(cx: &mut App, message: String) {
 // Self-contained hotkey dispatch — no Dashboard traversal
 // ---------------------------------------------------------------------------
 
-fn dispatch_hotkey_tool(
-    tool_id: &str,
-    hotkey_entries: &[ResolvedHotkeyEntry],
-    cx: &mut App,
-) {
+fn dispatch_hotkey_tool(tool_id: &str, hotkey_entries: &[ResolvedHotkeyEntry], cx: &mut App) {
     let Some(entry) = hotkey_entries.iter().find(|e| e.tool_id == tool_id) else {
-        log::warn!("global hotkey: tool '{}' not found in resolved entries", tool_id);
+        log::warn!(
+            "global hotkey: tool '{}' not found in resolved entries",
+            tool_id
+        );
         show_hotkey_error(
             cx,
-            format!("Hotkey failed: tool '{}' not found in dashboard config", tool_id),
+            format!(
+                "Hotkey failed: tool '{}' not found in dashboard config",
+                tool_id
+            ),
         );
         return;
     };
@@ -259,7 +256,11 @@ fn dispatch_hotkey_tool(
         log::warn!("global hotkey: tool config for '{}' not loaded", tool_id);
         show_hotkey_error(
             cx,
-            format!("Hotkey failed: tool '{}' not found in config at {}", tool_id, entry.config_root.display()),
+            format!(
+                "Hotkey failed: tool '{}' not found in config at {}",
+                tool_id,
+                entry.config_root.display()
+            ),
         );
         return;
     };
@@ -268,8 +269,7 @@ fn dispatch_hotkey_tool(
     let agent_tools_path = resolve_agent_tools_path();
 
     let state_dir = state_dir_for(&entry.config_root);
-    let active_folder = read_state_string(&state_dir.join("active_folder"))
-        .map(PathBuf::from);
+    let active_folder = read_state_string(&state_dir.join("active_folder")).map(PathBuf::from);
     let session_path = if tool.needs_session {
         read_state_string(&state_dir.join("session_path"))
     } else {
@@ -331,10 +331,7 @@ fn dispatch_hotkey_tool(
 
     let Some(multi_workspace) = multi_workspace_handle else {
         log::warn!("global hotkey: no workspace open for tool '{}'", tool_id);
-        show_hotkey_error(
-            cx,
-            format!("Hotkey '{}': no workspace open", tool.label),
-        );
+        show_hotkey_error(cx, format!("Hotkey '{}': no workspace open", tool.label));
         return;
     };
 
@@ -511,9 +508,10 @@ pub fn init_global_hotkeys(cx: &mut App) {
                     let hotkey_id = event.id();
                     let dispatch_data = this
                         .update(cx, |manager: &mut GlobalHotkeyManager, _cx| {
-                            manager.hotkey_map.get(&hotkey_id).map(|tool_id| {
-                                (tool_id.clone(), manager.hotkey_entries.clone())
-                            })
+                            manager
+                                .hotkey_map
+                                .get(&hotkey_id)
+                                .map(|tool_id| (tool_id.clone(), manager.hotkey_entries.clone()))
                         })
                         .ok()
                         .flatten();
@@ -572,9 +570,14 @@ pub(crate) fn save_global_hotkey(keystroke_str: &str, tool_id: &str, config_root
 
     // Remove any existing entry for this tool_id to avoid duplicates.
     // Use toml_edit for reliable round-trip editing.
-    let mut doc = existing.parse::<toml_edit::DocumentMut>().unwrap_or_default();
+    let mut doc = existing
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap_or_default();
 
-    if let Some(hotkeys) = doc.get_mut("hotkey").and_then(|v| v.as_array_of_tables_mut()) {
+    if let Some(hotkeys) = doc
+        .get_mut("hotkey")
+        .and_then(|v| v.as_array_of_tables_mut())
+    {
         hotkeys.retain(|table| {
             table
                 .get("tool_id")
@@ -592,7 +595,10 @@ pub(crate) fn save_global_hotkey(keystroke_str: &str, tool_id: &str, config_root
     let config_root_str = config_root.to_string_lossy().to_string();
     new_table.insert("config_root", toml_edit::value(&config_root_str));
 
-    if let Some(hotkeys) = doc.get_mut("hotkey").and_then(|v| v.as_array_of_tables_mut()) {
+    if let Some(hotkeys) = doc
+        .get_mut("hotkey")
+        .and_then(|v| v.as_array_of_tables_mut())
+    {
         hotkeys.push(new_table);
     } else {
         let mut array = toml_edit::ArrayOfTables::new();

@@ -34,14 +34,15 @@ pub fn section_header(
         .gap(DynamicSpacing::Base08.rems(cx))
         .items_center()
         .child(
-            Disclosure::new(SharedString::from(format!("disc-{}", section_id)), is_open)
-                .on_click(move |_, _, cx| {
+            Disclosure::new(SharedString::from(format!("disc-{}", section_id)), is_open).on_click(
+                move |_, _, cx| {
                     entity
                         .update(cx, |this, cx| {
                             this.toggle_section(&id_for_toggle, cx);
                         })
                         .log_err();
-                }),
+                },
+            ),
         )
         .child(
             Label::new(title.to_string())
@@ -71,14 +72,15 @@ pub fn sub_section_header(
         .gap(DynamicSpacing::Base06.rems(cx))
         .items_center()
         .child(
-            Disclosure::new(SharedString::from(format!("disc-{}", section_id)), is_open)
-                .on_click(move |_, _, cx| {
+            Disclosure::new(SharedString::from(format!("disc-{}", section_id)), is_open).on_click(
+                move |_, _, cx| {
                     entity
                         .update(cx, |this, cx| {
                             this.toggle_section(&id_for_toggle, cx);
                         })
                         .log_err();
-                }),
+                },
+            ),
         )
         .child(
             Label::new(title.to_string())

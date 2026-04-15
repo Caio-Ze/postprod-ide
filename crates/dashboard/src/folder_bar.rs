@@ -9,15 +9,12 @@
 
 use std::path::PathBuf;
 
-use gpui::{
-    App, Corner, ExternalPaths, IntoElement, ParentElement, SharedString, Styled, Window,
-};
+use gpui::{App, Corner, ExternalPaths, IntoElement, ParentElement, SharedString, Styled, Window};
 use ui::{
     ButtonLike, ButtonStyle, ContextMenu, DynamicSpacing, Icon, IconName, IconSize, Label,
     LabelSize, ListItem, ListItemSpacing, PopoverMenu, prelude::*,
 };
 use workspace::DraggedSelection;
-
 
 /// Render the session status row using `ListItem`.
 ///
@@ -55,9 +52,7 @@ pub(crate) fn render_session_status(
                 .child(label_content)
                 .into_any_element()
         }
-        None => div()
-            .h(DynamicSpacing::Base08.rems(cx))
-            .into_any_element(),
+        None => div().h(DynamicSpacing::Base08.rems(cx)).into_any_element(),
     }
 }
 
@@ -210,10 +205,12 @@ fn build_folder_dropdown(
                 .color(Color::Muted),
         )
         .child(
-            div()
-                .flex_1()
-                .overflow_hidden()
-                .child(Label::new(display_name).color(name_color).size(LabelSize::Small).truncate()),
+            div().flex_1().overflow_hidden().child(
+                Label::new(display_name)
+                    .color(name_color)
+                    .size(LabelSize::Small)
+                    .truncate(),
+            ),
         );
 
     let folder_row = ListItem::new(SharedString::from(format!("{}-row", id)))
@@ -249,9 +246,11 @@ fn build_folder_dropdown(
         .drag_over::<DraggedSelection>(|style, _, _, cx| {
             style.bg(cx.theme().colors().drop_target_background)
         })
-        .on_drop(move |paths: &ExternalPaths, window: &mut Window, cx: &mut App| {
-            on_drop_external(paths, window, cx);
-        })
+        .on_drop(
+            move |paths: &ExternalPaths, window: &mut Window, cx: &mut App| {
+                on_drop_external(paths, window, cx);
+            },
+        )
         .on_drop(
             move |selection: &DraggedSelection, window: &mut Window, cx: &mut App| {
                 on_drop_selection(selection, window, cx);

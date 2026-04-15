@@ -9,8 +9,7 @@ use std::path::PathBuf;
 
 use gpui::{IntoElement, ParentElement, SharedString, Styled, WeakEntity};
 use ui::{
-    ButtonLike, ButtonSize, Color, DynamicSpacing, Icon, IconName, IconSize, Label,
-    prelude::*,
+    ButtonLike, ButtonSize, Color, DynamicSpacing, Icon, IconName, IconSize, Label, prelude::*,
 };
 use util::ResultExt as _;
 
