@@ -3,7 +3,10 @@ use chrono::{DateTime, Utc};
 use collections::HashMap;
 use fuzzy::StringMatchCandidate;
 use gpui::{App, AppContext as _, Context, EventEmitter, SharedString, Task};
-use heed::{Database, RoTxn, types::{SerdeJson, Str}};
+use heed::{
+    Database, RoTxn,
+    types::{SerdeJson, Str},
+};
 use parking_lot::RwLock;
 use rope::Rope;
 use serde::{Deserialize, Serialize};
@@ -329,9 +332,7 @@ mod tests {
     use gpui::{Entity, TestAppContext};
     use rope::Rope;
 
-    async fn create_test_store(
-        cx: &mut TestAppContext,
-    ) -> (tempfile::TempDir, Entity<NoteStore>) {
+    async fn create_test_store(cx: &mut TestAppContext) -> (tempfile::TempDir, Entity<NoteStore>) {
         cx.executor().allow_parking();
         let temp_dir = tempfile::tempdir().unwrap();
         let db_path = temp_dir.path().join("notes-db");
@@ -431,10 +432,7 @@ mod tests {
             .await
             .unwrap();
 
-        store
-            .update(cx, |s, cx| s.delete(id, cx))
-            .await
-            .unwrap();
+        store.update(cx, |s, cx| s.delete(id, cx)).await.unwrap();
 
         let meta = store.update(cx, |s, _cx| s.metadata(id));
         assert!(meta.is_none());
@@ -593,12 +591,10 @@ mod tests {
             .await
             .unwrap();
 
-        let build_notes =
-            store.update(cx, |s, _cx| s.notes_for_automation("build-report"));
+        let build_notes = store.update(cx, |s, _cx| s.notes_for_automation("build-report"));
         assert_eq!(build_notes.len(), 2); // default + assigned
 
-        let unknown_notes =
-            store.update(cx, |s, _cx| s.notes_for_automation("unknown"));
+        let unknown_notes = store.update(cx, |s, _cx| s.notes_for_automation("unknown"));
         assert_eq!(unknown_notes.len(), 1); // default only
     }
 

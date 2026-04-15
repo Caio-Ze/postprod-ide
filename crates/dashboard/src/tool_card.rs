@@ -5,7 +5,10 @@
 //! `card.rs`. Adapted for panel-width (~350px) layout — all tiers render
 //! full-width instead of multi-column grids.
 
-use gpui::{AnyElement, App, ClickEvent, ExternalPaths, IntoElement, ParentElement, SharedString, Styled, Window};
+use gpui::{
+    AnyElement, App, ClickEvent, ExternalPaths, IntoElement, ParentElement, SharedString, Styled,
+    Window,
+};
 use ui::{Color, DynamicSpacing, ListItemSpacing, Tooltip, prelude::*};
 
 use crate::card::{CardIcon, DashboardCard};
@@ -42,7 +45,9 @@ pub fn render_featured_tool(
 
     let mut card = DashboardCard::new(
         SharedString::from(format!("featured-{}", tool.id)),
-        CardIcon::new(tool_icon).color(Color::Accent).bg(icon_tint_bg),
+        CardIcon::new(tool_icon)
+            .color(Color::Accent)
+            .bg(icon_tint_bg),
         tool.label.clone(),
     )
     .description(tool.description.clone())
@@ -55,10 +60,7 @@ pub fn render_featured_tool(
         card = card.expanded_content(exp);
     }
 
-    let mut el = div()
-        .group(group_name)
-        .w_full()
-        .child(card.render(cx));
+    let mut el = div().group(group_name).w_full().child(card.render(cx));
 
     if let Some(handler) = drop_handler {
         el = el
@@ -103,7 +105,10 @@ pub fn render_standard_tool(
 
     let mut card = DashboardCard::new(
         SharedString::from(format!("standard-{}", tool.id)),
-        CardIcon::new(tool_icon).color(Color::Muted).bg(icon_bg).compact(),
+        CardIcon::new(tool_icon)
+            .color(Color::Muted)
+            .bg(icon_bg)
+            .compact(),
         tool.label.clone(),
     )
     .description(tool.description.clone())
@@ -116,10 +121,7 @@ pub fn render_standard_tool(
         card = card.expanded_content(exp);
     }
 
-    let mut el = div()
-        .group(group_name)
-        .w_full()
-        .child(card.render(cx));
+    let mut el = div().group(group_name).w_full().child(card.render(cx));
 
     if let Some(handler) = drop_handler {
         el = el

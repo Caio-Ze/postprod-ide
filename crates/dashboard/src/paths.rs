@@ -74,13 +74,34 @@ pub(crate) fn ensure_workspace_dirs() {
 
     // One-time migration: move state files from old locations into config/.state/
     let migrations = [
-        (suite_root().join(".active_folder"), state_dir().join("active_folder")),
-        (suite_root().join(".recent_folders"), state_dir().join("recent_folders")),
-        (suite_root().join(".destination_folder"), state_dir().join("destination_folder")),
-        (suite_root().join(".recent_destinations"), state_dir().join("recent_destinations")),
-        (config_dir().join(".background_tools"), state_dir().join("background_tools")),
-        (config_dir().join(".collapsed_sections"), state_dir().join("collapsed_sections")),
-        (config_dir().join(".param_values.toml"), state_dir().join("param_values.toml")),
+        (
+            suite_root().join(".active_folder"),
+            state_dir().join("active_folder"),
+        ),
+        (
+            suite_root().join(".recent_folders"),
+            state_dir().join("recent_folders"),
+        ),
+        (
+            suite_root().join(".destination_folder"),
+            state_dir().join("destination_folder"),
+        ),
+        (
+            suite_root().join(".recent_destinations"),
+            state_dir().join("recent_destinations"),
+        ),
+        (
+            config_dir().join(".background_tools"),
+            state_dir().join("background_tools"),
+        ),
+        (
+            config_dir().join(".collapsed_sections"),
+            state_dir().join("collapsed_sections"),
+        ),
+        (
+            config_dir().join(".param_values.toml"),
+            state_dir().join("param_values.toml"),
+        ),
     ];
     for (old, new) in &migrations {
         if old.exists() && !new.exists() {
@@ -263,19 +284,28 @@ mod tests {
     #[test]
     fn test_state_dir_for() {
         let root = PathBuf::from("/tmp/fake");
-        assert_eq!(state_dir_for(&root), PathBuf::from("/tmp/fake/config/.state"));
+        assert_eq!(
+            state_dir_for(&root),
+            PathBuf::from("/tmp/fake/config/.state")
+        );
     }
 
     #[test]
     fn test_tools_config_dir_for() {
         let root = PathBuf::from("/tmp/fake");
-        assert_eq!(tools_config_dir_for(&root), PathBuf::from("/tmp/fake/config/tools"));
+        assert_eq!(
+            tools_config_dir_for(&root),
+            PathBuf::from("/tmp/fake/config/tools")
+        );
     }
 
     #[test]
     fn test_automations_dir_for() {
         let root = PathBuf::from("/tmp/fake");
-        assert_eq!(automations_dir_for(&root), PathBuf::from("/tmp/fake/config/automations"));
+        assert_eq!(
+            automations_dir_for(&root),
+            PathBuf::from("/tmp/fake/config/automations")
+        );
     }
 
     #[test]
@@ -304,7 +334,9 @@ mod tests {
 
     #[test]
     fn test_dir_has_content_nonexistent() {
-        assert!(!dir_has_content(Path::new("/nonexistent/path/that/does/not/exist")));
+        assert!(!dir_has_content(Path::new(
+            "/nonexistent/path/that/does/not/exist"
+        )));
     }
 
     #[test]
@@ -382,7 +414,12 @@ mod tests {
         let status = scan_delivery_in(dir);
         assert_eq!(status.tv_count, 2);
         assert_eq!(status.net_count, 1);
-        assert!(status.warnings.iter().any(|w| w.contains("TV (2) != NET (1)")));
+        assert!(
+            status
+                .warnings
+                .iter()
+                .any(|w| w.contains("TV (2) != NET (1)"))
+        );
         Ok(())
     }
 }

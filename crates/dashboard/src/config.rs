@@ -316,7 +316,10 @@ impl PipelineStep {
     }
 }
 
-pub(crate) fn load_single_automation(path: &Path, config_root: &Path) -> Result<AutomationEntry, String> {
+pub(crate) fn load_single_automation(
+    path: &Path,
+    config_root: &Path,
+) -> Result<AutomationEntry, String> {
     let content = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut entry = toml::from_str::<AutomationEntry>(&content).map_err(|e| {
         let filename = path.file_name().unwrap_or_default().to_string_lossy();
@@ -331,7 +334,10 @@ pub(crate) fn load_single_automation(path: &Path, config_root: &Path) -> Result<
             match resolve_file_path(&prompts_dir, prompt_filename) {
                 Ok(prompt_path) => {
                     entry.prompt = std::fs::read_to_string(&prompt_path).map_err(|e| {
-                        format!("{filename}: failed to read prompt file '{}': {e}", prompt_path.display())
+                        format!(
+                            "{filename}: failed to read prompt file '{}': {e}",
+                            prompt_path.display()
+                        )
                     })?;
                 }
                 Err(e) => return Err(format!("{filename}: {e}")),
@@ -360,7 +366,10 @@ pub(crate) fn load_single_automation(path: &Path, config_root: &Path) -> Result<
 pub(crate) fn resolve_file_by_name(dir: &Path, filename: &str) -> Result<PathBuf, String> {
     let matches = collect_files_by_name(dir, filename);
     match matches.len() {
-        0 => Err(format!("prompt file '{filename}' not found in {}", dir.display())),
+        0 => Err(format!(
+            "prompt file '{filename}' not found in {}",
+            dir.display()
+        )),
         1 => Ok(matches.into_iter().next().expect("checked len == 1")),
         n => Err(format!(
             "prompt file '{filename}' is ambiguous — {n} matches found in {}",
@@ -434,7 +443,8 @@ pub(crate) fn load_default_contexts(config_root: &Path) -> Vec<ContextEntry> {
 
     let mut contexts = Vec::new();
     for path in paths {
-        let label = path.file_stem()
+        let label = path
+            .file_stem()
             .map(|s| s.to_string_lossy().replace(['-', '_'], " "))
             .unwrap_or_default();
         contexts.push(ContextEntry {
@@ -473,10 +483,19 @@ fn read_folder_context(dir: &Path) -> Result<String, String> {
     let mut file_count: usize = 0;
     let mut truncated = false;
 
-    collect_folder_contents(dir, dir, &mut output, &mut total_size, &mut file_count, &mut truncated);
+    collect_folder_contents(
+        dir,
+        dir,
+        &mut output,
+        &mut total_size,
+        &mut file_count,
+        &mut truncated,
+    );
 
     if truncated {
-        output.push_str(&format!("\n[... truncated at 150KB, {file_count} files total]"));
+        output.push_str(&format!(
+            "\n[... truncated at 150KB, {file_count} files total]"
+        ));
     }
     Ok(output)
 }
@@ -549,7 +568,9 @@ fn collect_scripts_recursive(dir: &Path) -> Vec<PathBuf> {
     result
 }
 
-pub(crate) fn load_automations_registry(config_root: &Path) -> (Vec<AutomationEntry>, Option<String>) {
+pub(crate) fn load_automations_registry(
+    config_root: &Path,
+) -> (Vec<AutomationEntry>, Option<String>) {
     let dir = automations_dir_for(config_root);
     if !dir.exists() {
         return (Vec::new(), Some(format!("cannot read {}", dir.display())));
@@ -666,7 +687,9 @@ fn load_toml_agents(path: &Path) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<
     }
 }
 
-pub(crate) fn load_agents_config(config_root: &Path) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>) {
+pub(crate) fn load_agents_config(
+    config_root: &Path,
+) -> (Vec<BackendEntry>, Vec<AgentEntry>, Option<String>) {
     load_toml_agents(&agents_toml_path_for(config_root))
 }
 
@@ -846,7 +869,10 @@ tier = "standard"
         let path = tmp.path().join("bad.toml");
         std::fs::write(&path, "this is not valid toml {{{")?;
         match load_single_tool(&path) {
-            Err(err) => assert!(err.contains("bad.toml"), "error should mention filename: {err}"),
+            Err(err) => assert!(
+                err.contains("bad.toml"),
+                "error should mention filename: {err}"
+            ),
             Ok(_) => panic!("should fail on invalid TOML"),
         }
         Ok(())
@@ -1222,13 +1248,16 @@ prompt = "Do the scan"
 
         let auto_dir = config_root.join("config/automations");
         std::fs::create_dir_all(&auto_dir)?;
-        std::fs::write(auto_dir.join("test.toml"), r#"
+        std::fs::write(
+            auto_dir.join("test.toml"),
+            r#"
 id = "test"
 label = "Test"
 description = "d"
 icon = "zap"
 prompt_file = "test.md"
-"#)?;
+"#,
+        )?;
 
         let entry = load_single_automation(&auto_dir.join("test.toml"), config_root)?;
         assert_eq!(entry.prompt, "Hello from file");
@@ -1239,13 +1268,16 @@ prompt_file = "test.md"
     fn test_inline_prompt_fallback() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
         let path = tmp.path().join("inline.toml");
-        std::fs::write(&path, r#"
+        std::fs::write(
+            &path,
+            r#"
 id = "inline"
 label = "Inline"
 description = "d"
 icon = "zap"
 prompt = "inline content"
-"#)?;
+"#,
+        )?;
 
         let entry = load_single_automation(&path, tmp.path())?;
         assert_eq!(entry.prompt, "inline content");
@@ -1256,13 +1288,16 @@ prompt = "inline content"
     fn test_prompt_file_missing_rejects_automation() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
         let path = tmp.path().join("missing.toml");
-        std::fs::write(&path, r#"
+        std::fs::write(
+            &path,
+            r#"
 id = "missing"
 label = "Missing"
 description = "d"
 icon = "zap"
 prompt_file = "does-not-exist.md"
-"#)?;
+"#,
+        )?;
 
         let result = load_single_automation(&path, tmp.path());
         match result {
@@ -1349,7 +1384,10 @@ prompt_file = "does-not-exist.md"
         let tmp = tempfile::tempdir()?;
         let dir = tmp.path().join("config/default-context");
         std::fs::create_dir_all(&dir)?;
-        std::fs::write(dir.join("owner-decisions.md"), "# Owner Notes\nBinding decisions.")?;
+        std::fs::write(
+            dir.join("owner-decisions.md"),
+            "# Owner Notes\nBinding decisions.",
+        )?;
 
         let contexts = load_default_contexts(tmp.path());
         assert_eq!(contexts.len(), 1);
@@ -1365,7 +1403,10 @@ prompt_file = "does-not-exist.md"
         let dir = tmp.path().join("config/default-context");
         std::fs::create_dir_all(&dir)?;
         std::fs::write(dir.join("known-bugs.md"), "# Known Bugs\nNone.")?;
-        std::fs::write(dir.join("tier-protocols.md"), "# Tier Guidelines\nThree tiers.")?;
+        std::fs::write(
+            dir.join("tier-protocols.md"),
+            "# Tier Guidelines\nThree tiers.",
+        )?;
 
         let contexts = load_default_contexts(tmp.path());
         assert_eq!(contexts.len(), 2);
@@ -1380,7 +1421,9 @@ prompt_file = "does-not-exist.md"
     fn test_context_entry_parsing() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
         let path = tmp.path().join("ctx.toml");
-        std::fs::write(&path, r#"
+        std::fs::write(
+            &path,
+            r#"
 id = "with-ctx"
 label = "With Context"
 description = "d"
@@ -1398,7 +1441,8 @@ source = "script"
 script = "status.sh"
 label = "Status"
 required = false
-"#)?;
+"#,
+        )?;
 
         let entry = load_single_automation(&path, tmp.path())?;
         assert_eq!(entry.contexts.len(), 2);

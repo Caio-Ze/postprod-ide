@@ -5,10 +5,12 @@
 //! manual layout for pipeline entries. Also contains step tree rendering
 //! (view and edit modes).
 
-use gpui::{AnyElement, App, IntoElement, MouseButton, ParentElement, SharedString, Styled, WeakEntity};
+use gpui::{
+    AnyElement, App, IntoElement, MouseButton, ParentElement, SharedString, Styled, WeakEntity,
+};
 use ui::{
-    ButtonLike, ButtonStyle, Color, Disclosure, DynamicSpacing, IconButton, IconName, IconSize,
-    Icon, Label, LabelSize, Tooltip, prelude::*,
+    ButtonLike, ButtonStyle, Color, Disclosure, DynamicSpacing, Icon, IconButton, IconName,
+    IconSize, Label, LabelSize, Tooltip, prelude::*,
 };
 use util::ResultExt as _;
 use workspace::Workspace;
@@ -82,16 +84,20 @@ pub fn render_pipeline_step_tree(
                 label_text
             };
 
-            let text_color = if is_broken { Color::Error } else { Color::Muted };
+            let text_color = if is_broken {
+                Color::Error
+            } else {
+                Color::Muted
+            };
 
             let mut row = h_flex()
                 .gap(DynamicSpacing::Base08.rems(cx))
                 .pl(DynamicSpacing::Base16.rems(cx))
                 .child(
-                Label::new(label_text)
-                    .size(LabelSize::XSmall)
-                    .color(text_color),
-            );
+                    Label::new(label_text)
+                        .size(LabelSize::XSmall)
+                        .color(text_color),
+                );
 
             if is_parallel && sub_idx == 0 {
                 row = row.child(Label::new("┐").size(LabelSize::XSmall).color(Color::Muted));
@@ -354,7 +360,11 @@ pub fn render_pipeline_card(
             } else {
                 SharedString::from(format!("{} steps", entry.steps.len()))
             })
-            .color(if is_running { Color::Accent } else { Color::Muted })
+            .color(if is_running {
+                Color::Accent
+            } else {
+                Color::Muted
+            })
             .size(LabelSize::XSmall),
         )
         .child(
@@ -423,7 +433,11 @@ pub fn render_pipeline_card(
                         IconName::CountdownTimer,
                     )
                     .icon_size(IconSize::Small)
-                    .icon_color(if is_scheduled { Color::Accent } else { Color::Muted })
+                    .icon_color(if is_scheduled {
+                        Color::Accent
+                    } else {
+                        Color::Muted
+                    })
                     .tooltip(Tooltip::text(if is_scheduled {
                         "Disable schedule"
                     } else {
@@ -471,33 +485,30 @@ pub fn render_pipeline_card(
                 )
                 .when(is_editing, |el| {
                     el.child(
-                        IconButton::new(
-                            format!("delete-pipeline-{}", delete_id),
-                            IconName::Trash,
-                        )
-                        .icon_color(if is_pending_delete {
-                            Color::Error
-                        } else {
-                            Color::Default
-                        })
-                        .tooltip(Tooltip::text(if is_pending_delete {
-                            "Click again to confirm delete"
-                        } else {
-                            "Delete pipeline"
-                        }))
-                        .on_click(move |_, _, cx| {
-                            delete_entity
-                                .update(cx, |this, cx| {
-                                    if this.pipelines_pending_delete.contains(&delete_id) {
-                                        this.pipelines_pending_delete.remove(&delete_id);
-                                        this.delete_pipeline_toml(&delete_id, cx);
-                                    } else {
-                                        this.pipelines_pending_delete.insert(delete_id.clone());
-                                        cx.notify();
-                                    }
-                                })
-                                .log_err();
-                        }),
+                        IconButton::new(format!("delete-pipeline-{}", delete_id), IconName::Trash)
+                            .icon_color(if is_pending_delete {
+                                Color::Error
+                            } else {
+                                Color::Default
+                            })
+                            .tooltip(Tooltip::text(if is_pending_delete {
+                                "Click again to confirm delete"
+                            } else {
+                                "Delete pipeline"
+                            }))
+                            .on_click(move |_, _, cx| {
+                                delete_entity
+                                    .update(cx, |this, cx| {
+                                        if this.pipelines_pending_delete.contains(&delete_id) {
+                                            this.pipelines_pending_delete.remove(&delete_id);
+                                            this.delete_pipeline_toml(&delete_id, cx);
+                                        } else {
+                                            this.pipelines_pending_delete.insert(delete_id.clone());
+                                            cx.notify();
+                                        }
+                                    })
+                                    .log_err();
+                            }),
                     )
                 }),
         );

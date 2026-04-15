@@ -291,26 +291,43 @@ struct PostProdPickerDelegate {
 
 #[allow(dead_code)]
 enum PostProdPickerEvent {
-    Selected { entry_id: ActiveEntryId },
-    Confirmed { entry_id: ActiveEntryId },
-    Deleted { note_id: NoteId },
-    ToggledDefault { note_id: NoteId },
-    ContextReorder { automation_id: String, toml_index: usize, direction: i32 },
-    ContextRemove { automation_id: String, toml_index: usize },
-    AddContextFile { automation_id: String },
-    AddContextScript { automation_id: String },
-    AddScopedNote { automation_id: String },
+    Selected {
+        entry_id: ActiveEntryId,
+    },
+    Confirmed {
+        entry_id: ActiveEntryId,
+    },
+    Deleted {
+        note_id: NoteId,
+    },
+    ToggledDefault {
+        note_id: NoteId,
+    },
+    ContextReorder {
+        automation_id: String,
+        toml_index: usize,
+        direction: i32,
+    },
+    ContextRemove {
+        automation_id: String,
+        toml_index: usize,
+    },
+    AddContextFile {
+        automation_id: String,
+    },
+    AddContextScript {
+        automation_id: String,
+    },
+    AddScopedNote {
+        automation_id: String,
+    },
 }
 
 impl EventEmitter<PostProdPickerEvent> for Picker<PostProdPickerDelegate> {}
 
 impl PostProdPickerDelegate {
     /// Toggle folder expansion in the picker. Inserts/removes child entries in-place.
-    fn toggle_folder_expansion(
-        &mut self,
-        folder_path: &Path,
-        cx: &mut Context<Picker<Self>>,
-    ) {
+    fn toggle_folder_expansion(&mut self, folder_path: &Path, cx: &mut Context<Picker<Self>>) {
         if self.expanded_folders.contains(folder_path) {
             // Collapse: remove FolderChild entries following this folder
             self.expanded_folders.remove(folder_path);
@@ -401,9 +418,7 @@ fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let display_name = filename
-            .trim_end_matches(".md")
-            .replace(['-', '_'], " ");
+        let display_name = filename.trim_end_matches(".md").replace(['-', '_'], " ");
         let is_symlink = std::fs::symlink_metadata(&path)
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false);
@@ -697,7 +712,10 @@ impl PickerDelegate for PostProdPickerDelegate {
         cx: &mut Context<Picker<Self>>,
     ) -> Task<()> {
         let cancellation_flag = Arc::new(AtomicBool::default());
-        let search = self.store.read(cx).search(query.clone(), cancellation_flag, cx);
+        let search = self
+            .store
+            .read(cx)
+            .search(query.clone(), cancellation_flag, cx);
 
         let prompt_files = self.prompt_files.clone();
         let default_context_files = self.default_context_files.clone();
@@ -869,9 +887,7 @@ impl PickerDelegate for PostProdPickerDelegate {
                                             }
                                         })
                                         .on_click(cx.listener(move |_, _, _, cx| {
-                                            cx.emit(PostProdPickerEvent::ToggledDefault {
-                                                note_id,
-                                            })
+                                            cx.emit(PostProdPickerEvent::ToggledDefault { note_id })
                                         })),
                                 ),
                         )
@@ -955,9 +971,7 @@ impl PickerDelegate for PostProdPickerDelegate {
                     .inset(true)
                     .spacing(ListItemSpacing::Sparse)
                     .toggle_state(selected)
-                    .start_slot(
-                        Icon::new(icon).size(IconSize::Small).color(Color::Muted),
-                    )
+                    .start_slot(Icon::new(icon).size(IconSize::Small).color(Color::Muted))
                     .child(Label::new(label).truncate())
                     .tooltip(Tooltip::text(full_path))
                     .end_slot_on_hover(
@@ -972,13 +986,15 @@ impl PickerDelegate for PostProdPickerDelegate {
                                     .icon_size(IconSize::XSmall)
                                     .icon_color(Color::Muted)
                                     .tooltip(Tooltip::text("Move Up"))
-                                    .on_click(cx.listener(move |_, _, _, cx| {
-                                        cx.emit(PostProdPickerEvent::ContextReorder {
-                                            automation_id: auto_id_up.clone(),
-                                            toml_index: toml_ix,
-                                            direction: -1,
-                                        });
-                                    })),
+                                    .on_click(cx.listener(
+                                        move |_, _, _, cx| {
+                                            cx.emit(PostProdPickerEvent::ContextReorder {
+                                                automation_id: auto_id_up.clone(),
+                                                toml_index: toml_ix,
+                                                direction: -1,
+                                            });
+                                        },
+                                    )),
                                 )
                             })
                             .when(!is_last, |this| {
@@ -990,13 +1006,15 @@ impl PickerDelegate for PostProdPickerDelegate {
                                     .icon_size(IconSize::XSmall)
                                     .icon_color(Color::Muted)
                                     .tooltip(Tooltip::text("Move Down"))
-                                    .on_click(cx.listener(move |_, _, _, cx| {
-                                        cx.emit(PostProdPickerEvent::ContextReorder {
-                                            automation_id: auto_id_down.clone(),
-                                            toml_index: toml_ix,
-                                            direction: 1,
-                                        });
-                                    })),
+                                    .on_click(cx.listener(
+                                        move |_, _, _, cx| {
+                                            cx.emit(PostProdPickerEvent::ContextReorder {
+                                                automation_id: auto_id_down.clone(),
+                                                toml_index: toml_ix,
+                                                direction: 1,
+                                            });
+                                        },
+                                    )),
                                 )
                             })
                             .child(
@@ -1007,12 +1025,14 @@ impl PickerDelegate for PostProdPickerDelegate {
                                 .icon_size(IconSize::XSmall)
                                 .icon_color(Color::Muted)
                                 .tooltip(Tooltip::text("Remove"))
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.emit(PostProdPickerEvent::ContextRemove {
-                                        automation_id: auto_id_rm.clone(),
-                                        toml_index: toml_ix,
-                                    });
-                                })),
+                                .on_click(cx.listener(
+                                    move |_, _, _, cx| {
+                                        cx.emit(PostProdPickerEvent::ContextRemove {
+                                            automation_id: auto_id_rm.clone(),
+                                            toml_index: toml_ix,
+                                        });
+                                    },
+                                )),
                             ),
                     );
 
@@ -1038,8 +1058,7 @@ impl PickerDelegate for PostProdPickerDelegate {
             }
             PostProdPickerEntry::FolderChild(entry) => {
                 let label: SharedString = entry.filename.clone().into();
-                let full_path: SharedString =
-                    entry.resolved_path.display().to_string().into();
+                let full_path: SharedString = entry.resolved_path.display().to_string().into();
                 Some(
                     ListItem::new(ix)
                         .inset(true)
@@ -1441,14 +1460,7 @@ impl PostProdRules {
     ) {
         let note_id = NoteId::new();
         let save = self.store.update(cx, |store, cx| {
-            store.save(
-                note_id,
-                None,
-                false,
-                vec![automation_id],
-                "".into(),
-                cx,
-            )
+            store.save(note_id, None, false, vec![automation_id], "".into(), cx)
         });
         self.picker
             .update(cx, |picker, cx| picker.refresh(window, cx));
@@ -1898,12 +1910,7 @@ impl PostProdRules {
         cx.notify();
     }
 
-    pub fn delete_note(
-        &mut self,
-        note_id: NoteId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn delete_note(&mut self, note_id: NoteId, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(metadata) = self.store.read(cx).metadata(note_id) {
             let confirmation = window.prompt(
                 PromptLevel::Warning,
@@ -1937,12 +1944,7 @@ impl PostProdRules {
         }
     }
 
-    pub fn duplicate_note(
-        &mut self,
-        note_id: NoteId,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn duplicate_note(&mut self, note_id: NoteId, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(note) = self.note_editors.get(&note_id) {
             const DUPLICATE_SUFFIX: &str = " copy";
             let title_to_duplicate = note.title_editor.read(cx).text(cx);
@@ -1970,7 +1972,14 @@ impl PostProdRules {
             let new_id = NoteId::new();
             let body = note.body_editor.read(cx).text(cx);
             let save = self.store.update(cx, |store, cx| {
-                store.save(new_id, Some(title.into()), false, Vec::new(), body.into(), cx)
+                store.save(
+                    new_id,
+                    Some(title.into()),
+                    false,
+                    Vec::new(),
+                    body.into(),
+                    cx,
+                )
             });
             self.picker
                 .update(cx, |picker, cx| picker.refresh(window, cx));
@@ -2018,12 +2027,8 @@ impl PostProdRules {
         cx: &mut Context<Self>,
     ) {
         let body_editor = match &self.active_entry {
-            Some(ActiveEntryId::Note(id)) => {
-                self.note_editors.get(id).map(|e| &e.body_editor)
-            }
-            Some(ActiveEntryId::File(path)) => {
-                self.file_editors.get(path).map(|e| &e.body_editor)
-            }
+            Some(ActiveEntryId::Note(id)) => self.note_editors.get(id).map(|e| &e.body_editor),
+            Some(ActiveEntryId::File(path)) => self.file_editors.get(path).map(|e| &e.body_editor),
             None => {
                 cx.propagate();
                 return;
@@ -2213,9 +2218,7 @@ impl PostProdRules {
                 .clone();
             note.pending_token_count = cx.spawn_in(window, async move |this, cx| {
                 async move {
-                    cx.background_executor()
-                        .timer(Duration::from_secs(1))
-                        .await;
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
                     let token_count = cx
                         .update(|_, cx| {
                             model.count_tokens(
@@ -2279,9 +2282,7 @@ impl PostProdRules {
                 .clone();
             file_editor.pending_token_count = cx.spawn_in(window, async move |this, cx| {
                 async move {
-                    cx.background_executor()
-                        .timer(Duration::from_secs(1))
-                        .await;
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
                     let token_count = cx
                         .update(|_, cx| {
                             model.count_tokens(
@@ -2415,22 +2416,21 @@ impl PostProdRules {
             ))
     }
 
-    fn render_static_title(&self, title: &SharedString, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .w_full()
-            .pl_1()
-            .child(
-                Label::new(title.clone())
-                    .size(LabelSize::Large)
-                    .color(Color::Default),
-            )
+    fn render_static_title(
+        &self,
+        title: &SharedString,
+        _cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        div().w_full().pl_1().child(
+            Label::new(title.clone())
+                .size(LabelSize::Large)
+                .color(Color::Default),
+        )
     }
 
     fn render_duplicate_note_button(&self) -> impl IntoElement {
         IconButton::new("duplicate-note", IconName::BookCopy)
-            .tooltip(move |_window, cx| {
-                Tooltip::for_action("Duplicate Note", &DuplicateNote, cx)
-            })
+            .tooltip(move |_window, cx| Tooltip::for_action("Duplicate Note", &DuplicateNote, cx))
             .on_click(|_, window, cx| {
                 window.dispatch_action(Box::new(DuplicateNote), cx);
             })
@@ -2464,9 +2464,7 @@ impl PostProdRules {
             .child(self.render_duplicate_note_button())
             .child(
                 IconButton::new("delete-note", IconName::Trash)
-                    .tooltip(move |_window, cx| {
-                        Tooltip::for_action("Delete Note", &DeleteNote, cx)
-                    })
+                    .tooltip(move |_window, cx| Tooltip::for_action("Delete Note", &DeleteNote, cx))
                     .on_click(|_, window, cx| {
                         window.dispatch_action(Box::new(DeleteNote), cx);
                     }),
@@ -2543,11 +2541,7 @@ impl PostProdRules {
             }))
     }
 
-    fn render_note_assignment(
-        &self,
-        note_id: NoteId,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_note_assignment(&self, note_id: NoteId, cx: &mut Context<Self>) -> impl IntoElement {
         let metadata = self.store.read(cx).metadata(note_id);
         let is_default = metadata.as_ref().map_or(false, |m| m.default);
         let assigned = metadata
@@ -2625,13 +2619,15 @@ impl PostProdRules {
                             } else {
                                 Color::Muted
                             })
-                            .on_click(cx.listener(move |this, _, _window, cx| {
-                                this.toggle_note_automation_assignment(
-                                    note_id,
-                                    auto_id.clone(),
-                                    cx,
-                                );
-                            })),
+                            .on_click(cx.listener(
+                                move |this, _, _window, cx| {
+                                    this.toggle_note_automation_assignment(
+                                        note_id,
+                                        auto_id.clone(),
+                                        cx,
+                                    );
+                                },
+                            )),
                         )
                         .child(Label::new(auto_label).size(LabelSize::Small))
                         .into_any_element()
@@ -2896,9 +2892,11 @@ impl Render for PostProdRules {
                     },
                 )
                 .on_action(cx.listener(|this, &NewNote, window, cx| this.new_note(window, cx)))
-                .on_action(cx.listener(|this, &DeleteNote, window, cx| {
-                    this.delete_active_note(window, cx)
-                }))
+                .on_action(
+                    cx.listener(|this, &DeleteNote, window, cx| {
+                        this.delete_active_note(window, cx)
+                    }),
+                )
                 .on_action(cx.listener(|this, &DuplicateNote, window, cx| {
                     this.duplicate_active_note(window, cx)
                 }))
@@ -3053,10 +3051,7 @@ mod tests {
             PostProdPickerEntry::PromptFile(f) => Some(f),
             _ => None,
         });
-        assert_eq!(
-            prompt_entry.map(|f| f.filename.as_str()),
-            Some("beta.md")
-        );
+        assert_eq!(prompt_entry.map(|f| f.filename.as_str()), Some("beta.md"));
     }
 
     #[test]
@@ -3142,7 +3137,9 @@ mod tests {
         );
 
         // No DEFAULT CONTEXT header should exist
-        let has_dc = entries.iter().any(|e| matches!(e, PostProdPickerEntry::Header(h) if h.as_ref() == "DEFAULT CONTEXT"));
+        let has_dc = entries.iter().any(
+            |e| matches!(e, PostProdPickerEntry::Header(h) if h.as_ref() == "DEFAULT CONTEXT"),
+        );
         assert!(!has_dc);
     }
 
@@ -3225,15 +3222,7 @@ mod tests {
         expanded.insert(folder);
 
         let mut entries = Vec::new();
-        build_scoped_entries(
-            &automation,
-            &[],
-            &[],
-            &[],
-            &expanded,
-            "",
-            &mut entries,
-        );
+        build_scoped_entries(&automation, &[], &[], &[], &expanded, "", &mut entries);
 
         let folder_children: Vec<_> = entries
             .iter()
@@ -3265,15 +3254,7 @@ mod tests {
         expanded.insert(folder);
 
         let mut entries = Vec::new();
-        build_scoped_entries(
-            &automation,
-            &[],
-            &[],
-            &[],
-            &expanded,
-            "",
-            &mut entries,
-        );
+        build_scoped_entries(&automation, &[], &[], &[], &expanded, "", &mut entries);
 
         let folder_children: Vec<_> = entries
             .iter()

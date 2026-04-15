@@ -12,8 +12,8 @@
 //! - Expandable content area below the header row
 
 use gpui::{
-    AnyElement, App, ClickEvent, Div, Hsla, IntoElement, MouseButton, ParentElement,
-    SharedString, Styled, WeakEntity, Window,
+    AnyElement, App, ClickEvent, Div, Hsla, IntoElement, MouseButton, ParentElement, SharedString,
+    Styled, WeakEntity, Window,
 };
 use ui::{
     Color, DynamicSpacing, Icon, IconName, IconSize, Label, LabelSize, ListItem, ListItemSpacing,
@@ -150,7 +150,11 @@ pub struct DashboardCard {
 }
 
 impl DashboardCard {
-    pub fn new(id: impl Into<SharedString>, icon: CardIcon, label: impl Into<SharedString>) -> Self {
+    pub fn new(
+        id: impl Into<SharedString>,
+        icon: CardIcon,
+        label: impl Into<SharedString>,
+    ) -> Self {
         Self {
             id: id.into(),
             icon,
@@ -295,11 +299,7 @@ impl DashboardCard {
             h_flex().w_full().child(inner)
         };
 
-        let mut card = div()
-            .w_full()
-            .elevation_2(cx)
-            .overflow_hidden()
-            .child(body);
+        let mut card = div().w_full().elevation_2(cx).overflow_hidden().child(body);
 
         if let Some(accent_color) = self.accent {
             card = card.border_color(accent_color.opacity(0.5));
