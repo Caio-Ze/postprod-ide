@@ -27,6 +27,7 @@ menu.workspace = true
 parking_lot.workspace = true
 picker.workspace = true
 platform_title_bar.workspace = true
+postprod_dashboard_config.workspace = true
 release_channel.workspace = true
 rope.workspace = true
 serde.workspace = true

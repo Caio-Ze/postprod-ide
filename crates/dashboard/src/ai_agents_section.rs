@@ -16,8 +16,9 @@ use util::ResultExt as _;
 use task::{RevealStrategy, Shell, SpawnInTerminal, TaskId};
 use workspace::Workspace;
 
+use postprod_dashboard_config::AgentEntry;
+
 use crate::Dashboard;
-use crate::config::AgentEntry;
 use crate::paths::resolve_bin;
 use crate::section;
 

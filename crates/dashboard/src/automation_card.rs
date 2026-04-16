@@ -15,10 +15,11 @@ use ui::{
 use util::ResultExt as _;
 use workspace::OpenOptions;
 
+use postprod_dashboard_config::automations_dir_for;
+
 use crate::AutomationRunStatus;
 use crate::card::{CardIcon, CardRenderContext, DashboardCard};
 use crate::config::icon_for_automation;
-use crate::paths::automations_dir_for;
 
 /// Build an automation card using `DashboardCard`.
 ///
