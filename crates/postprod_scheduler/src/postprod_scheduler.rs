@@ -92,25 +92,40 @@ impl CompletionReport {
     /// (the file's existence is the real signal).
     pub fn from_marker(path: &Path) -> Option<(Self, RunResult)> {
         let content = std::fs::read_to_string(path).ok()?;
-        let report: CompletionReport =
-            serde_json::from_str(content.trim()).unwrap_or_else(|_| CompletionReport {
-                status: "success".to_string(),
-                summary: String::new(),
-                outputs: Vec::new(),
-                skip_chain: false,
-                message: String::new(),
-            });
-
-        let result = if report.status.to_lowercase().starts_with("failed") {
-            RunResult::Failed {
-                message: report.summary.clone(),
-            }
-        } else {
-            RunResult::Success
-        };
-
-        Some((report, result))
+        Some(parse_completion_marker(&content))
     }
+}
+
+/// Parse marker JSON content into (CompletionReport, RunResult).
+///
+/// Infallible by design: malformed/empty/whitespace input falls back to a
+/// default-success report. The marker file's existence is the real completion
+/// signal; this parser only extracts metadata when present and well-formed.
+///
+/// Status interpretation: any status whose lowercased form begins with
+/// "failed" produces `RunResult::Failed`. All other statuses (including
+/// "error", "aborted", "cancelled", "timeout", and the empty string) produce
+/// `RunResult::Success`. This is intentional — the agent owns the completion
+/// vocabulary, and only "failed" is treated as a hard failure today.
+pub fn parse_completion_marker(content: &str) -> (CompletionReport, RunResult) {
+    let report: CompletionReport =
+        serde_json::from_str(content.trim()).unwrap_or_else(|_| CompletionReport {
+            status: "success".to_string(),
+            summary: String::new(),
+            outputs: Vec::new(),
+            skip_chain: false,
+            message: String::new(),
+        });
+
+    let result = if report.status.to_lowercase().starts_with("failed") {
+        RunResult::Failed {
+            message: report.summary.clone(),
+        }
+    } else {
+        RunResult::Success
+    };
+
+    (report, result)
 }
 
 /// Build the completion marker path for a given automation run.
@@ -1402,6 +1417,141 @@ mod tests {
         assert_eq!(
             path,
             PathBuf::from("/state/completed/daily-scan-1710104400.json")
+        );
+    }
+
+    // ── parse_completion_marker (pure parser, no I/O) ──
+    //
+    // These tests pin down silent-failure classes. The parser is intentionally
+    // infallible — anything it cannot interpret falls back to default-success.
+    // The pinned cases below document which inputs the production caller will
+    // currently see as a successful run. Any future change that turns these
+    // into hard failures must be a deliberate, visible edit (not a refactor
+    // side effect).
+
+    #[test]
+    fn parse_marker_valid_success() {
+        let json = r#"{"status":"success","summary":"done","outputs":["a.md"],"skip_chain":false,"message":""}"#;
+        let (report, result) = parse_completion_marker(json);
+        assert_eq!(result, RunResult::Success);
+        assert_eq!(report.summary, "done");
+        assert_eq!(report.outputs, vec!["a.md"]);
+        assert!(!report.skip_chain);
+    }
+
+    #[test]
+    fn parse_marker_valid_failed_carries_summary_into_message() {
+        let json = r#"{"status":"failed","summary":"config missing","outputs":[],"skip_chain":false,"message":""}"#;
+        let (_report, result) = parse_completion_marker(json);
+        match result {
+            RunResult::Failed { message } => assert_eq!(message, "config missing"),
+            other => panic!("expected Failed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_marker_status_uppercase_failed_is_failed() {
+        let json = r#"{"status":"FAILED","summary":"x"}"#;
+        let (_report, result) = parse_completion_marker(json);
+        assert!(
+            matches!(result, RunResult::Failed { .. }),
+            "uppercase FAILED must lowercase to failed"
+        );
+    }
+
+    #[test]
+    fn parse_marker_status_failed_prefix_is_failed() {
+        let json = r#"{"status":"failed_validation","summary":"y"}"#;
+        let (_report, result) = parse_completion_marker(json);
+        assert!(
+            matches!(result, RunResult::Failed { .. }),
+            "starts_with(\"failed\") must catch failed_* variants"
+        );
+    }
+
+    #[test]
+    fn parse_marker_empty_string_is_default_success() {
+        let (report, result) = parse_completion_marker("");
+        assert_eq!(result, RunResult::Success);
+        assert_eq!(report.status, "success");
+        assert!(report.summary.is_empty());
+    }
+
+    #[test]
+    fn parse_marker_whitespace_only_is_default_success() {
+        let (report, result) = parse_completion_marker("   \n\t  ");
+        assert_eq!(result, RunResult::Success);
+        assert_eq!(report.status, "success");
+    }
+
+    #[test]
+    fn parse_marker_malformed_json_is_default_success() {
+        let (report, result) = parse_completion_marker("not json at all");
+        assert_eq!(result, RunResult::Success);
+        assert_eq!(report.status, "success");
+    }
+
+    #[test]
+    fn parse_marker_missing_fields_use_serde_defaults() {
+        let (report, result) = parse_completion_marker("{}");
+        assert_eq!(report.status, "");
+        assert_eq!(report.summary, "");
+        assert!(report.outputs.is_empty());
+        assert!(!report.skip_chain);
+        assert_eq!(report.message, "");
+        assert_eq!(result, RunResult::Success);
+    }
+
+    #[test]
+    fn parse_marker_extra_fields_ignored() {
+        let json = r#"{"status":"success","unknown_field":42,"another":"value"}"#;
+        let (report, result) = parse_completion_marker(json);
+        assert_eq!(report.status, "success");
+        assert_eq!(result, RunResult::Success);
+    }
+
+    #[test]
+    fn parse_marker_silent_failure_class_error_status() {
+        // Status "error" is NOT recognized as failure today — it falls through
+        // to Success. This test pins that behavior so any future change is
+        // visible. If we ever decide "error" should also count as failed, this
+        // test breaks first and the change becomes a deliberate decision.
+        let json = r#"{"status":"error","summary":"something broke"}"#;
+        let (report, result) = parse_completion_marker(json);
+        assert_eq!(report.status, "error");
+        assert_eq!(
+            result,
+            RunResult::Success,
+            "status=error currently silently passes — pinned"
+        );
+    }
+
+    #[test]
+    fn parse_marker_silent_failure_class_aborted_status() {
+        // Same shape as the error case: "aborted" / "cancelled" / "timeout"
+        // strings the agent might write are NOT failures today.
+        for status in ["aborted", "cancelled", "timeout"] {
+            let json = format!(r#"{{"status":"{status}"}}"#);
+            let (_report, result) = parse_completion_marker(&json);
+            assert_eq!(
+                result,
+                RunResult::Success,
+                "status={status} currently silently passes — pinned",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_marker_outputs_wrong_type_falls_back_to_default_success() {
+        // serde_json fails the parse because outputs:String violates Vec<String>.
+        // Falls back to default-success — pipeline proceeds with no metadata.
+        let json = r#"{"status":"failed","outputs":"not-an-array"}"#;
+        let (report, result) = parse_completion_marker(json);
+        assert_eq!(report.status, "success");
+        assert_eq!(
+            result,
+            RunResult::Success,
+            "schema violation silently degrades to success — pinned"
         );
     }
 }
