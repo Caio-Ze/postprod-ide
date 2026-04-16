@@ -20,7 +20,8 @@ use ui::{
     prelude::*,
 };
 
-use crate::config::AutomationEntry;
+use postprod_dashboard_config::AutomationEntry;
+
 use crate::{AutomationRunStatus, Dashboard};
 
 // ---------------------------------------------------------------------------

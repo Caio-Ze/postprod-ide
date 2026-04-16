@@ -4526,6 +4526,7 @@ dependencies = [
  "menu",
  "paths",
  "picker",
+ "postprod_dashboard_config",
  "postprod_rules",
  "postprod_scheduler",
  "project",
@@ -13325,6 +13326,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "postprod_dashboard_config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dirs 4.0.0",
+ "log",
+ "postprod_scheduler",
+ "serde",
+ "tempfile",
+ "toml 0.8.23",
+ "toml_edit 0.22.27",
+]
+
+[[package]]
 name = "postprod_rules"
 version = "0.1.0"
 dependencies = [
@@ -13343,6 +13358,7 @@ dependencies = [
  "parking_lot",
  "picker",
  "platform_title_bar",
+ "postprod_dashboard_config",
  "release_channel",
  "rope",
  "serde",

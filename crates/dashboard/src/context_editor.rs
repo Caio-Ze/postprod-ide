@@ -18,8 +18,9 @@ use ui::{
 use util::ResultExt as _;
 use workspace::Workspace;
 
+use postprod_dashboard_config as config;
+
 use crate::Dashboard;
-use crate::config;
 
 // ---------------------------------------------------------------------------
 // render_context_summary — read-only badge row

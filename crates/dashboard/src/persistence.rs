@@ -3,7 +3,7 @@ use util::ResultExt as _;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::paths::state_dir_for;
+use postprod_dashboard_config::state_dir_for;
 
 // ---------------------------------------------------------------------------
 // Active folder helpers
