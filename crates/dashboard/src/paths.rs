@@ -39,29 +39,12 @@ pub(crate) fn runtime_tools_dir() -> PathBuf {
     tools_dir().join("runtime")
 }
 
-// Per-folder config path helpers — derive from an arbitrary config_root
-pub(crate) fn config_dir_for(config_root: &Path) -> PathBuf {
-    config_root.join("config")
-}
-
-pub(crate) fn state_dir_for(config_root: &Path) -> PathBuf {
-    config_dir_for(config_root).join(".state")
-}
-
-pub(crate) fn tools_config_dir_for(config_root: &Path) -> PathBuf {
-    config_dir_for(config_root).join("tools")
-}
-
-pub(crate) fn automations_dir_for(config_root: &Path) -> PathBuf {
-    config_dir_for(config_root).join("automations")
-}
+// Config-root path helpers (`config_dir_for`, `state_dir_for`, `tools_config_dir_for`,
+// `automations_dir_for`, `agents_toml_path_for`) live in the `postprod_dashboard_config`
+// crate alongside the loaders that consume them.
 
 pub(crate) fn local_tools_dir_for(config_root: &Path) -> PathBuf {
     config_root.join("tools")
-}
-
-pub(crate) fn agents_toml_path_for(config_root: &Path) -> PathBuf {
-    config_dir_for(config_root).join("AGENTS.toml")
 }
 
 pub(crate) fn ensure_workspace_dirs() {
@@ -275,47 +258,8 @@ pub(crate) fn ensure_config_extracted(_cx: &App) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_config_dir_for() {
-        let root = PathBuf::from("/tmp/fake");
-        assert_eq!(config_dir_for(&root), PathBuf::from("/tmp/fake/config"));
-    }
-
-    #[test]
-    fn test_state_dir_for() {
-        let root = PathBuf::from("/tmp/fake");
-        assert_eq!(
-            state_dir_for(&root),
-            PathBuf::from("/tmp/fake/config/.state")
-        );
-    }
-
-    #[test]
-    fn test_tools_config_dir_for() {
-        let root = PathBuf::from("/tmp/fake");
-        assert_eq!(
-            tools_config_dir_for(&root),
-            PathBuf::from("/tmp/fake/config/tools")
-        );
-    }
-
-    #[test]
-    fn test_automations_dir_for() {
-        let root = PathBuf::from("/tmp/fake");
-        assert_eq!(
-            automations_dir_for(&root),
-            PathBuf::from("/tmp/fake/config/automations")
-        );
-    }
-
-    #[test]
-    fn test_agents_toml_path_for() {
-        let root = PathBuf::from("/tmp/fake");
-        assert_eq!(
-            agents_toml_path_for(&root),
-            PathBuf::from("/tmp/fake/config/AGENTS.toml")
-        );
-    }
+    // Tests for config-root path helpers (config_dir_for, state_dir_for, tools_config_dir_for,
+    // automations_dir_for, agents_toml_path_for) live in `postprod_dashboard_config`.
 
     #[test]
     fn test_dir_has_content_empty_dir() -> Result<(), Box<dyn std::error::Error>> {

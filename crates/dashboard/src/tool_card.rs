@@ -11,8 +11,10 @@ use gpui::{
 };
 use ui::{Color, DynamicSpacing, ListItemSpacing, Tooltip, prelude::*};
 
+use postprod_dashboard_config::ToolEntry;
+
 use crate::card::{CardIcon, DashboardCard};
-use crate::config::{ToolEntry, icon_for_tool};
+use crate::config::icon_for_tool;
 
 /// Build a Featured tool card: full-width, accent border + left strip, full
 /// icon, description, params below header, hover-reveal action buttons.

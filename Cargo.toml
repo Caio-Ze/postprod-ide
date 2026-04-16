@@ -148,6 +148,7 @@ members = [
     "crates/outline",
     "crates/outline_panel",
     "crates/panel",
+    "crates/postprod_dashboard_config",
     "crates/postprod_rules",
     "crates/postprod_scheduler",
     "crates/paths",
@@ -412,6 +413,7 @@ panel = { path = "crates/panel" }
 paths = { path = "crates/paths" }
 perf = { path = "tooling/perf" }
 picker = { path = "crates/picker" }
+postprod_dashboard_config = { path = "crates/postprod_dashboard_config" }
 postprod_rules = { path = "crates/postprod_rules" }
 postprod_scheduler = { path = "crates/postprod_scheduler" }
 prettier = { path = "crates/prettier" }

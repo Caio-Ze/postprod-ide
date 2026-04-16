@@ -18,10 +18,12 @@ use workspace::Workspace;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
+use postprod_dashboard_config::{AutomationEntry, PipelineStep, ToolEntry};
+
 use crate::Dashboard;
 use crate::card::{CardIcon, CardRenderContext, DashboardCard};
 use crate::collect_step_groups;
-use crate::config::{AutomationEntry, PipelineStep, ToolEntry, icon_for_automation};
+use crate::config::icon_for_automation;
 
 // ---------------------------------------------------------------------------
 // Step tree — view mode

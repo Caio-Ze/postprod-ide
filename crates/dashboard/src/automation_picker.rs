@@ -13,9 +13,10 @@ use workspace::{ModalView, Workspace, pane};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::config::{AutomationEntry, ToolEntry};
+use postprod_dashboard_config::{self as config, AutomationEntry, ToolEntry, state_dir_for};
+
 use crate::hotkeys::{GlobalHotkeyManagerHandle, ResolvedHotkeyEntry};
-use crate::paths::{resolve_agent_tools_path, resolve_runtime_path, state_dir_for};
+use crate::paths::{resolve_agent_tools_path, resolve_runtime_path};
 use crate::persistence::read_background_tools;
 use crate::{Dashboard, RunDashboardTool, resolve_tool_command};
 
@@ -80,7 +81,7 @@ pub(crate) struct PickerEntry {
 }
 
 impl PickerEntry {
-    pub(crate) fn new_tool(tool: crate::config::ToolEntry, config_root: Option<PathBuf>) -> Self {
+    pub(crate) fn new_tool(tool: config::ToolEntry, config_root: Option<PathBuf>) -> Self {
         Self {
             id: tool.id.clone(),
             label: tool.label.clone(),
@@ -91,7 +92,7 @@ impl PickerEntry {
     }
 
     pub(crate) fn new_automation(
-        automation: crate::config::AutomationEntry,
+        automation: config::AutomationEntry,
         config_root: Option<PathBuf>,
     ) -> Self {
         Self {
@@ -510,20 +511,20 @@ impl PickerDelegate for AutomationPickerDelegate {
             } => {
                 let step = match &entry.kind {
                     PickerEntryKind::Tool(tool) | PickerEntryKind::GlobalShortcutOnly(tool) => {
-                        crate::config::PipelineStep {
+                        config::PipelineStep {
                             automation: None,
                             tool: Some(tool.id.clone()),
                             group: *group,
                         }
                     }
-                    PickerEntryKind::Automation(auto) => crate::config::PipelineStep {
+                    PickerEntryKind::Automation(auto) => config::PipelineStep {
                         automation: Some(auto.id.clone()),
                         tool: None,
                         group: *group,
                     },
                     PickerEntryKind::ContextScript(_) => return,
                 };
-                if let Err(e) = append_step_to_pipeline(pipeline_source_path, &step) {
+                if let Err(e) = config::edit::append_pipeline_step(pipeline_source_path, &step) {
                     log::error!("Failed to write pipeline step: {e}");
                 }
                 // Trigger dashboard reload
@@ -537,7 +538,13 @@ impl PickerDelegate for AutomationPickerDelegate {
                         .unwrap_or_default(),
                     _ => return,
                 };
-                if let Err(e) = append_context_script_to_toml_at(source_path, &script_name) {
+                let label = std::path::Path::new(&script_name)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| script_name.clone());
+                if let Err(e) =
+                    config::edit::append_context_script(source_path, &script_name, &label)
+                {
                     log::error!("Failed to add context script: {e}");
                 }
                 window.dispatch_action(Box::new(crate::ToggleFocus), cx);
@@ -747,60 +754,6 @@ fn spawn_tool_from_picker(
     }
 }
 
-// ---------------------------------------------------------------------------
-// Pipeline step TOML writer
-// ---------------------------------------------------------------------------
-
-fn append_step_to_pipeline(
-    source_path: &Path,
-    step: &crate::config::PipelineStep,
-) -> anyhow::Result<()> {
-    let content = std::fs::read_to_string(source_path)?;
-    let mut doc = content.parse::<toml_edit::DocumentMut>()?;
-
-    let steps = doc
-        .entry("step")
-        .or_insert_with(|| toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
-
-    if let Some(array) = steps.as_array_of_tables_mut() {
-        let mut table = toml_edit::Table::new();
-        if let Some(auto_id) = &step.automation {
-            table.insert("automation", toml_edit::value(auto_id.as_str()));
-        }
-        if let Some(tool_id) = &step.tool {
-            table.insert("tool", toml_edit::value(tool_id.as_str()));
-        }
-        if let Some(group) = step.group {
-            table.insert("group", toml_edit::value(group as i64));
-        }
-        array.push(table);
-    }
-
-    std::fs::write(source_path, doc.to_string())?;
-    Ok(())
-}
-
-fn append_context_script_to_toml_at(source_path: &Path, script_name: &str) -> anyhow::Result<()> {
-    let content = std::fs::read_to_string(source_path)?;
-    let mut doc = content.parse::<toml_edit::DocumentMut>()?;
-
-    let contexts = doc
-        .entry("context")
-        .or_insert_with(|| toml_edit::Item::ArrayOfTables(toml_edit::ArrayOfTables::new()));
-
-    if let Some(array) = contexts.as_array_of_tables_mut() {
-        let label = std::path::Path::new(script_name)
-            .file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| script_name.to_string());
-        let mut table = toml_edit::Table::new();
-        table.insert("source", toml_edit::value("script"));
-        table.insert("script", toml_edit::value(script_name));
-        table.insert("label", toml_edit::value(label.as_str()));
-        table.insert("required", toml_edit::value(false));
-        array.push(table);
-    }
-
-    std::fs::write(source_path, doc.to_string())?;
-    Ok(())
-}
+// Pipeline-step and context-script writers now live in
+// `postprod_dashboard_config::edit` — see Phase 3 of
+// `private/specs/dashboard-functional-extraction.md`.

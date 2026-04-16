@@ -22,11 +22,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use postprod_dashboard_config::{ToolEntry, load_tools_registry, state_dir_for};
+
 use crate::config::{
-    ToolEntry, ensure_global_hotkeys_config, global_hotkeys_toml_path, load_global_hotkeys_config,
-    load_tools_registry,
+    ensure_global_hotkeys_config, global_hotkeys_toml_path, load_global_hotkeys_config,
 };
-use crate::paths::{resolve_agent_tools_path, resolve_runtime_path, state_dir_for, suite_root};
+use crate::paths::{resolve_agent_tools_path, resolve_runtime_path, suite_root};
 use crate::persistence::read_background_tools;
 use crate::resolve_tool_command;
 

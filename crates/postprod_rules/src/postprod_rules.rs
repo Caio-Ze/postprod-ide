@@ -16,6 +16,9 @@ use language_model::{
 use note_store::*;
 use picker::{Picker, PickerDelegate};
 use platform_title_bar::PlatformTitleBar;
+use postprod_dashboard_config::ResolvedAutomationInfo;
+#[cfg(test)]
+use postprod_dashboard_config::ResolvedContextInfo;
 use release_channel::ReleaseChannel;
 use rope::Rope;
 use settings::{ActionSequence, Settings};
@@ -74,30 +77,15 @@ pub enum SelectionTarget {
 }
 
 /// Window operating mode, set at construction.
+///
+/// `Scoped` carries a `ResolvedAutomationInfo` (defined in
+/// `postprod_dashboard_config`), which is the shared cross-crate view of a
+/// dashboard automation with its context paths already resolved.
 pub enum WindowMode {
     /// Card "Edit Prompt" button — picker scoped to one automation.
-    Scoped(AutomationInfo),
+    Scoped(ResolvedAutomationInfo),
     /// Header button / keybinding — browse everything.
     General(Option<SelectionTarget>),
-}
-
-/// Lightweight automation info passed by Dashboard.
-#[derive(Clone, Debug)]
-pub struct AutomationInfo {
-    pub id: String,
-    pub label: String,
-    pub prompt_file: Option<String>,
-    pub contexts: Vec<ContextInfo>,
-    pub skip_default_context: bool,
-}
-
-/// Lightweight context entry info for display in the window.
-#[derive(Clone, Debug)]
-pub struct ContextInfo {
-    pub source_type: String, // "path" or "script"
-    pub label: String,
-    pub resolved_path: PathBuf,
-    pub required: bool,
 }
 
 /// Callbacks for the window to modify TOML context entries via Dashboard.
@@ -154,7 +142,7 @@ pub fn open_postprod_rules(
     language_registry: Arc<LanguageRegistry>,
     inline_assist_delegate: Box<dyn InlineAssistDelegate>,
     config_root: PathBuf,
-    automations: Vec<AutomationInfo>,
+    automations: Vec<ResolvedAutomationInfo>,
     context_callbacks: Option<Arc<ContextCallbacks>>,
     mode: WindowMode,
     cx: &mut App,
@@ -229,7 +217,7 @@ pub struct PostProdRules {
     language_registry: Arc<LanguageRegistry>,
     config_root: PathBuf,
     mode: WindowMode,
-    automations: Vec<AutomationInfo>,
+    automations: Vec<ResolvedAutomationInfo>,
     context_callbacks: Option<Arc<ContextCallbacks>>,
     note_editors: HashMap<NoteId, NoteEditor>,
     file_editors: HashMap<PathBuf, FileEditor>,
@@ -283,7 +271,7 @@ struct PostProdPickerDelegate {
     store: Entity<NoteStore>,
     prompt_files: Vec<PromptFileEntry>,
     default_context_files: Vec<PromptFileEntry>,
-    scoped_automation: Option<AutomationInfo>,
+    scoped_automation: Option<ResolvedAutomationInfo>,
     expanded_folders: collections::HashSet<PathBuf>,
     selected_index: usize,
     filtered_entries: Vec<PostProdPickerEntry>,
@@ -436,7 +424,7 @@ fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
 
 /// Build picker entries for scoped mode (one automation's content).
 fn build_scoped_entries(
-    automation: &AutomationInfo,
+    automation: &ResolvedAutomationInfo,
     prompt_files: &[PromptFileEntry],
     default_context_files: &[PromptFileEntry],
     note_matches: &[NoteMetadata],
@@ -1159,7 +1147,7 @@ impl PostProdRules {
         language_registry: Arc<LanguageRegistry>,
         inline_assist_delegate: Box<dyn InlineAssistDelegate>,
         config_root: PathBuf,
-        automations: Vec<AutomationInfo>,
+        automations: Vec<ResolvedAutomationInfo>,
         context_callbacks: Option<Arc<ContextCallbacks>>,
         mode: WindowMode,
         window: &mut Window,
@@ -1259,7 +1247,7 @@ impl PostProdRules {
     /// If the automation no longer exists, close the window.
     pub fn update_automation(
         &mut self,
-        info: Option<AutomationInfo>,
+        info: Option<ResolvedAutomationInfo>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -2658,7 +2646,7 @@ impl PostProdRules {
     }
 
     /// Find the automation that owns the given prompt file.
-    fn automation_for_prompt_file(&self, path: &Path) -> Option<&AutomationInfo> {
+    fn automation_for_prompt_file(&self, path: &Path) -> Option<&ResolvedAutomationInfo> {
         let filename = path.file_name()?.to_str()?;
         self.automations
             .iter()
@@ -2667,7 +2655,7 @@ impl PostProdRules {
 
     fn render_context_list(
         &self,
-        automation: &AutomationInfo,
+        automation: &ResolvedAutomationInfo,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let auto_id = automation.id.clone();
@@ -3023,7 +3011,7 @@ mod tests {
         std::fs::create_dir_all(&dc_dir).unwrap();
         let dc_files = make_test_default_context(&dc_dir);
 
-        let automation = AutomationInfo {
+        let automation = ResolvedAutomationInfo {
             id: "test-auto".into(),
             label: "Test Auto".into(),
             prompt_file: Some("beta.md".into()),
@@ -3070,18 +3058,18 @@ mod tests {
         std::fs::write(&ctx_file1, "context content").unwrap();
         std::fs::write(&ctx_file2, "#!/bin/bash").unwrap();
 
-        let automation = AutomationInfo {
+        let automation = ResolvedAutomationInfo {
             id: "test-auto".into(),
             label: "Test Auto".into(),
             prompt_file: Some("alpha.md".into()),
             contexts: vec![
-                ContextInfo {
+                ResolvedContextInfo {
                     source_type: "path".into(),
                     label: "context1.md".into(),
                     resolved_path: ctx_file1,
                     required: true,
                 },
-                ContextInfo {
+                ResolvedContextInfo {
                     source_type: "script".into(),
                     label: "context2.sh".into(),
                     resolved_path: ctx_file2,
@@ -3117,7 +3105,7 @@ mod tests {
         std::fs::create_dir_all(&dc_dir).unwrap();
         let dc_files = make_test_default_context(&dc_dir);
 
-        let automation = AutomationInfo {
+        let automation = ResolvedAutomationInfo {
             id: "test-auto".into(),
             label: "Test Auto".into(),
             prompt_file: Some("alpha.md".into()),
@@ -3173,7 +3161,7 @@ mod tests {
         };
         let all_notes = vec![default_note, assigned_note, unrelated_note];
 
-        let automation = AutomationInfo {
+        let automation = ResolvedAutomationInfo {
             id: "test-auto".into(),
             label: "Test Auto".into(),
             prompt_file: Some("alpha.md".into()),
@@ -3205,11 +3193,11 @@ mod tests {
         std::fs::write(folder.join("doc_a.md"), "a").unwrap();
         std::fs::write(folder.join("doc_b.md"), "b").unwrap();
 
-        let automation = AutomationInfo {
+        let automation = ResolvedAutomationInfo {
             id: "test-auto".into(),
             label: "Test Auto".into(),
             prompt_file: None,
-            contexts: vec![ContextInfo {
+            contexts: vec![ResolvedContextInfo {
                 source_type: "path".into(),
                 label: "reference/".into(),
                 resolved_path: folder.clone(),
@@ -3237,11 +3225,11 @@ mod tests {
         let folder = dir.path().join("empty-folder");
         std::fs::create_dir_all(&folder).unwrap();
 
-        let automation = AutomationInfo {
+        let automation = ResolvedAutomationInfo {
             id: "test-auto".into(),
             label: "Test Auto".into(),
             prompt_file: None,
-            contexts: vec![ContextInfo {
+            contexts: vec![ResolvedContextInfo {
                 source_type: "path".into(),
                 label: "empty-folder/".into(),
                 resolved_path: folder.clone(),
