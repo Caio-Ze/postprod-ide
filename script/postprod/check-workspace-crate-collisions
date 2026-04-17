@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# check-workspace-crate-collisions — fail if any fork-owned crate has
+# `use crate::<X>;` where <X> collides with a workspace crate name.
+#
+# Why: dashboard-local `paths` module silently shadowed the workspace
+# `paths` crate via `use crate::paths;` (both exposed `config_dir() -> PathBuf`).
+# The Rust compiler cannot catch this class — both modules type-check identically.
+# This check prevents recurrence across every fork-owned crate.
+#
+# Spec: private/specs/workspace-crate-collision-check.md
+# Exit 0 if clean, 1 if any collision found. Runs in well under 1s.
+
+set -euo pipefail
+
+# Find fork root (this script lives at script/postprod/*).
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+FORK_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+cd "$FORK_ROOT"
+
+# Workspace crate names: every directory under crates/ that contains a
+# Cargo.toml (authoritative — a bare dir without Cargo.toml is not a
+# workspace member, even though Zed's root `members = ["crates/*"]` glob
+# would superficially match it). Dep-free; no cargo/jq required.
+if [ ! -d crates ]; then
+    echo "error: $FORK_ROOT/crates does not exist" >&2
+    exit 2
+fi
+
+WORKSPACE_CRATES=$(find crates -maxdepth 2 -mindepth 2 -name Cargo.toml -type f \
+    | xargs -I{} dirname {} \
+    | xargs -I{} basename {} \
+    | sort -u)
+
+# Fork-owned crates to scan. Two sources:
+#   1. Convention: any `crates/postprod_*` directory is fork-authored.
+#      Auto-picks up new fork crates as long as they follow the prefix.
+#   2. Explicit list: outliers that don't match the convention.
+#      `dashboard` is the only current outlier (historical name).
+#
+# If a new fork-authored crate is added that does NOT follow the
+# `postprod_*` prefix, add it to FORK_CRATES_EXPLICIT below — and also
+# add a FORK_OUR_CHANGES.md Quick Lookup entry per the fork rules.
+FORK_CRATES_EXPLICIT=(
+    "crates/dashboard"
+)
+FORK_CRATES_BY_CONVENTION=()
+for dir in crates/postprod_*; do
+    [ -d "$dir" ] && FORK_CRATES_BY_CONVENTION+=("$dir")
+done
+FORK_CRATES=("${FORK_CRATES_EXPLICIT[@]}" "${FORK_CRATES_BY_CONVENTION[@]}")
+
+# Log the crate list we scanned (to stderr, so a reviewer can eyeball
+# coverage without parsing exit codes).
+printf 'scanning fork-owned crates:' >&2
+for c in "${FORK_CRATES[@]}"; do printf ' %s' "$c" >&2; done
+printf '\n' >&2
+
+FAILURES=0
+
+for crate_dir in "${FORK_CRATES[@]}"; do
+    [ -d "$crate_dir/src" ] || continue
+
+    # Match module-level bare imports only:
+    #   use crate::<name>;
+    #   pub use crate::<name>;
+    # Do NOT match `use crate::<name>::...;` or `use crate::<name>::{...};` —
+    # those don't introduce the bare `<name>` identifier that causes the
+    # shadow. Do NOT match aliased forms (`use crate::foo as bar;`) either.
+    pattern='^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]+crate::[a-z_][a-z0-9_]*[[:space:]]*;'
+
+    while IFS=: read -r file line content; do
+        name=$(echo "$content" | sed -nE 's/^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]+crate::([a-z_][a-z0-9_]*)[[:space:]]*;.*$/\2/p')
+        [ -z "$name" ] && continue
+
+        if echo "$WORKSPACE_CRATES" | grep -Fxq "$name"; then
+            printf 'error: %s:%s — `use crate::%s;` shadows workspace crate `%s`\n' \
+                "$file" "$line" "$name" "$name" >&2
+            printf '  Use named imports (`use crate::%s::{foo, bar};`) or qualify the external crate as `::%s::`.\n' \
+                "$name" "$name" >&2
+            FAILURES=$((FAILURES + 1))
+        fi
+    done < <(grep -rnE "$pattern" "$crate_dir/src/" 2>/dev/null || true)
+done
+
+if [ "$FAILURES" -gt 0 ]; then
+    printf '\n%d workspace-crate-name collision(s) found.\n' "$FAILURES" >&2
+    exit 1
+fi
+
+exit 0
