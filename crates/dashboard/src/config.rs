@@ -78,9 +78,6 @@ struct GlobalHotkeysFile {
 }
 
 pub(crate) fn global_hotkeys_toml_path() -> PathBuf {
-    // `::paths` is the external user-config crate (`~/.config/postprod-ide/`).
-    // Do not shorten to `paths::` — a sibling `crate::paths` module exists and
-    // would silently shadow this, redirecting writes into `~/PostProd_IDE/config/`.
     ::paths::config_dir().join("global-hotkeys.toml")
 }
 
