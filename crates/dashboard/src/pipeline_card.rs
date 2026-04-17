@@ -20,10 +20,10 @@ use std::sync::atomic::Ordering;
 
 use postprod_dashboard_config::{AutomationEntry, PipelineStep, ToolEntry};
 
-use crate::Dashboard;
 use crate::card::{CardIcon, CardRenderContext, DashboardCard};
 use crate::collect_step_groups;
 use crate::config::icon_for_automation;
+use crate::{AutomationRunStatus, Dashboard};
 
 // ---------------------------------------------------------------------------
 // Step tree — view mode
@@ -353,22 +353,42 @@ pub fn render_pipeline_card(
 
     // --- Action buttons (end slot) -------------------------------------------
 
+    let failed_reason = match ctx.run_status {
+        Some(AutomationRunStatus::Failed(reason)) => Some(SharedString::from(reason.clone())),
+        _ => None,
+    };
+
+    let (status_text, status_color) = if failed_reason.is_some() {
+        (SharedString::from("failed"), Color::Error)
+    } else if is_running {
+        (SharedString::from("running"), Color::Accent)
+    } else {
+        (
+            SharedString::from(format!("{} steps", entry.steps.len())),
+            Color::Muted,
+        )
+    };
+
+    let status_label = Label::new(status_text)
+        .color(status_color)
+        .size(LabelSize::XSmall);
+    let status_element: AnyElement = match failed_reason {
+        Some(reason) => h_flex()
+            .id(SharedString::from(format!(
+                "pipeline-failed-{}",
+                entry_id
+            )))
+            .items_center()
+            .child(status_label)
+            .tooltip(Tooltip::text(reason))
+            .into_any_element(),
+        None => status_label.into_any_element(),
+    };
+
     let action_buttons = h_flex()
         .gap_2()
         .items_center()
-        .child(
-            Label::new(if is_running {
-                SharedString::from("running")
-            } else {
-                SharedString::from(format!("{} steps", entry.steps.len()))
-            })
-            .color(if is_running {
-                Color::Accent
-            } else {
-                Color::Muted
-            })
-            .size(LabelSize::XSmall),
-        )
+        .child(status_element)
         .child(
             h_flex()
                 .gap_1()

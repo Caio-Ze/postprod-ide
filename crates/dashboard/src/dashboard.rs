@@ -2845,6 +2845,7 @@ Rules for the completion report:
 
         let sched_controls = self.render_schedule_controls(&entry.id, &schedule_cron, window, cx);
 
+        let run_status = self.automation_status.get(&entry.id);
         let ctx = CardRenderContext {
             entry,
             idx,
@@ -2853,7 +2854,7 @@ Rules for the completion report:
             is_scheduled,
             is_pending_delete,
             entity,
-            run_status: None,
+            run_status,
         };
 
         pipeline_card::render_pipeline_card(
