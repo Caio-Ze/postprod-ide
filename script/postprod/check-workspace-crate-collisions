@@ -31,6 +31,52 @@ WORKSPACE_CRATES=$(find crates -maxdepth 2 -mindepth 2 -name Cargo.toml -type f 
     | xargs -I{} basename {} \
     | sort -u)
 
+# Single source of truth for the detection regex. Used by both the self-test
+# and the main scan so a regex drift can't desync the two.
+PATTERN='^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]+crate::[a-z_][a-z0-9_]*[[:space:]]*;'
+
+# Self-test: prove the detection logic is alive before the real scan.
+# Guards against silent gate breakage — a regex bug, a broken enumeration,
+# or a stale workspace-crate list that made past invocations succeed
+# vacuously. Exit code 3 distinguishes "gate itself is broken" from exit
+# 1 "collision found in fork code". Spec § Follow-on edits, Phase 2.
+self_test() {
+    local positive=(
+        'use crate::paths;'
+        '    use crate::paths;'
+        'pub use crate::paths;'
+    )
+    local negative=(
+        'use crate::paths::config_dir;'
+        'use crate::paths::{a, b};'
+        'use crate::paths as local_paths;'
+    )
+
+    for probe in "${positive[@]}"; do
+        if ! printf '%s\n' "$probe" | grep -qE "$PATTERN"; then
+            printf 'error: collision-check self-test FAILED — pattern did not match known-bad probe: %s\n' "$probe" >&2
+            exit 3
+        fi
+    done
+
+    for probe in "${negative[@]}"; do
+        if printf '%s\n' "$probe" | grep -qE "$PATTERN"; then
+            printf 'error: collision-check self-test FAILED — pattern falsely matched safe probe: %s\n' "$probe" >&2
+            exit 3
+        fi
+    done
+
+    # "paths" is a workspace crate since before the fork; its absence from
+    # the enumerated list would mean the workspace-crate discovery broke
+    # (e.g., find flags changed, Cargo.toml layout changed).
+    if ! printf '%s\n' "$WORKSPACE_CRATES" | grep -Fxq "paths"; then
+        printf 'error: collision-check self-test FAILED — "paths" missing from workspace crate list (enumeration broken?)\n' >&2
+        exit 3
+    fi
+}
+
+self_test
+
 # Fork-owned crates to scan. Two sources:
 #   1. Convention: any `crates/postprod_*` directory is fork-authored.
 #      Auto-picks up new fork crates as long as they follow the prefix.
@@ -60,14 +106,12 @@ FAILURES=0
 for crate_dir in "${FORK_CRATES[@]}"; do
     [ -d "$crate_dir/src" ] || continue
 
-    # Match module-level bare imports only:
+    # Match module-level bare imports only (see PATTERN comment above):
     #   use crate::<name>;
     #   pub use crate::<name>;
-    # Do NOT match `use crate::<name>::...;` or `use crate::<name>::{...};` —
+    # Does NOT match `use crate::<name>::...;` or `use crate::<name>::{...};` —
     # those don't introduce the bare `<name>` identifier that causes the
-    # shadow. Do NOT match aliased forms (`use crate::foo as bar;`) either.
-    pattern='^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]+crate::[a-z_][a-z0-9_]*[[:space:]]*;'
-
+    # shadow. Does NOT match aliased forms (`use crate::foo as bar;`) either.
     while IFS=: read -r file line content; do
         name=$(echo "$content" | sed -nE 's/^[[:space:]]*(pub[[:space:]]+)?use[[:space:]]+crate::([a-z_][a-z0-9_]*)[[:space:]]*;.*$/\2/p')
         [ -z "$name" ] && continue
@@ -79,7 +123,7 @@ for crate_dir in "${FORK_CRATES[@]}"; do
                 "$name" "$name" >&2
             FAILURES=$((FAILURES + 1))
         fi
-    done < <(grep -rnE "$pattern" "$crate_dir/src/" 2>/dev/null || true)
+    done < <(grep -rnE "$PATTERN" "$crate_dir/src/" 2>/dev/null || true)
 done
 
 if [ "$FAILURES" -gt 0 ]; then
