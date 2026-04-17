@@ -714,7 +714,29 @@ impl Dashboard {
                 "skip_chain": false,
                 "message": ""
             });
-            std::fs::write(&pipeline_marker, report.to_string()).log_err();
+            if let Err(write_err) = std::fs::write(&pipeline_marker, report.to_string()) {
+                // Marker is the only disk signal that the pipeline finished;
+                // dropping the error silently leaves downstream consumers and
+                // the UI with no evidence the run ever completed. Surface it
+                // into automation_status keyed by pipeline_id so the failure
+                // is captured in the data model (KNOWN-BUGS 2026-04-16).
+                // Pipeline cards do not consult automation_status today, so the
+                // failure is not yet visible on the card itself — that UI wiring
+                // is a follow-up; the important change here is eliminating the
+                // silent drop.
+                log::error!(
+                    "Pipeline '{pipeline_id}': failed to write completion marker at {}: {write_err}",
+                    pipeline_marker.display()
+                );
+                let failed_id = pipeline_id.clone();
+                let reason = format!("Failed to write completion marker: {write_err}");
+                this.update(cx, |dashboard, cx| {
+                    dashboard
+                        .automation_status
+                        .insert(failed_id, AutomationRunStatus::Failed(reason));
+                    cx.notify();
+                }).log_err();
+            }
 
             // Remove from active set and clean up cancel flag
             this.update(cx, |dashboard, cx| {
