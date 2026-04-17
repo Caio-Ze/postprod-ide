@@ -21,3 +21,13 @@ if [[ -z "${GITHUB_ACTIONS+x}" ]]; then
     buf lint crates/proto/proto
     buf format --diff --exit-code crates/proto/proto
 fi
+
+# PostProd fork: workspace-crate-name collision check. Runs in local and CI.
+# Intentional deviation from the `which <tool> || exit 0` pattern above —
+# this is a correctness gate (not a developer-convenience tool), so a missing
+# script must not silently disable it. `if [ -x ]` runs when the script is
+# present and executable, otherwise continues silently (e.g., pristine
+# checkouts pre-install). See private/specs/workspace-crate-collision-check.md.
+if [ -x "$(dirname "$0")/postprod/check-workspace-crate-collisions" ]; then
+    "$(dirname "$0")/postprod/check-workspace-crate-collisions"
+fi
