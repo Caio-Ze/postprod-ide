@@ -43,17 +43,16 @@ pub fn render_watchers_section(
     }
 
     let is_open = !collapsed_sections.contains(SECTION_KEY);
-    let toggle_entity = entity.clone();
     let toggle_id = SECTION_KEY.to_string();
     let disclosure = Disclosure::new(SharedString::from("disc-watchers"), is_open).on_click(
         move |_, _, cx| {
-            toggle_entity
+            entity
                 .update(cx, |this, cx| this.toggle_section(&toggle_id, cx))
                 .log_err();
         },
     );
 
-    let edit_toml_chip = render_edit_toml_chip(watchers_dir.clone(), workspace.clone(), cx);
+    let edit_toml_chip = render_edit_toml_chip(watchers_dir, workspace.clone(), cx);
 
     let header = h_flex()
         .px_1()
