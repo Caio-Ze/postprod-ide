@@ -24,14 +24,15 @@ use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::Context as _;
 use chrono::Utc;
 use fs::{Fs, PathEventKind};
 use futures::StreamExt;
-use gpui::{App, AppContext as _, Task};
+use gpui::{App, AppContext as _, BackgroundExecutor, Task};
 use postprod_dashboard_config::watcher_config::{TriggerKind, WatcherConfig, WatcherEmit};
 
 // ---------------------------------------------------------------------------
@@ -443,6 +444,7 @@ impl WatcherRuntime {
         // Blanket stop-all (drop cancels each task's spawn).
         self.tasks.clear();
 
+        let bg = cx.background_executor().clone();
         for cfg in configs {
             if !cfg.enabled {
                 continue;
@@ -456,6 +458,7 @@ impl WatcherRuntime {
                         fs.clone(),
                         bus_root.clone(),
                         self.status_tx.clone(),
+                        bg.clone(),
                         cx,
                     );
                     self.tasks.insert(id, task);
@@ -488,13 +491,23 @@ fn spawn_watcher_task(
     fs: Arc<dyn Fs>,
     bus_root: PathBuf,
     status_tx: smol::channel::Sender<(WatcherId, WatcherStatus)>,
+    bg: BackgroundExecutor,
     cx: &App,
 ) -> Task<()> {
     cx.background_spawn(async move {
-        if let Err(err) = run_watcher(&id, &cfg, fs, bus_root, &status_tx).await {
+        if let Err(err) = run_watcher(&id, &cfg, fs, bus_root, &status_tx, bg).await {
             let _ = status_tx.try_send((id, WatcherStatus::Error(err.to_string())));
         }
     })
+}
+
+/// Per-path pending event awaiting trailing-edge fire. Captured in the
+/// debounce map under `(seq, PendingEntry)` so the deferred fire task can
+/// verify it's still the latest before emitting.
+#[derive(Clone)]
+struct PendingEntry {
+    kind: PathEventKind,
+    size_bytes: u64,
 }
 
 async fn run_watcher(
@@ -503,6 +516,7 @@ async fn run_watcher(
     fs: Arc<dyn Fs>,
     bus_root: PathBuf,
     status_tx: &smol::channel::Sender<(WatcherId, WatcherStatus)>,
+    bg: BackgroundExecutor,
 ) -> anyhow::Result<()> {
     let watched_folder = resolve_watched_path(&cfg.path);
     if !fs.is_dir(&watched_folder).await {
@@ -521,18 +535,34 @@ async fn run_watcher(
 
     let (mut events, _handle) = fs.watch(&watched_folder, FS_WATCH_LATENCY).await;
 
-    // Per-path debounce: maps PathBuf → "next eligible emit time."
-    // Leading-edge: the first event in a window emits immediately, the
-    // remainder are suppressed until the window closes. Rationale: simpler
-    // than trailing-edge with a dedicated timer task, and v1's primary
-    // need (collapse atomic-write fire-storms) is satisfied.
-    let mut last_emit: HashMap<PathBuf, SystemTime> = HashMap::new();
+    // Trailing-edge debounce per spec § "Trigger semantics":
+    // "collapses events on the same path within the window into one. The
+    //  last event in the window fires."
+    //
+    // For each fs event we (a) update `pending[path]` with the latest data
+    // and a fresh sequence number, then (b) spawn a detached timer task
+    // that, after `debounce_ms`, checks whether its sequence is still the
+    // latest. Earlier events in a burst see their seq superseded and exit
+    // without emitting; only the last event's task fires. This makes
+    // template variables (`{size_mb}`, `{path}`, etc.) reflect the FINAL
+    // state of the file after the burst.
+    //
+    // Detached tasks keep the pending Arc<Mutex<…>> alive until the last
+    // one fires — even if this watcher gets reconciled away mid-window
+    // they will still emit. That's intentional: it preserves "the last
+    // event in the window fires" guarantee across a config reload.
+    let pending: Arc<Mutex<HashMap<PathBuf, (u64, PendingEntry)>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+    let seq_counter = Arc::new(AtomicU64::new(0));
     let debounce = Duration::from_millis(cfg.trigger.debounce_ms);
+    let emits = Arc::new(cfg.emits.clone());
+    let watched_folder = Arc::new(watched_folder);
+    let bus_root = Arc::new(bus_root);
 
     while let Some(batch) = events.next().await {
         for event in batch {
             // Filter to immediate children of the watched folder (non-recursive).
-            if event.path.parent() != Some(&watched_folder) {
+            if event.path.parent() != Some(watched_folder.as_path()) {
                 continue;
             }
             let Some(name) = event.path.file_name().and_then(|n| n.to_str()) else {
@@ -559,7 +589,9 @@ async fn run_watcher(
                 continue;
             }
 
-            // Size + min_size_mb filter (skipped on delete).
+            // Size + min_size_mb filter (skipped on delete). For
+            // file_modified bursts we re-stat per event so the trailing
+            // emit reflects the current size.
             let (size_bytes, exists) = if effective_kind == PathEventKind::Removed {
                 (0u64, false)
             } else {
@@ -575,23 +607,56 @@ async fn run_watcher(
                 }
             }
 
-            // Debounce: suppress repeats on the same path inside the window.
-            let now = SystemTime::now();
-            if let Some(prev) = last_emit.get(&event.path) {
-                if now.duration_since(*prev).unwrap_or_default() < debounce {
-                    continue;
+            // Update pending entry (last-write-wins via fresh seq).
+            let seq = seq_counter.fetch_add(1, Ordering::SeqCst);
+            {
+                let mut map = pending.lock().unwrap_or_else(|p| p.into_inner());
+                map.insert(
+                    event.path.clone(),
+                    (
+                        seq,
+                        PendingEntry {
+                            kind: effective_kind,
+                            size_bytes,
+                        },
+                    ),
+                );
+            }
+
+            // Spawn detached deferred-fire task. Uses gpui's clock-controlled
+            // timer so tests can advance time deterministically with
+            // `cx.executor().advance_clock(...)`.
+            let pending = pending.clone();
+            let path = event.path.clone();
+            let watched_folder = watched_folder.clone();
+            let bus_root = bus_root.clone();
+            let emits = emits.clone();
+            let id = id.clone();
+            let status_tx = status_tx.clone();
+            let timer_bg = bg.clone();
+            bg.spawn(async move {
+                timer_bg.timer(debounce).await;
+                let to_fire = {
+                    let mut map = pending.lock().unwrap_or_else(|p| p.into_inner());
+                    match map.get(&path) {
+                        Some((cur_seq, _)) if *cur_seq == seq => map.remove(&path),
+                        _ => None,
+                    }
+                };
+                if let Some((_, entry)) = to_fire {
+                    let vars = TemplateVars::for_event(
+                        &path,
+                        watched_folder.as_path(),
+                        entry.kind,
+                        entry.size_bytes,
+                    );
+                    for emit in emits.iter() {
+                        emit_one(bus_root.as_path(), emit, &vars);
+                    }
+                    let _ = status_tx.try_send((id, WatcherStatus::LastEmit(Utc::now())));
                 }
-            }
-            last_emit.insert(event.path.clone(), now);
-
-            let vars =
-                TemplateVars::for_event(&event.path, &watched_folder, effective_kind, size_bytes);
-
-            for emit in &cfg.emits {
-                emit_one(&bus_root, emit, &vars);
-            }
-
-            let _ = status_tx.try_send((id.clone(), WatcherStatus::LastEmit(Utc::now())));
+            })
+            .detach();
         }
     }
     Ok(())
