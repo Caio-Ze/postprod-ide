@@ -27,7 +27,7 @@ use postprod_dashboard_config::{ToolEntry, load_tools_registry, state_dir_for};
 use crate::config::{
     ensure_global_hotkeys_config, global_hotkeys_toml_path, load_global_hotkeys_config,
 };
-use crate::paths::{resolve_agent_tools_path, resolve_runtime_path, suite_root};
+use crate::dashboard_paths::{resolve_agent_tools_path, resolve_runtime_path, suite_root};
 use crate::persistence::read_background_tools;
 use crate::resolve_tool_command;
 

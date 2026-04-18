@@ -78,7 +78,7 @@ struct GlobalHotkeysFile {
 }
 
 pub(crate) fn global_hotkeys_toml_path() -> PathBuf {
-    ::paths::config_dir().join("global-hotkeys.toml")
+    paths::config_dir().join("global-hotkeys.toml")
 }
 
 pub(crate) fn ensure_global_hotkeys_config() {

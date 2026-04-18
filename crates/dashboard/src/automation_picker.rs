@@ -16,7 +16,7 @@ use std::sync::Arc;
 use postprod_dashboard_config::{self as config, AutomationEntry, ToolEntry, state_dir_for};
 
 use crate::hotkeys::{GlobalHotkeyManagerHandle, ResolvedHotkeyEntry};
-use crate::paths::{resolve_agent_tools_path, resolve_runtime_path};
+use crate::dashboard_paths::{resolve_agent_tools_path, resolve_runtime_path};
 use crate::persistence::read_background_tools;
 use crate::{Dashboard, RunDashboardTool, resolve_tool_command};
 
@@ -140,7 +140,8 @@ pub(crate) fn build_picker_entries(workspace: &Workspace, cx: &App) -> Vec<Picke
     });
 
     let (current_tools, current_automations, current_config_root) =
-        dashboard_data.unwrap_or_else(|| (Vec::new(), Vec::new(), crate::paths::suite_root()));
+        dashboard_data
+            .unwrap_or_else(|| (Vec::new(), Vec::new(), crate::dashboard_paths::suite_root()));
 
     let hotkey_entries: Vec<ResolvedHotkeyEntry> = cx
         .try_global::<GlobalHotkeyManagerHandle>()
@@ -554,7 +555,7 @@ impl PickerDelegate for AutomationPickerDelegate {
                     let config_root = entry
                         .config_root
                         .clone()
-                        .unwrap_or_else(crate::paths::suite_root);
+                        .unwrap_or_else(crate::dashboard_paths::suite_root);
                     spawn_tool_from_picker(tool, &config_root, &self.workspace, window, cx);
                 }
                 PickerEntryKind::Automation(auto) => {
