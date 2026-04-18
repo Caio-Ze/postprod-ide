@@ -7,6 +7,7 @@ mod context_editor;
 mod event_inbox;
 mod folder_bar;
 mod hotkeys;
+mod popup_inbox;
 mod dashboard_paths;
 pub(crate) mod persistence;
 mod pipeline_card;
@@ -305,6 +306,11 @@ pub struct Dashboard {
     // The inbox owns its own `_watch_task`; this field's lifetime keeps
     // the watch subscription alive (drop = unsubscribe).
     _notification_inbox: event_inbox::DashboardNotificationInbox,
+    // Event-bus reader for `kind = "notification.popup"`. Peer of
+    // `_notification_inbox` — same delivery mechanism, OS-level popup window
+    // rendering. `pub(crate)` because `popup_inbox.rs` re-enters via
+    // `dashboard.popup_inbox.dispatch_event(...)` from a fs-watch task.
+    pub(crate) popup_inbox: popup_inbox::DashboardPopupInbox,
     // Folder watchers (`postprod_watchers`). `watcher_runtime` owns the
     // running per-watcher tasks; reconciled by `_watchers_reload_task`
     // every 10s (no-op when the config hash is unchanged, per D19).
@@ -876,6 +882,11 @@ impl Dashboard {
                 cx,
             );
 
+            // Peer inbox for `kind = "notification.popup"`. Same delivery
+            // mechanism as `notification_inbox`; renders an OS-level popup
+            // window instead of an in-app toast.
+            let popup_inbox = popup_inbox::DashboardPopupInbox::new(fs.clone(), cx);
+
             // Folder watchers — runtime + status listener + 10s reload task.
             // Reload mirrors `_automations_reload_task` (uncondtional 10s
             // tick); reconcile inside is hash-gated per D19 so the kernel
@@ -972,6 +983,7 @@ impl Dashboard {
                 _tools_reload_task: tools_reload_task,
                 _agents_reload_task: agents_reload_task,
                 _notification_inbox: notification_inbox,
+                popup_inbox,
                 watcher_runtime,
                 watcher_configs,
                 watcher_statuses: HashMap::new(),

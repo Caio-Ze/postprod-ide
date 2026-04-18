@@ -29,6 +29,7 @@ paths.workspace = true
 picker.workspace = true
 postprod_dashboard_config.workspace = true
 postprod_events.workspace = true
+postprod_popup_notification.workspace = true
 postprod_rules.workspace = true
 postprod_scheduler.workspace = true
 postprod_watchers.workspace = true

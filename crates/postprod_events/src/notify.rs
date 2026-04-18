@@ -18,6 +18,12 @@ pub const MAX_BODY_CHARS: usize = 512;
 /// The `notification` kind discriminator string.
 pub const NOTIFICATION_KIND: &str = "notification";
 
+/// The `notification.popup` kind discriminator string. Peer of
+/// [`NOTIFICATION_KIND`] (not a subtype — the dot is a namespace separator).
+/// Events of this kind land in `events/notification.popup/` and are consumed
+/// by the dashboard's `DashboardPopupInbox`.
+pub const NOTIFICATION_POPUP_KIND: &str = "notification.popup";
+
 /// Best-effort info notification. Errors swallowed.
 pub fn info(title: &str, body: &str) {
     emit("info", title, body, None);
@@ -126,6 +132,91 @@ fn truncate_chars(s: &str, max_chars: usize) -> String {
         return s.to_string();
     }
     s.chars().take(max_chars).collect()
+}
+
+// ---------------------------------------------------------------------------
+// notification.popup
+//
+// Peer kind. Same envelope schema as `notification`; distinct payload — adds
+// an optional `display` field selecting primary vs all screens. Separate
+// decoder keeps dispatch logic branch-free in the dashboard consumer.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NotificationPopupPayload {
+    pub title: String,
+    pub body: String,
+    pub severity: String,
+    /// Optional, defaults to `"primary"`. Known values: `"primary"`, `"all"`.
+    /// Unknown strings coerce to [`PopupDisplay::Primary`] on decode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<String>,
+}
+
+/// Which displays to open a popup on. Parsed from the payload's optional
+/// `display` string. Unknown values coerce to [`Self::Primary`] per the
+/// forward-compat rule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PopupDisplay {
+    Primary,
+    AllScreens,
+}
+
+impl PopupDisplay {
+    /// Parses a `display` payload string. Missing or unknown values coerce
+    /// to [`Self::Primary`].
+    pub fn parse(s: Option<&str>) -> Self {
+        match s {
+            Some("all") => Self::AllScreens,
+            // `"primary"`, missing, or anything else.
+            _ => Self::Primary,
+        }
+    }
+}
+
+/// Parsed-and-validated popup notification. Built by
+/// [`decode_popup_notification`] from `(EventEnvelope, event_id)`. Mirrors
+/// [`NotificationEvent`] but carries a [`PopupDisplay`] instead of the
+/// toast-only fields.
+#[derive(Debug, Clone)]
+pub struct NotificationPopupEvent {
+    pub title: String,
+    pub body: String,
+    pub severity: Severity,
+    pub display: PopupDisplay,
+    pub source: Option<String>,
+    pub event_id: String,
+}
+
+/// Deserialize the `notification.popup` payload from an envelope plus the
+/// source filename stem. Returns `None` if:
+///
+/// - the envelope kind is not `"notification.popup"`, or
+/// - the payload is malformed (missing required `title` / `body` / `severity`).
+///
+/// Applies [`MAX_TITLE_CHARS`] / [`MAX_BODY_CHARS`] caps post-parse; coerces
+/// unknown severity strings to [`Severity::Info`] and unknown/missing
+/// `display` strings to [`PopupDisplay::Primary`].
+pub fn decode_popup_notification(
+    env: EventEnvelope,
+    event_id: String,
+) -> Option<NotificationPopupEvent> {
+    if env.kind != NOTIFICATION_POPUP_KIND {
+        return None;
+    }
+    let payload: NotificationPopupPayload = serde_json::from_value(env.payload).ok()?;
+    let title = truncate_chars(&payload.title, MAX_TITLE_CHARS);
+    let body = truncate_chars(&payload.body, MAX_BODY_CHARS);
+    let severity = Severity::parse(&payload.severity);
+    let display = PopupDisplay::parse(payload.display.as_deref());
+    Some(NotificationPopupEvent {
+        title,
+        body,
+        severity,
+        display,
+        source: env.source,
+        event_id,
+    })
 }
 
 #[cfg(test)]
@@ -286,5 +377,104 @@ mod tests {
         }));
         env.kind = "bounce.completed".into();
         assert!(decode_notification(env, "id".to_string()).is_none());
+    }
+
+    // --- notification.popup decoder -----------------------------------------
+
+    fn make_popup_envelope(payload: serde_json::Value) -> EventEnvelope {
+        EventEnvelope {
+            schema: ENVELOPE_SCHEMA,
+            kind: NOTIFICATION_POPUP_KIND.to_string(),
+            timestamp: "2026-04-18T00:00:00-03:00".to_string(),
+            source: Some("test".to_string()),
+            payload,
+        }
+    }
+
+    #[test]
+    fn popup_decode_well_formed_returns_some() {
+        let env = make_popup_envelope(serde_json::json!({
+            "title": "Stale bounce",
+            "body": "foo.wav older than 10min",
+            "severity": "warning",
+            "display": "all",
+        }));
+        let event = decode_popup_notification(env, "pid1".to_string()).expect("Some");
+        assert_eq!(event.title, "Stale bounce");
+        assert_eq!(event.body, "foo.wav older than 10min");
+        assert_eq!(event.severity, Severity::Warning);
+        assert_eq!(event.display, PopupDisplay::AllScreens);
+        assert_eq!(event.event_id, "pid1");
+    }
+
+    #[test]
+    fn popup_decode_missing_display_defaults_to_primary() {
+        let env = make_popup_envelope(serde_json::json!({
+            "title": "t",
+            "body": "b",
+            "severity": "info",
+        }));
+        let event = decode_popup_notification(env, "id".to_string()).expect("Some");
+        assert_eq!(event.display, PopupDisplay::Primary);
+    }
+
+    #[test]
+    fn popup_decode_unknown_display_coerces_to_primary() {
+        let env = make_popup_envelope(serde_json::json!({
+            "title": "t",
+            "body": "b",
+            "severity": "info",
+            "display": "frobnicate",
+        }));
+        let event = decode_popup_notification(env, "id".to_string()).expect("Some");
+        assert_eq!(event.display, PopupDisplay::Primary);
+    }
+
+    #[test]
+    fn popup_decode_missing_required_returns_none() {
+        // Missing title
+        let env = make_popup_envelope(serde_json::json!({"body": "b", "severity": "info"}));
+        assert!(decode_popup_notification(env, "id".to_string()).is_none());
+        // Missing body
+        let env = make_popup_envelope(serde_json::json!({"title": "t", "severity": "info"}));
+        assert!(decode_popup_notification(env, "id".to_string()).is_none());
+        // Missing severity
+        let env = make_popup_envelope(serde_json::json!({"title": "t", "body": "b"}));
+        assert!(decode_popup_notification(env, "id".to_string()).is_none());
+    }
+
+    #[test]
+    fn popup_decode_unknown_severity_coerces_to_info() {
+        let env = make_popup_envelope(serde_json::json!({
+            "title": "t",
+            "body": "b",
+            "severity": "critical",
+        }));
+        let event = decode_popup_notification(env, "id".to_string()).expect("Some");
+        assert_eq!(event.severity, Severity::Info);
+    }
+
+    #[test]
+    fn popup_decode_wrong_kind_returns_none() {
+        // A notification envelope must not be accepted by the popup decoder.
+        let mut env = make_popup_envelope(serde_json::json!({
+            "title": "t", "body": "b", "severity": "info",
+        }));
+        env.kind = NOTIFICATION_KIND.into();
+        assert!(decode_popup_notification(env, "id".to_string()).is_none());
+    }
+
+    #[test]
+    fn popup_decode_truncates_title_and_body() {
+        let big_title = "x".repeat(MAX_TITLE_CHARS + 10);
+        let big_body = "y".repeat(MAX_BODY_CHARS + 100);
+        let env = make_popup_envelope(serde_json::json!({
+            "title": big_title,
+            "body": big_body,
+            "severity": "info",
+        }));
+        let event = decode_popup_notification(env, "id".to_string()).expect("Some");
+        assert_eq!(event.title.chars().count(), MAX_TITLE_CHARS);
+        assert_eq!(event.body.chars().count(), MAX_BODY_CHARS);
     }
 }
