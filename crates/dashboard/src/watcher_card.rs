@@ -14,8 +14,8 @@ use postprod_dashboard_config::watcher_config::{
 };
 use postprod_watchers::{WatcherId, WatcherStatus};
 use ui::{
-    ButtonLike, ButtonSize, Color, Disclosure, Divider, DividerColor, Icon, IconName, IconSize,
-    Label, LabelSize, Tooltip, h_flex, prelude::*, v_flex,
+    ButtonLike, ButtonSize, Color, Disclosure, Divider, DividerColor, Icon, IconButton, IconName,
+    IconSize, Label, LabelSize, Tooltip, h_flex, prelude::*, v_flex,
 };
 use util::ResultExt as _;
 use workspace::{OpenOptions, Workspace};
@@ -76,7 +76,13 @@ pub fn render_watchers_section(
     let mut body = v_flex().w_full().gap_1().child(header);
 
     for entry in watchers {
-        body = body.child(render_card(entry, statuses, workspace.clone(), cx));
+        body = body.child(render_card(
+            entry,
+            statuses,
+            config_root,
+            workspace.clone(),
+            cx,
+        ));
     }
 
     body = body.child(render_add_tile(config_root.to_path_buf(), workspace.clone(), cx));
@@ -119,11 +125,15 @@ fn render_edit_toml_chip(
 fn render_card(
     entry: &Result<WatcherConfig, LoadError>,
     statuses: &HashMap<WatcherId, WatcherStatus>,
+    config_root: &Path,
     workspace: WeakEntity<Workspace>,
     cx: &App,
 ) -> impl IntoElement {
     match entry {
-        Ok(cfg) => render_ok_card(cfg, statuses, workspace, cx).into_any_element(),
+        Ok(cfg) => {
+            let toml_path = watchers_config_dir_for(config_root).join(format!("{}.toml", cfg.id));
+            render_ok_card(cfg, statuses, toml_path, workspace, cx).into_any_element()
+        }
         Err(err) => render_err_card(err, workspace, cx).into_any_element(),
     }
 }
@@ -131,8 +141,9 @@ fn render_card(
 fn render_ok_card(
     cfg: &WatcherConfig,
     statuses: &HashMap<WatcherId, WatcherStatus>,
+    toml_path: PathBuf,
     workspace: WeakEntity<Workspace>,
-    cx: &App,
+    _cx: &App,
 ) -> impl IntoElement {
     let id = WatcherId(cfg.id.clone());
     let status = statuses.get(&id);
@@ -154,7 +165,7 @@ fn render_ok_card(
 
     let label = cfg.label.clone();
     let path = cfg.path.clone();
-    let id_str = cfg.id.clone();
+    let gear_id = format!("watcher-gear-{}", cfg.id);
 
     h_flex()
         .id(SharedString::from(format!("watcher-card-{}", cfg.id)))
@@ -179,13 +190,13 @@ fn render_ok_card(
                 .color(status_color)
                 .size(LabelSize::XSmall),
         )
-        .child(render_gear(id_str, workspace, cx))
+        .child(open_toml_gear(gear_id, toml_path, workspace))
 }
 
 fn render_err_card(
     err: &LoadError,
     workspace: WeakEntity<Workspace>,
-    cx: &App,
+    _cx: &App,
 ) -> impl IntoElement {
     let path = err.path.clone();
     let detail = err.detail.clone();
@@ -197,6 +208,7 @@ fn render_err_card(
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| display_path.clone());
+    let gear_id = format!("watcher-err-gear-{id}");
 
     h_flex()
         .id(SharedString::from(format!("watcher-err-card-{id}")))
@@ -216,31 +228,31 @@ fn render_err_card(
                 ),
         )
         .child(gpui::div().flex_grow())
-        .child(render_gear_for_path(path, workspace, cx))
+        .child(open_toml_gear(gear_id, path, workspace))
 }
 
-fn render_gear(
-    watcher_id: String,
+/// Gear icon → opens the watcher's TOML in the editor. Per spec § "UI
+/// shape": "Gear ⚙: opens the watcher's TOML in Zed (same affordance as
+/// the section-level [T] Edit TOML, scoped to this one file)."
+fn open_toml_gear(
+    button_id: String,
+    toml_path: PathBuf,
     workspace: WeakEntity<Workspace>,
-    _cx: &App,
 ) -> impl IntoElement {
-    // Placeholder: gear icon click opens the specific TOML for this watcher.
-    // The watcher_id is used to derive the TOML path: <id>.toml under
-    // watchers_config_dir_for(config_root) — but we don't have config_root
-    // in this scope, so the click handler resolves it via the dashboard
-    // entity (out of scope for this micro-helper). For now, return a
-    // tooltip-only icon; the section-level "Edit TOML" chip handles the
-    // discoverability path.
-    let _ = (watcher_id, workspace);
-    Icon::new(IconName::Settings).color(Color::Muted).size(IconSize::Small)
-}
-
-fn render_gear_for_path(
-    _path: PathBuf,
-    _workspace: WeakEntity<Workspace>,
-    _cx: &App,
-) -> impl IntoElement {
-    Icon::new(IconName::Settings).color(Color::Muted).size(IconSize::Small)
+    IconButton::new(SharedString::from(button_id), IconName::Settings)
+        .icon_size(IconSize::Small)
+        .icon_color(Color::Muted)
+        .tooltip(Tooltip::text("Open this watcher's TOML"))
+        .on_click(move |_, window, cx| {
+            let toml_path = toml_path.clone();
+            workspace
+                .update(cx, |workspace, cx| {
+                    workspace
+                        .open_abs_path(toml_path, OpenOptions::default(), window, cx)
+                        .detach();
+                })
+                .log_err();
+        })
 }
 
 fn render_add_tile(

@@ -232,6 +232,14 @@ async fn reconcile_on_change_restarts_all_tasks(cx: &mut TestAppContext) {
     );
 }
 
+/// Helper: cross the trailing-edge debounce window. `cfg` defaults
+/// `debounce_ms = 100`; advancing 150ms is safely past it for tests that
+/// don't customize the window.
+fn drain_debounce(cx: &mut TestAppContext) {
+    cx.executor().advance_clock(Duration::from_millis(150));
+    cx.run_until_parked();
+}
+
 // Test 29: file-create matching trigger+glob+min_size produces exactly
 // one bus emit with the expanded payload.
 #[gpui::test]
@@ -248,6 +256,7 @@ async fn file_create_matching_trigger_emits_once(cx: &mut TestAppContext) {
     let target = PathBuf::from(WATCHED).join("foo.wav");
     fs.write(&target, b"hello").await.unwrap();
     cx.run_until_parked();
+    drain_debounce(cx);
 
     let pending = read_pending(bus.path(), "notification");
     assert_eq!(pending.len(), 1, "expected one emit, got {pending:?}");
@@ -278,6 +287,7 @@ async fn glob_filter_excludes_non_matching_files(cx: &mut TestAppContext) {
         .await
         .unwrap();
     cx.run_until_parked();
+    drain_debounce(cx);
 
     assert_eq!(count_pending(bus.path(), "notification"), 0);
 }
@@ -314,6 +324,7 @@ async fn multiple_emits_all_fire(cx: &mut TestAppContext) {
         .await
         .unwrap();
     cx.run_until_parked();
+    drain_debounce(cx);
 
     let pending = read_pending(bus.path(), "notification");
     assert_eq!(pending.len(), 2, "both emits should fire — got {pending:?}");
@@ -355,6 +366,7 @@ async fn unknown_emit_kind_routed_to_own_subdir(cx: &mut TestAppContext) {
         .await
         .unwrap();
     cx.run_until_parked();
+    drain_debounce(cx);
 
     assert_eq!(count_pending(bus.path(), "automation.trigger"), 1);
     assert_eq!(count_pending(bus.path(), "notification"), 0);
@@ -409,6 +421,7 @@ async fn subdirectory_files_ignored(cx: &mut TestAppContext) {
         .await
         .unwrap();
     cx.run_until_parked();
+    drain_debounce(cx);
 
     assert_eq!(count_pending(bus.path(), "notification"), 0);
 }
@@ -437,19 +450,32 @@ async fn atomic_write_sequence_emits_once_for_final(cx: &mut TestAppContext) {
     cx.run_until_parked();
     fs.rename(tmp, final_path, Default::default()).await.unwrap();
     cx.run_until_parked();
+    drain_debounce(cx);
 
     assert_eq!(count_pending(bus.path(), "notification"), 1);
 }
 
-// Test 30: debounce — two events on same path within debounce_ms produce
-// one emit; outside the window, two emits.
+// Test 30: trailing-edge debounce. Two events on the same path within
+// `debounce_ms` collapse into ONE emit, and crucially that emit reports
+// the LATEST file state (per spec: "the last event in the window fires").
+// Three writes after the window → second emit, again with the latest data.
 #[gpui::test]
-async fn debounce_collapses_repeats_within_window(cx: &mut TestAppContext) {
+async fn debounce_trailing_edge_collapses_to_latest(cx: &mut TestAppContext) {
     let bus = TempDir::new().unwrap();
     let fs = fresh_fs(cx).await;
     let mut runtime = WatcherRuntime::new();
     let mut c = cfg("a", TriggerKind::Any, "*");
     c.trigger.debounce_ms = 200;
+    // Make body include `{size_bytes}` so we can prove the trailing emit
+    // sees the LATEST size.
+    c.emits[0].payload = toml::from_str(
+        r#"
+        title = "t"
+        body = "size {size_bytes}"
+        severity = "info"
+    "#,
+    )
+    .unwrap();
     cx.update(|cx| {
         runtime.reconcile(
             vec![c],
@@ -461,26 +487,41 @@ async fn debounce_collapses_repeats_within_window(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     let target = Path::new("/watched/foo.wav");
-    fs.write(target, b"v1").await.unwrap();
+    fs.write(target, b"AA").await.unwrap(); // 2 bytes
     cx.run_until_parked();
-    // Within debounce window — should be suppressed.
-    fs.write(target, b"v2").await.unwrap();
+    fs.write(target, b"BBBB").await.unwrap(); // 4 bytes — should win
     cx.run_until_parked();
 
+    // Trailing-edge: nothing has fired yet — both deferred timers are
+    // still waiting for the debounce window to close.
     let initial = count_pending(bus.path(), "notification");
-    assert_eq!(initial, 1, "second write within window suppressed");
+    assert_eq!(initial, 0, "trailing-edge: nothing fires until window closes");
 
-    // Advance past debounce window. FakeFs uses the executor clock — so
-    // we advance both the clock AND a chunk of wall time-ish to ensure
-    // the per-path "last emit" comparison's SystemTime::now() check
-    // crosses the window. SystemTime::now() is real wall-clock; sleep
-    // 250ms to be safe.
-    std::thread::sleep(Duration::from_millis(250));
-    fs.write(target, b"v3").await.unwrap();
+    // Advance the clock past the debounce window. Both deferred tasks
+    // wake up; the first sees its seq superseded and exits; the second
+    // sees its seq is still latest, fires.
+    cx.executor().advance_clock(Duration::from_millis(250));
     cx.run_until_parked();
 
-    let after = count_pending(bus.path(), "notification");
-    assert_eq!(after, 2, "third write after window emits again");
+    let after_window = read_pending(bus.path(), "notification");
+    assert_eq!(after_window.len(), 1, "exactly one emit per debounce window");
+    let body = after_window[0]["payload"]["body"].as_str().unwrap();
+    assert!(
+        body.contains("size 4"),
+        "trailing-edge MUST report the LATEST write's size — got body {body:?}"
+    );
+
+    // Third write after the window — fresh debounce cycle, second emit
+    // with the new size.
+    fs.write(target, b"CCCCCCCC").await.unwrap(); // 8 bytes
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(250));
+    cx.run_until_parked();
+
+    let final_pending = read_pending(bus.path(), "notification");
+    assert_eq!(final_pending.len(), 2, "third write fires its own debounce cycle");
+    let last_body = final_pending[1]["payload"]["body"].as_str().unwrap();
+    assert!(last_body.contains("size 8"), "second emit reports latest size — got {last_body:?}");
 }
 
 // Test 34: file_deleted trigger fires on removal; min_size_mb does NOT
@@ -519,6 +560,7 @@ async fn file_deleted_trigger_fires_with_zero_size(cx: &mut TestAppContext) {
 
     fs.remove_file(target, RemoveOptions::default()).await.unwrap();
     cx.run_until_parked();
+    drain_debounce(cx);
 
     let pending = read_pending(bus.path(), "notification");
     assert_eq!(pending.len(), 1);
