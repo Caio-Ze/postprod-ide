@@ -15,11 +15,23 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
 fn default_bus_root_matches_paths_data_dir() {
-    // Defensive: the override must NOT be active.
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    // SAFETY: serialized via ENV_LOCK; no concurrent access in this test.
+
+    // `util::home_dir` (transitively used by `paths::data_dir`) is mocked
+    // to `/Users/zed` whenever the `util/test-support` feature is active in
+    // the workspace. That feature gets pulled in by `postprod_watchers`'s
+    // dev-deps on `fs/test-support`, so combined `cargo test` runs see the
+    // mock here even though this crate doesn't ask for it. To keep both
+    // sides of the comparison apples-to-apples in either mode, point HOME
+    // at whatever `paths::home_dir()` resolves to before computing the
+    // hand-rolled path. In production (no test-support active), `HOME`
+    // already matches `dirs::home_dir()` so this is a no-op.
+    //
+    // SAFETY: serialized via ENV_LOCK; no concurrent threads in this test
+    // touch HOME or POSTPROD_EVENTS_INBOX.
     unsafe {
         std::env::remove_var(postprod_events::bus::INBOX_ENV_VAR);
+        std::env::set_var("HOME", paths::home_dir());
     }
 
     let hand_rolled = postprod_events::bus::default_bus_root()
