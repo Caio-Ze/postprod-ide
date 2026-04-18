@@ -36,7 +36,7 @@ use task::{RevealStrategy, SpawnInTerminal, TaskId};
 use util::ResultExt as _;
 use workspace::{Toast, notifications::NotificationId};
 
-use crate::paths::resolve_bin;
+use crate::dashboard_paths::resolve_bin;
 use crate::{
     AgentBackend, AutomationEntry, AutomationRunStatus, ContextLauncherToast, Dashboard,
     MAX_PIPELINE_DEPTH, collect_step_groups, resolve_tool_command,

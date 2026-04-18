@@ -7,7 +7,7 @@ mod context_editor;
 mod event_inbox;
 mod folder_bar;
 mod hotkeys;
-mod paths;
+mod dashboard_paths;
 pub(crate) mod persistence;
 mod pipeline_card;
 mod rules_integration;
@@ -18,7 +18,7 @@ mod section;
 mod tool_card;
 
 use config::FolderTarget;
-use paths::{
+use dashboard_paths::{
     DeliveryStatus, ensure_config_extracted, ensure_workspace_dirs, folder_has_dashboard_config,
     local_tools_dir_for, resolve_agent_tools_path, resolve_runtime_path, scan_delivery_folder,
     suite_root,
@@ -363,14 +363,11 @@ pub struct Dashboard {
 /// Resolve the event-bus root that watchers and the notification inbox
 /// share. Honors `POSTPROD_EVENTS_INBOX` (used by integration tests) and
 /// otherwise falls back to the workspace `paths` crate's `data_dir()`.
-/// Note: the dashboard crate has a local `paths` module (`crate::paths`)
-/// that shadows the workspace `paths` crate inside this file's scope, so
-/// we use `::paths::data_dir()` to escape to the extern crate.
 fn resolve_event_bus_root() -> PathBuf {
     if let Some(over) = std::env::var_os(postprod_events::bus::INBOX_ENV_VAR) {
         return PathBuf::from(over);
     }
-    ::paths::data_dir().join("events")
+    paths::data_dir().join("events")
 }
 
 pub(crate) fn resolve_tool_command(
