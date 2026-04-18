@@ -1,0 +1,26 @@
+[package]
+name = "postprod_popup_notification"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/postprod_popup_notification.rs"
+
+[dependencies]
+anyhow.workspace = true
+audio.workspace = true
+gpui.workspace = true
+log.workspace = true
+release_channel.workspace = true
+serde.workspace = true
+theme.workspace = true
+ui.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }
+semver.workspace = true
