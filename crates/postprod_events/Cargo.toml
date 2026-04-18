@@ -1,0 +1,24 @@
+[package]
+name = "postprod_events"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/postprod_events.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+
+[dev-dependencies]
+# Test 13 asserts the emitter-side hand-rolled path matches `paths::data_dir()`.
+paths.workspace = true
+tempfile.workspace = true
