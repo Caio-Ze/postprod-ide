@@ -4,6 +4,7 @@ mod automation_picker;
 pub(crate) mod card;
 mod config;
 mod context_editor;
+mod event_inbox;
 mod folder_bar;
 mod hotkeys;
 mod paths;
@@ -298,6 +299,11 @@ pub struct Dashboard {
     _automations_reload_task: gpui::Task<()>,
     _tools_reload_task: gpui::Task<()>,
     _agents_reload_task: gpui::Task<()>,
+    // Event-bus reader for `kind = "notification"` — drains pending files
+    // on construction (offline-accumulation) and on every fs-watch batch.
+    // The inbox owns its own `_watch_task`; this field's lifetime keeps
+    // the watch subscription alive (drop = unsubscribe).
+    _notification_inbox: event_inbox::DashboardNotificationInbox,
     // Background execution mode per tool
     background_tools: HashSet<String>,
     // Collapsed section state (persisted)
@@ -823,6 +829,18 @@ impl Dashboard {
                 }
             });
 
+            // Event-bus notification reader. Drains pending files on
+            // construction (catches anything that accumulated while the
+            // dashboard was closed) and re-drains on each fs-watch batch.
+            // Uses the workspace's project-wide `fs::Fs` so test impls
+            // observe the same state as the watch subscription.
+            let fs = workspace.project().read(cx).fs().clone();
+            let notification_inbox = event_inbox::DashboardNotificationInbox::new(
+                fs,
+                workspace.weak_handle(),
+                cx,
+            );
+
             Self {
                 workspace: workspace.weak_handle(),
                 last_worktree_override: None,
@@ -849,6 +867,7 @@ impl Dashboard {
                 _automations_reload_task: automations_reload_task,
                 _tools_reload_task: tools_reload_task,
                 _agents_reload_task: agents_reload_task,
+                _notification_inbox: notification_inbox,
                 background_tools,
                 collapsed_sections,
                 section_order,
