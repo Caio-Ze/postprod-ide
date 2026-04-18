@@ -19,7 +19,7 @@ use workspace::Workspace;
 use postprod_dashboard_config::AgentEntry;
 
 use crate::Dashboard;
-use crate::paths::resolve_bin;
+use crate::dashboard_paths::resolve_bin;
 use crate::section;
 
 /// Render the AI Agents section with launcher buttons.
