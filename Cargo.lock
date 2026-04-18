@@ -4518,6 +4518,7 @@ dependencies = [
  "anyhow",
  "dirs 4.0.0",
  "editor",
+ "fs",
  "futures 0.3.32",
  "fuzzy",
  "global-hotkey",
@@ -4527,6 +4528,7 @@ dependencies = [
  "paths",
  "picker",
  "postprod_dashboard_config",
+ "postprod_events",
  "postprod_rules",
  "postprod_scheduler",
  "project",
@@ -13337,6 +13339,19 @@ dependencies = [
  "tempfile",
  "toml 0.8.23",
  "toml_edit 0.22.27",
+]
+
+[[package]]
+name = "postprod_events"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "log",
+ "paths",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
