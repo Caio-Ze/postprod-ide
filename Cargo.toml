@@ -149,6 +149,7 @@ members = [
     "crates/postprod_events",
     "crates/postprod_rules",
     "crates/postprod_scheduler",
+    "crates/postprod_watchers",
     "crates/paths",
     "crates/picker",
     "crates/platform_title_bar",
@@ -411,6 +412,7 @@ postprod_dashboard_config = { path = "crates/postprod_dashboard_config" }
 postprod_events = { path = "crates/postprod_events" }
 postprod_rules = { path = "crates/postprod_rules" }
 postprod_scheduler = { path = "crates/postprod_scheduler" }
+postprod_watchers = { path = "crates/postprod_watchers" }
 prettier = { path = "crates/prettier" }
 settings_profile_selector = { path = "crates/settings_profile_selector" }
 project = { path = "crates/project" }

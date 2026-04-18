@@ -11,6 +11,7 @@ mod paths;
 pub(crate) mod persistence;
 mod pipeline_card;
 mod rules_integration;
+mod watcher_card;
 mod runtime;
 mod scheduler_ui;
 mod section;
@@ -304,6 +305,18 @@ pub struct Dashboard {
     // The inbox owns its own `_watch_task`; this field's lifetime keeps
     // the watch subscription alive (drop = unsubscribe).
     _notification_inbox: event_inbox::DashboardNotificationInbox,
+    // Folder watchers (`postprod_watchers`). `watcher_runtime` owns the
+    // running per-watcher tasks; reconciled by `_watchers_reload_task`
+    // every 10s (no-op when the config hash is unchanged, per D19).
+    // `watcher_status_task` keeps `watcher_statuses` synced with the
+    // runtime's `smol::channel` updates.
+    watcher_runtime: postprod_watchers::WatcherRuntime,
+    pub(crate) watcher_configs:
+        Vec<Result<dcfg::watcher_config::WatcherConfig, dcfg::watcher_config::LoadError>>,
+    pub(crate) watcher_statuses:
+        HashMap<postprod_watchers::WatcherId, postprod_watchers::WatcherStatus>,
+    _watchers_reload_task: gpui::Task<()>,
+    _watcher_status_task: gpui::Task<()>,
     // Background execution mode per tool
     background_tools: HashSet<String>,
     // Collapsed section state (persisted)
@@ -345,6 +358,19 @@ pub struct Dashboard {
     note_store: Option<Entity<NoteStore>>,
     postprod_rules_window: Option<WindowHandle<postprod_rules::PostProdRules>>,
     _note_store_init: Option<gpui::Task<()>>,
+}
+
+/// Resolve the event-bus root that watchers and the notification inbox
+/// share. Honors `POSTPROD_EVENTS_INBOX` (used by integration tests) and
+/// otherwise falls back to the workspace `paths` crate's `data_dir()`.
+/// Note: the dashboard crate has a local `paths` module (`crate::paths`)
+/// that shadows the workspace `paths` crate inside this file's scope, so
+/// we use `::paths::data_dir()` to escape to the extern crate.
+fn resolve_event_bus_root() -> PathBuf {
+    if let Some(over) = std::env::var_os(postprod_events::bus::INBOX_ENV_VAR) {
+        return PathBuf::from(over);
+    }
+    ::paths::data_dir().join("events")
 }
 
 pub(crate) fn resolve_tool_command(
@@ -445,6 +471,18 @@ impl Dashboard {
 
             Dashboard::new(workspace, config_root, cx)
         })
+    }
+
+    fn render_watchers_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        watcher_card::render_watchers_section(
+            &self.collapsed_sections,
+            &self.config_root,
+            &self.watcher_configs,
+            &self.watcher_statuses,
+            &self.workspace,
+            cx.entity().downgrade(),
+            cx,
+        )
     }
 
     pub fn new(workspace: &Workspace, config_root: PathBuf, cx: &mut App) -> Entity<Self> {
@@ -836,10 +874,79 @@ impl Dashboard {
             // observe the same state as the watch subscription.
             let fs = workspace.project().read(cx).fs().clone();
             let notification_inbox = event_inbox::DashboardNotificationInbox::new(
-                fs,
+                fs.clone(),
                 workspace.weak_handle(),
                 cx,
             );
+
+            // Folder watchers — runtime + status listener + 10s reload task.
+            // Reload mirrors `_automations_reload_task` (uncondtional 10s
+            // tick); reconcile inside is hash-gated per D19 so the kernel
+            // does NOT re-acquire fs-watch subscriptions every tick.
+            let watcher_configs = dcfg::watcher_config::load_watchers(&config_root);
+            let mut watcher_runtime = postprod_watchers::WatcherRuntime::new();
+            let watcher_status_rx = watcher_runtime.status_receiver();
+            // Initial reconcile: start any enabled+valid watchers immediately
+            // so the first cards render as `idle` instead of `starting…`.
+            {
+                let initial_configs: Vec<dcfg::watcher_config::WatcherConfig> = watcher_configs
+                    .iter()
+                    .filter_map(|r| r.as_ref().ok().cloned())
+                    .collect();
+                let bus_root = resolve_event_bus_root();
+                watcher_runtime.reconcile(initial_configs, fs.clone(), bus_root, cx);
+            }
+            // Status listener loop — drains the smol::channel and updates
+            // `watcher_statuses` + cx.notify() on each message. Outer cx is
+            // Context<Dashboard>; spawn provides (this, AsyncApp).
+            let watcher_status_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
+                while let Ok((id, status)) = watcher_status_rx.recv().await {
+                    if this
+                        .update(cx, |dashboard, cx| {
+                            dashboard.watcher_statuses.insert(id.clone(), status.clone());
+                            cx.notify();
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            });
+            // 10s reload + reconcile task. Mirrors `_automations_reload_task`.
+            let watchers_reload_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_secs(10))
+                        .await;
+
+                    let config_root = match this.update(cx, |d, _| d.config_root.clone()) {
+                        Ok(c) => c,
+                        Err(_) => break,
+                    };
+                    let loaded_from = config_root.clone();
+                    let results = cx
+                        .background_executor()
+                        .spawn(async move { dcfg::watcher_config::load_watchers(&config_root) })
+                        .await;
+
+                    this.update(cx, |dashboard, cx| {
+                        if dashboard.config_root != loaded_from {
+                            return;
+                        }
+                        let configs: Vec<dcfg::watcher_config::WatcherConfig> = results
+                            .iter()
+                            .filter_map(|r| r.as_ref().ok().cloned())
+                            .collect();
+                        dashboard.watcher_configs = results;
+                        let Some(workspace) = dashboard.workspace.upgrade() else { return };
+                        let fs = workspace.read(cx).project().read(cx).fs().clone();
+                        let bus_root = resolve_event_bus_root();
+                        dashboard.watcher_runtime.reconcile(configs, fs, bus_root, cx);
+                        cx.notify();
+                    })
+                    .log_err();
+                }
+            });
 
             Self {
                 workspace: workspace.weak_handle(),
@@ -868,6 +975,11 @@ impl Dashboard {
                 _tools_reload_task: tools_reload_task,
                 _agents_reload_task: agents_reload_task,
                 _notification_inbox: notification_inbox,
+                watcher_runtime,
+                watcher_configs,
+                watcher_statuses: HashMap::new(),
+                _watchers_reload_task: watchers_reload_task,
+                _watcher_status_task: watcher_status_task,
                 background_tools,
                 collapsed_sections,
                 section_order,
@@ -3468,6 +3580,8 @@ impl Render for Dashboard {
                     .child(self.render_pipelines_section(window, cx))
                     // Automations
                     .child(self.render_automations_section(window, cx))
+                    // Folder watchers
+                    .child(self.render_watchers_section(cx))
                     // Delivery status
                     .child(self.render_delivery_status(cx)),
             )

@@ -4516,6 +4516,7 @@ dependencies = [
  "agent_settings",
  "agent_ui",
  "anyhow",
+ "chrono",
  "dirs 4.0.0",
  "editor",
  "fs",
@@ -4531,6 +4532,7 @@ dependencies = [
  "postprod_events",
  "postprod_rules",
  "postprod_scheduler",
+ "postprod_watchers",
  "project",
  "schemars",
  "serde",
@@ -13401,6 +13403,28 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "postprod_watchers"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dirs 4.0.0",
+ "fs",
+ "futures 0.3.32",
+ "globset",
+ "gpui",
+ "log",
+ "postprod_dashboard_config",
+ "postprod_events",
+ "serde",
+ "serde_json",
+ "smol",
+ "tempfile",
+ "thiserror 2.0.17",
+ "toml 0.8.23",
 ]
 
 [[package]]
