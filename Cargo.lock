@@ -13357,6 +13357,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "postprod_popup_notification"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "audio",
+ "gpui",
+ "log",
+ "release_channel",
+ "semver",
+ "serde",
+ "theme",
+ "ui",
+]
+
+[[package]]
 name = "postprod_rules"
 version = "0.1.0"
 dependencies = [
