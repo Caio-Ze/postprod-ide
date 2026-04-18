@@ -4530,6 +4530,7 @@ dependencies = [
  "picker",
  "postprod_dashboard_config",
  "postprod_events",
+ "postprod_popup_notification",
  "postprod_rules",
  "postprod_scheduler",
  "postprod_watchers",
