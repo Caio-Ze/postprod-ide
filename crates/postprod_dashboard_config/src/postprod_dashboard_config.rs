@@ -11,6 +11,7 @@
 //! without a window.
 
 pub mod edit;
+pub mod watcher_config;
 
 use postprod_scheduler::CatchUpPolicy;
 use serde::{Deserialize, Serialize};
