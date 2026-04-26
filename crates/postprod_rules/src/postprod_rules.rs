@@ -10,9 +10,7 @@ use gpui::{
     WindowOptions, actions, point, size, transparent_black,
 };
 use language::{Buffer, LanguageRegistry, language_settings::SoftWrap};
-use language_model::{
-    ConfiguredModel, LanguageModelRegistry, LanguageModelRequest, LanguageModelRequestMessage, Role,
-};
+use language_model::{ConfiguredModel, LanguageModelRegistry};
 use note_store::*;
 use picker::{Picker, PickerDelegate};
 use platform_title_bar::PlatformTitleBar;
@@ -2188,13 +2186,18 @@ impl PostProdRules {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(ConfiguredModel { model, .. }) =
-            LanguageModelRegistry::read_global(cx).default_model()
-        else {
+        // Upstream PR #54177 removed `LanguageModel::count_tokens`. Use a
+        // ~4 chars/token heuristic for the rules-window indicator. Gate on
+        // an AI model being configured to preserve the original
+        // "show only when AI is set up" UX.
+        if LanguageModelRegistry::read_global(cx)
+            .default_model()
+            .is_none()
+        {
             return;
-        };
+        }
         if let Some(note) = self.note_editors.get_mut(&note_id) {
-            let body = note
+            let body_len = note
                 .body_editor
                 .read(cx)
                 .buffer()
@@ -2203,36 +2206,11 @@ impl PostProdRules {
                 .unwrap()
                 .read(cx)
                 .as_rope()
-                .clone();
+                .len() as u64;
             note.pending_token_count = cx.spawn_in(window, async move |this, cx| {
                 async move {
                     cx.background_executor().timer(Duration::from_secs(1)).await;
-                    let token_count = cx
-                        .update(|_, cx| {
-                            model.count_tokens(
-                                LanguageModelRequest {
-                                    thread_id: None,
-                                    prompt_id: None,
-                                    intent: None,
-                                    messages: vec![LanguageModelRequestMessage {
-                                        role: Role::System,
-                                        content: vec![body.to_string().into()],
-                                        cache: false,
-                                        reasoning_details: None,
-                                    }],
-                                    tools: Vec::new(),
-                                    tool_choice: None,
-                                    stop: Vec::new(),
-                                    temperature: None,
-                                    thinking_allowed: true,
-                                    thinking_effort: None,
-                                    speed: None,
-                                },
-                                cx,
-                            )
-                        })?
-                        .await?;
-
+                    let token_count = body_len.div_ceil(4);
                     this.update(cx, |this, cx| {
                         if let Some(e) = this.note_editors.get_mut(&note_id) {
                             e.token_count = Some(token_count);
@@ -2252,13 +2230,15 @@ impl PostProdRules {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(ConfiguredModel { model, .. }) =
-            LanguageModelRegistry::read_global(cx).default_model()
-        else {
+        // See `count_tokens_for_note` for the heuristic / upstream context.
+        if LanguageModelRegistry::read_global(cx)
+            .default_model()
+            .is_none()
+        {
             return;
-        };
+        }
         if let Some(file_editor) = self.file_editors.get_mut(&path) {
-            let body = file_editor
+            let body_len = file_editor
                 .body_editor
                 .read(cx)
                 .buffer()
@@ -2267,36 +2247,11 @@ impl PostProdRules {
                 .unwrap()
                 .read(cx)
                 .as_rope()
-                .clone();
+                .len() as u64;
             file_editor.pending_token_count = cx.spawn_in(window, async move |this, cx| {
                 async move {
                     cx.background_executor().timer(Duration::from_secs(1)).await;
-                    let token_count = cx
-                        .update(|_, cx| {
-                            model.count_tokens(
-                                LanguageModelRequest {
-                                    thread_id: None,
-                                    prompt_id: None,
-                                    intent: None,
-                                    messages: vec![LanguageModelRequestMessage {
-                                        role: Role::System,
-                                        content: vec![body.to_string().into()],
-                                        cache: false,
-                                        reasoning_details: None,
-                                    }],
-                                    tools: Vec::new(),
-                                    tool_choice: None,
-                                    stop: Vec::new(),
-                                    temperature: None,
-                                    thinking_allowed: true,
-                                    thinking_effort: None,
-                                    speed: None,
-                                },
-                                cx,
-                            )
-                        })?
-                        .await?;
-
+                    let token_count = body_len.div_ceil(4);
                     this.update(cx, |this, cx| {
                         if let Some(e) = this.file_editors.get_mut(&path) {
                             e.token_count = Some(token_count);

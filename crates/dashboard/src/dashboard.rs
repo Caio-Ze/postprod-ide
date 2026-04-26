@@ -821,26 +821,45 @@ impl Dashboard {
                 }
             });
 
-            // Observe the workspace for active worktree override changes
-            // (fires when user switches folders via the title bar dropdown).
-            // This handles the "within-workspace" folder switch: one Workspace,
-            // multiple root folders, user picks one from the title bar.
+            // Observe the workspace for effective-worktree changes (fires
+            // when user picks a folder via the recent-project menu). Upstream
+            // PR #53645 removed `active_worktree_override`; pickers now set
+            // `Project::active_repository`, and the worktree containing that
+            // repo is the new "effective active worktree." We mirror
+            // `Workspace::effective_active_worktree_id`'s 2-tier resolution
+            // (active_repository → first visible) inline.
             let workspace_observation = workspace.weak_handle().upgrade().map(|ws_entity| {
                 cx.observe(&ws_entity, |dashboard: &mut Dashboard, workspace_entity, cx| {
                     let workspace = workspace_entity.read(cx);
-                    let current = workspace.active_worktree_override();
+                    let project = workspace.project().read(cx);
+                    let current = project
+                        .active_repository(cx)
+                        .and_then(|repo| {
+                            let repo = repo.read(cx);
+                            let repo_path = repo.work_directory_abs_path.clone();
+                            project.visible_worktrees(cx).find_map(|wt| {
+                                let wt_ref = wt.read(cx);
+                                let wt_path = wt_ref.abs_path();
+                                (wt_path == repo_path
+                                    || wt_path.starts_with(repo_path.as_ref()))
+                                .then(|| wt_ref.id())
+                            })
+                        })
+                        .or_else(|| {
+                            project
+                                .visible_worktrees(cx)
+                                .next()
+                                .map(|wt| wt.read(cx).id())
+                        });
                     if current == dashboard.last_worktree_override {
                         return;
                     }
                     dashboard.last_worktree_override = current;
                     if let Some(worktree_id) = current {
-                        let folder = {
-                            let project = workspace.project().read(cx);
-                            project
-                                .visible_worktrees(cx)
-                                .find(|wt| wt.read(cx).id() == worktree_id)
-                                .map(|wt| wt.read(cx).abs_path().to_path_buf())
-                        };
+                        let folder = project
+                            .visible_worktrees(cx)
+                            .find(|wt| wt.read(cx).id() == worktree_id)
+                            .map(|wt| wt.read(cx).abs_path().to_path_buf());
                         if let Some(folder) = folder {
                             if folder_has_dashboard_config(&folder)
                                 && folder != dashboard.config_root
@@ -3986,13 +4005,6 @@ impl postprod_rules::InlineAssistDelegate for PostProdInlineAssist {
             let Some(panel) = workspace.read(cx).panel::<AgentPanel>(cx) else {
                 return;
             };
-            let history = panel
-                .read(cx)
-                .connection_store()
-                .read(cx)
-                .entry(&agent_ui::Agent::NativeAgent)
-                .and_then(|s| s.read(cx).history())
-                .map(|h| h.downgrade());
             let project = workspace.read(cx).project().downgrade();
             let panel = panel.read(cx);
             let thread_store = panel.thread_store().clone();
@@ -4002,7 +4014,6 @@ impl postprod_rules::InlineAssistDelegate for PostProdInlineAssist {
                 project,
                 thread_store,
                 None,
-                history,
                 initial_prompt,
                 window,
                 cx,
