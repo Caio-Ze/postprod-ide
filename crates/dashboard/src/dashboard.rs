@@ -3755,11 +3755,19 @@ impl Render for DashboardItem {
                                     .icon_color(Color::Muted)
                                     .tooltip(Tooltip::text("Open as Tab"))
                                     .on_click(cx.listener(|this, _, window, cx| {
-                                        if let Some(workspace) = this.workspace.upgrade() {
+                                        // The listener holds &mut DashboardItem; running
+                                        // open_dashboard_as_tab synchronously would re-enter
+                                        // the same entity when pane.add_item reads its
+                                        // Item-trait methods. Defer past the current effect
+                                        // cycle so the borrow is released.
+                                        let Some(workspace) = this.workspace.upgrade() else {
+                                            return;
+                                        };
+                                        window.defer(cx, move |window, cx| {
                                             workspace.update(cx, |workspace, cx| {
                                                 open_dashboard_as_tab(workspace, window, cx);
                                             });
-                                        }
+                                        });
                                     })),
                             )
                             .child(
