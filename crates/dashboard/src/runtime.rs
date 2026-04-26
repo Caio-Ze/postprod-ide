@@ -1,4 +1,4 @@
-//! Dashboard runtime: prompt assembly, backend routing, automation and
+//! DashboardItem runtime: prompt assembly, backend routing, automation and
 //! pipeline execution, completion polling.
 //!
 //! Per `private/specs/dashboard-functional-extraction.md` (Decision 5), this
@@ -38,7 +38,7 @@ use workspace::{Toast, notifications::NotificationId};
 
 use crate::dashboard_paths::resolve_bin;
 use crate::{
-    AgentBackend, AutomationEntry, AutomationRunStatus, ContextLauncherToast, Dashboard,
+    AgentBackend, AutomationEntry, AutomationRunStatus, ContextLauncherToast, DashboardItem,
     MAX_PIPELINE_DEPTH, collect_step_groups, resolve_tool_command,
 };
 
@@ -47,7 +47,7 @@ use crate::{
 /// Per spec `automation-cwd-override` v2 §"What's new" #2:
 ///
 /// 1. If `entry` declares no `[[param]] param_type = "cwd"`, return
-///    `fallback` (the global `Dashboard::agent_cwd()` chain).
+///    `fallback` (the global `DashboardItem::agent_cwd()` chain).
 /// 2. Otherwise, take the user-stored value from `param_values` (per-card
 ///    picker / Finder drop), falling through to `param.default` when
 ///    nothing is stored.
@@ -96,7 +96,7 @@ pub(crate) fn resolve_automation_cwd(
     }
 }
 
-impl Dashboard {
+impl DashboardItem {
     pub(crate) fn run_automation(
         &mut self,
         entry_id: &str,
@@ -1095,7 +1095,7 @@ pub(crate) fn build_temp_file_terminal_command(
     // Append completion instruction if chained
     let final_prompt = if let Some(marker_path) = chain_marker {
         let mut p = prompt.to_string();
-        p.push_str(&Dashboard::completion_report_instruction(marker_path));
+        p.push_str(&DashboardItem::completion_report_instruction(marker_path));
         p
     } else {
         prompt.to_string()

@@ -23,7 +23,7 @@ use postprod_dashboard_config::{AutomationEntry, PipelineStep, ToolEntry};
 use crate::card::{CardIcon, CardRenderContext, DashboardCard};
 use crate::collect_step_groups;
 use crate::config::icon_for_automation;
-use crate::{AutomationRunStatus, Dashboard};
+use crate::{AutomationRunStatus, DashboardItem};
 
 // ---------------------------------------------------------------------------
 // Step tree — view mode
@@ -127,7 +127,7 @@ pub fn render_pipeline_edit_steps(
     entry: &AutomationEntry,
     tools: &[ToolEntry],
     automations: &[AutomationEntry],
-    entity: WeakEntity<Dashboard>,
+    entity: WeakEntity<DashboardItem>,
     workspace: WeakEntity<Workspace>,
     config_root: PathBuf,
     cx: &App,
@@ -211,7 +211,7 @@ pub fn render_pipeline_edit_steps(
     }
 
     // [+ Add Step] button — data captured outside the closure to avoid
-    // re-entering Dashboard while it's being updated.
+    // re-entering DashboardItem while it's being updated.
     let source_path = entry.source_path.clone();
     let add_pipeline_id = entry.id.clone();
     let workspace_handle = workspace;
@@ -302,7 +302,7 @@ pub fn render_pipeline_edit_steps(
 /// Replaces the old `render_card_shell` path for pipelines. All action
 /// buttons (run/stop, schedule toggle, edit, delete, disclosure) are built
 /// here. Pre-built elements (step_tree, schedule_controls) are passed in
-/// because schedule controls require `&mut Dashboard` context to render.
+/// because schedule controls require `&mut DashboardItem` context to render.
 pub fn render_pipeline_card(
     ctx: &CardRenderContext<'_>,
     is_running: bool,

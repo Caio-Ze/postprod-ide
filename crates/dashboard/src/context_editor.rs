@@ -1,6 +1,6 @@
 //! Context entry rendering — badges (summary) and CRUD editor.
 //!
-//! Provides two public functions extracted from `Dashboard`:
+//! Provides two public functions extracted from `DashboardItem`:
 //! - `render_context_summary` — read-only badge row with gear toggle
 //! - `render_context_editor` — default toggle, entry rows with reorder/remove,
 //!   add-path button, add-script picker, done button
@@ -20,7 +20,7 @@ use workspace::Workspace;
 
 use postprod_dashboard_config as config;
 
-use crate::Dashboard;
+use crate::DashboardItem;
 
 // ---------------------------------------------------------------------------
 // render_context_summary — read-only badge row
@@ -33,7 +33,7 @@ pub(crate) fn render_context_summary(
     contexts: &[config::ContextEntry],
     skip_default: bool,
     default_contexts: &[config::ContextEntry],
-    entity: WeakEntity<Dashboard>,
+    entity: WeakEntity<DashboardItem>,
     cx: &App,
 ) -> Vec<AnyElement> {
     let mut elements = Vec::new();
@@ -122,7 +122,7 @@ pub(crate) fn render_context_editor(
     workspace: WeakEntity<Workspace>,
     scripts: Vec<PathBuf>,
     config_root: PathBuf,
-    entity: WeakEntity<Dashboard>,
+    entity: WeakEntity<DashboardItem>,
     cx: &App,
 ) -> Vec<AnyElement> {
     let mut elements = Vec::new();

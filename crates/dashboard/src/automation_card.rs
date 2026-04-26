@@ -27,7 +27,7 @@ use crate::config::icon_for_automation;
 /// buttons (run, schedule toggle, gear, delete, disclosure, edit TOML) are
 /// built here using the entity handle for callbacks. Pre-built elements
 /// (param fields, schedule controls, context rows) are passed in because
-/// they require `&mut Dashboard` context to render.
+/// they require `&mut DashboardItem` context to render.
 pub fn render_automation_card(
     ctx: &CardRenderContext<'_>,
     icon_color: Color,

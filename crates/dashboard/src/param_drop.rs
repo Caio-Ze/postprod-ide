@@ -14,7 +14,7 @@
 //! - `mark_cwd_warning_seen`: backend-aware `(entry_id, backend)` dedup
 //!   for the "cwd-bound param has no effect on this backend" toast.
 //!
-//! The `cwd_warning_seen` field stays on `Dashboard` (struct definition
+//! The `cwd_warning_seen` field stays on `DashboardItem` (struct definition
 //! is in `dashboard.rs`); behaviors that touch it live here.
 
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ use gpui::{App, Context};
 use postprod_dashboard_config::ParamType;
 use workspace::DraggedSelection;
 
-use crate::Dashboard;
+use crate::DashboardItem;
 use crate::AgentBackend;
 use crate::persistence::write_param_values;
 
@@ -51,11 +51,11 @@ pub(crate) fn normalize_for_param_type(path: &Path, param_type: &ParamType) -> S
     }
 }
 
-/// Pure-iterator helper for `Dashboard::resolve_dragged_first_path` (spec
+/// Pure-iterator helper for `DashboardItem::resolve_dragged_first_path` (spec
 /// automation-cwd-override v3 Phase 5). Walks `entry_ids`, returns the
 /// `PathBuf` from the first entry whose `resolve` closure returns
 /// `Some(...)`. Empty iterator or all-None returns `None`. Extracted
-/// from the Dashboard method so the iteration semantics can be unit-
+/// from the DashboardItem method so the iteration semantics can be unit-
 /// tested without constructing a real Workspace/Project.
 pub(crate) fn first_resolvable_abs_path<I, F>(entry_ids: I, mut resolve: F) -> Option<PathBuf>
 where
@@ -65,7 +65,7 @@ where
     entry_ids.into_iter().find_map(&mut resolve)
 }
 
-impl Dashboard {
+impl DashboardItem {
     /// Records that the "cwd-bound param has no effect on this backend"
     /// toast has been emitted for `(entry_id, backend)`. Returns `true` the
     /// first time; `false` on subsequent calls with the same tuple. Pure —
@@ -136,7 +136,7 @@ mod tests {
     /// flow through this single method so persistence is identical.
     /// Asserts via `read_param_values` (from `dashboard::persistence`).
     ///
-    /// The Dashboard method itself takes `&mut Context<Self>` and is
+    /// The DashboardItem method itself takes `&mut Context<Self>` and is
     /// hard to construct in a unit test, so this test verifies the
     /// underlying `dcfg::write_param_values` + `dcfg::read_param_values`
     /// contract that the method delegates to. The method body is
@@ -221,11 +221,11 @@ mod tests {
     }
 
     /// Test 15 — backend-aware warning dedup (G2). The contract of
-    /// `Dashboard::mark_cwd_warning_seen` is:
+    /// `DashboardItem::mark_cwd_warning_seen` is:
     ///   - `HashSet::insert` returns `true` the first time a tuple is
     ///     recorded and `false` thereafter.
     ///   - `(String, AgentBackend)` must be hashable (G1: extended derive).
-    /// Test the underlying tuple-set contract directly — `Dashboard::new`
+    /// Test the underlying tuple-set contract directly — `DashboardItem::new`
     /// pulls in too much GPUI machinery for a unit test, and the method
     /// body is literally `self.cwd_warning_seen.insert((id.into(), b))`.
     /// Failure of this test = G1 regression (Hash/Eq missing) or
@@ -253,9 +253,9 @@ mod tests {
 
     /// Test 16 — `first_resolvable_abs_path` (spec automation-cwd-override
     /// v3 Phase 5). Pure helper extracted from
-    /// `Dashboard::resolve_dragged_first_path` so the iteration semantics
+    /// `DashboardItem::resolve_dragged_first_path` so the iteration semantics
     /// are unit-testable without constructing a real Workspace/Project.
-    /// Constructing the Dashboard wrapper is exercised by M12 against the
+    /// Constructing the DashboardItem wrapper is exercised by M12 against the
     /// shipped binary; the iteration logic is what could regress here.
     #[test]
     fn test_first_resolvable_abs_path_empty_returns_none() {

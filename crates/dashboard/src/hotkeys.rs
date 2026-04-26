@@ -234,7 +234,7 @@ fn show_hotkey_error(cx: &mut App, message: String) {
 }
 
 // ---------------------------------------------------------------------------
-// Self-contained hotkey dispatch — no Dashboard traversal
+// Self-contained hotkey dispatch — no DashboardItem traversal
 // ---------------------------------------------------------------------------
 
 fn dispatch_hotkey_tool(tool_id: &str, hotkey_entries: &[ResolvedHotkeyEntry], cx: &mut App) {
