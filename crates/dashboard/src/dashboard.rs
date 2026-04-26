@@ -64,9 +64,9 @@ use ui::{
     WithScrollbar as _, prelude::*,
 };
 use workspace::{
-    DraggedSelection, OpenOptions, ProToolsSessionName, Toast, Workspace,
+    DraggedSelection, Event as WorkspaceEvent, OpenOptions, ProToolsSessionName, Toast, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
-    item::{Item, ItemEvent},
+    item::{Item, ItemEvent, ItemHandle},
     notifications::NotificationId,
 };
 
@@ -86,8 +86,12 @@ use std::time::Duration;
 actions!(
     dashboard,
     [
-        /// Toggle the PostProd Tools DashboardItem panel.
-        ToggleFocus
+        /// Toggle the PostProd Tools Dashboard panel.
+        ToggleFocus,
+        /// Move the dashboard into the active editor pane as a closable tab.
+        /// While the tab is open, the dock panel is hidden; closing the tab
+        /// restores the panel.
+        OpenAsTab,
     ]
 );
 
@@ -167,8 +171,68 @@ pub fn init(cx: &mut App) {
                 });
             },
         );
+        workspace.register_action(|workspace, _: &OpenAsTab, window, cx| {
+            open_dashboard_as_tab(workspace, window, cx);
+        });
     })
     .detach();
+}
+
+/// Move the panel-hosted `DashboardItem` into the active editor pane as a tab.
+/// Hides the dock panel; subscribes for `WorkspaceEvent::ItemRemoved` so the
+/// panel reappears when the tab is closed. If a `DashboardItem` tab already
+/// exists, focuses it instead of creating a duplicate.
+fn open_dashboard_as_tab(
+    workspace: &mut Workspace,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    if let Some(existing) = workspace.item_of_type::<DashboardItem>(cx) {
+        if let Some(pane) = workspace.pane_for(&existing) {
+            let handle: &dyn ItemHandle = &existing;
+            if let Some(idx) = pane.read(cx).index_for_item(handle) {
+                pane.update(cx, |pane, cx| {
+                    pane.activate_item(idx, true, true, window, cx);
+                });
+            }
+        }
+        return;
+    }
+
+    let Some(panel) = workspace.panel::<DashboardPanel>(cx) else {
+        return;
+    };
+    let item = panel.read(cx).item.clone();
+    let item_id = item.entity_id();
+
+    workspace.close_panel::<DashboardPanel>(window, cx);
+
+    let active_pane = workspace.active_pane().clone();
+    active_pane.update(cx, |pane, cx| {
+        pane.add_item(Box::new(item.clone()), true, true, None, window, cx);
+    });
+
+    let workspace_entity = cx.entity();
+    panel.update(cx, |panel, panel_cx| {
+        let subscription = panel_cx.subscribe_in(
+            &workspace_entity,
+            window,
+            move |panel, workspace, event, window, cx| {
+                if let WorkspaceEvent::ItemRemoved {
+                    item_id: removed_id,
+                } = event
+                {
+                    if *removed_id == item_id {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.focus_panel::<DashboardPanel>(window, cx);
+                        });
+                        panel._tab_close_subscription = None;
+                    }
+                }
+            },
+        );
+        panel._tab_close_subscription = Some(subscription);
+    });
 }
 
 const DASHBOARD_PANEL_KEY: &str = "Dashboard";
