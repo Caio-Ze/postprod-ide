@@ -67,7 +67,8 @@ use ui::{
     WithScrollbar as _, prelude::*,
 };
 use workspace::{
-    DraggedSelection, Event as WorkspaceEvent, OpenOptions, ProToolsSessionName, Toast, Workspace,
+    DraggedSelection, Event as WorkspaceEvent, OpenOptions, ProToolsSessionName, SaveIntent, Toast,
+    Workspace,
     dock::{DockPosition, Panel, PanelEvent},
     item::{Item, ItemEvent, ItemHandle},
     notifications::NotificationId,
@@ -3931,6 +3932,41 @@ impl Panel for DashboardPanel {
 
     fn activation_priority(&self) -> u32 {
         8
+    }
+
+    /// Mutual exclusion (symmetric to `OpenAsTab`): when the dock panel
+    /// becomes active and a `DashboardItem` tab also exists, close the tab.
+    /// `OpenAsTab` already enforces the other direction (opening a tab
+    /// hides the panel). Without this hook the user can end up with both
+    /// surfaces visible at once if they re-open the panel from the dock
+    /// button while a tab is still up.
+    ///
+    /// Deferred via `window.defer` because `set_active` is invoked from
+    /// inside the dock's update path — the workspace itself is already
+    /// being updated, so calling `workspace.update` synchronously would
+    /// double-borrow.
+    fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !active {
+            return;
+        }
+        let Some(workspace) = self.workspace.upgrade() else {
+            return;
+        };
+        window.defer(cx, move |window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let Some(existing) = workspace.item_of_type::<DashboardItem>(cx) else {
+                    return;
+                };
+                let item_id = existing.entity_id();
+                let Some(pane) = workspace.pane_for(&existing) else {
+                    return;
+                };
+                pane.update(cx, |pane, cx| {
+                    pane.close_item_by_id(item_id, SaveIntent::Close, window, cx)
+                        .detach_and_log_err(cx);
+                });
+            });
+        });
     }
 }
 

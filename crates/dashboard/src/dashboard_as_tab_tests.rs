@@ -251,6 +251,33 @@ async fn test_state_shared_between_panel_and_tab(cx: &mut TestAppContext) {
     );
 }
 
+/// Symmetric to Test 1 — opening the panel while the tab is up must close
+/// the tab. `OpenAsTab` enforces "tab open → panel hides"; the dock panel's
+/// `set_active(true)` enforces "panel open → tab closes". Without this both
+/// surfaces would render simultaneously when the user re-opened the panel
+/// via the dock button while a tab was still around.
+#[gpui::test]
+async fn test_panel_reopen_closes_existing_tab(cx: &mut TestAppContext) {
+    init_test(cx);
+    let (workspace, _panel, _config_dir, cx) = setup_workspace_with_panel(cx).await;
+
+    dispatch_open_as_tab(&workspace, cx);
+    assert_dashboard_panel_visible(&workspace, cx, false, "after OpenAsTab");
+    assert_eq!(active_pane_items_len(&workspace, cx), 1, "tab present");
+
+    workspace.update_in(cx, |workspace, window, cx| {
+        workspace.focus_panel::<DashboardPanel>(window, cx);
+    });
+    cx.run_until_parked();
+
+    assert_dashboard_panel_visible(&workspace, cx, true, "panel re-opened");
+    assert_eq!(
+        active_pane_items_len(&workspace, cx),
+        0,
+        "tab should be closed when panel becomes active"
+    );
+}
+
 /// Test 5 — architectural invariant: mutating the inner item is reflected on
 /// both surfaces. Spec originally framed this around `switch_config_root`
 /// reading from disk; the config loaders use real-fs APIs, so plumbing
