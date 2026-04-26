@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use gpui::{App, Corner, ExternalPaths, IntoElement, ParentElement, SharedString, Styled, Window};
+use gpui::{App, Anchor, ExternalPaths, IntoElement, ParentElement, SharedString, Styled, Window};
 use ui::{
     ButtonLike, ButtonStyle, ContextMenu, DynamicSpacing, Icon, IconName, IconSize, Label,
     LabelSize, ListItem, ListItemSpacing, PopoverMenu, prelude::*,
@@ -261,7 +261,7 @@ fn build_folder_dropdown(
                 .full_width(true)
                 .menu(move |_window, _cx| Some(menu.clone()))
                 .trigger(trigger)
-                .attach(Corner::BottomLeft),
+                .attach(Anchor::BottomLeft),
         )
         .into_any_element()
 }
