@@ -66,6 +66,7 @@ use ui::{
 use workspace::{
     DraggedSelection, OpenOptions, ProToolsSessionName, Toast, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
+    item::{Item, ItemEvent},
     notifications::NotificationId,
 };
 
@@ -85,7 +86,7 @@ use std::time::Duration;
 actions!(
     dashboard,
     [
-        /// Toggle the PostProd Tools Dashboard panel.
+        /// Toggle the PostProd Tools DashboardItem panel.
         ToggleFocus
     ]
 );
@@ -155,7 +156,7 @@ pub(crate) enum AutomationRunStatus {
 pub fn init(cx: &mut App) {
     cx.observe_new::<Workspace>(|workspace, _, _cx| {
         workspace.register_action(|workspace, _: &ToggleFocus, window, cx| {
-            workspace.toggle_panel_focus::<Dashboard>(window, cx);
+            workspace.toggle_panel_focus::<DashboardItem>(window, cx);
         });
         workspace.register_action(
             |workspace, _: &automation_picker::RunAutomationPicker, window, cx| {
@@ -267,10 +268,10 @@ fn collect_step_groups(steps: &[PipelineStep]) -> Vec<Vec<PipelineStep>> {
 }
 
 // ---------------------------------------------------------------------------
-// Dashboard struct
+// DashboardItem struct
 // ---------------------------------------------------------------------------
 
-pub struct Dashboard {
+pub struct DashboardItem {
     pub(crate) workspace: WeakEntity<Workspace>,
     last_worktree_override: Option<WorktreeId>,
     _workspace_observation: Option<Subscription>,
@@ -346,7 +347,7 @@ pub struct Dashboard {
     _param_editor_subscriptions: Vec<Subscription>,
     _param_write_task: Option<gpui::Task<()>>,
     // Per-session dedup for the "cwd-bound param has no effect on this
-    // backend" toast. Cleared only by Dashboard reconstruction (config_root
+    // backend" toast. Cleared only by DashboardItem reconstruction (config_root
     // switch / dev rebuild). See spec Phase 2 T2.4–T2.6 (G2).
     pub(crate) cwd_warning_seen: HashSet<(String, AgentBackend)>,
     // Scheduler
@@ -490,7 +491,7 @@ pub(crate) fn effective_active_worktree_id<'a>(
     matched.or(first)
 }
 
-impl Dashboard {
+impl DashboardItem {
     pub async fn load(
         workspace: WeakEntity<Workspace>,
         mut cx: gpui::AsyncWindowContext,
@@ -503,7 +504,7 @@ impl Dashboard {
                 .map(|arc_path| arc_path.to_path_buf())
                 .unwrap_or_else(suite_root);
 
-            Dashboard::new(workspace, config_root, cx)
+            DashboardItem::new(workspace, config_root, cx)
         })
     }
 
@@ -581,7 +582,7 @@ impl Dashboard {
 
                     this.update(
                         cx,
-                        |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                        |dashboard: &mut DashboardItem, cx: &mut Context<DashboardItem>| {
                             let name = result.as_ref().map(|p| {
                                 Path::new(p)
                                     .file_name()
@@ -638,7 +639,7 @@ impl Dashboard {
 
                     this.update(
                         cx,
-                        |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                        |dashboard: &mut DashboardItem, cx: &mut Context<DashboardItem>| {
                             dashboard.delivery_status = status;
                             cx.notify();
                         },
@@ -670,7 +671,7 @@ impl Dashboard {
 
                     this.update(
                         cx,
-                        |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                        |dashboard: &mut DashboardItem, cx: &mut Context<DashboardItem>| {
                             if dashboard.config_root != loaded_from { return; }
                             dashboard.automations = merged;
                             dashboard.automations_error = error;
@@ -736,7 +737,7 @@ impl Dashboard {
 
                     this.update(
                         cx,
-                        |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                        |dashboard: &mut DashboardItem, cx: &mut Context<DashboardItem>| {
                             if dashboard.config_root != loaded_from { return; }
                             dashboard.tools = merged;
                             dashboard.tools_error = error;
@@ -777,7 +778,7 @@ impl Dashboard {
 
                     this.update(
                         cx,
-                        |dashboard: &mut Dashboard, cx: &mut Context<Dashboard>| {
+                        |dashboard: &mut DashboardItem, cx: &mut Context<DashboardItem>| {
                             if dashboard.config_root != loaded_from { return; }
                             dashboard.backends = backends;
                             dashboard.agent_launchers = agent_launchers;
@@ -860,7 +861,7 @@ impl Dashboard {
             // delegated to `effective_active_worktree_id` so it stays
             // unit-testable.
             let workspace_observation = workspace.weak_handle().upgrade().map(|ws_entity| {
-                cx.observe(&ws_entity, |dashboard: &mut Dashboard, workspace_entity, cx| {
+                cx.observe(&ws_entity, |dashboard: &mut DashboardItem, workspace_entity, cx| {
                     let workspace = workspace_entity.read(cx);
                     let project = workspace.project().read(cx);
                     let active_repo_path = project
@@ -951,7 +952,7 @@ impl Dashboard {
             }
             // Status listener loop — drains the smol::channel and updates
             // `watcher_statuses` + cx.notify() on each message. Outer cx is
-            // Context<Dashboard>; spawn provides (this, AsyncApp).
+            // Context<DashboardItem>; spawn provides (this, AsyncApp).
             let watcher_status_task = cx.spawn(async move |this, cx: &mut AsyncApp| {
                 while let Ok((id, status)) = watcher_status_rx.recv().await {
                     if this
@@ -1512,7 +1513,7 @@ impl Dashboard {
 
         let entry_id_for_sub = entry_id.to_string();
         let param_key_for_sub = param.key.clone();
-        let subscription = cx.subscribe(&editor, move |this: &mut Dashboard, editor, event, cx| {
+        let subscription = cx.subscribe(&editor, move |this: &mut DashboardItem, editor, event, cx| {
             if let EditorEvent::BufferEdited = event {
                 let text = editor.read(cx).text(cx);
                 this.param_values
@@ -1768,7 +1769,7 @@ Rules for the completion report:
             ed
         });
 
-        let subscription = cx.subscribe(&editor, |this: &mut Dashboard, editor, event, cx| {
+        let subscription = cx.subscribe(&editor, |this: &mut DashboardItem, editor, event, cx| {
             if let EditorEvent::Blurred = event {
                 if this.pending_new_pipeline.is_some() {
                     let text = editor.read(cx).text(cx).trim().to_string();
@@ -1972,7 +1973,7 @@ Rules for the completion report:
             ed
         });
 
-        let subscription = cx.subscribe(&editor, |this: &mut Dashboard, editor, event, cx| {
+        let subscription = cx.subscribe(&editor, |this: &mut DashboardItem, editor, event, cx| {
             if let EditorEvent::Blurred = event {
                 if this.pending_new_automation.is_some() {
                     let text = editor.read(cx).text(cx).trim().to_string();
@@ -2469,7 +2470,7 @@ Rules for the completion report:
                         let entry_id = tool.id.clone();
                         let param_key = p.key.clone();
                         cx.listener(
-                            move |this: &mut Dashboard, paths: &ExternalPaths, _window, cx| {
+                            move |this: &mut DashboardItem, paths: &ExternalPaths, _window, cx| {
                                 if let Some(path) = paths.paths().first() {
                                     this.param_values
                                         .entry(entry_id.clone())
@@ -2821,7 +2822,7 @@ Rules for the completion report:
                                                         entity
                                                             .update(
                                                                 cx,
-                                                                |this: &mut Dashboard, cx| {
+                                                                |this: &mut DashboardItem, cx| {
                                                                     this.update_param_value(
                                                                         &entry_id,
                                                                         &param_key,
@@ -2865,7 +2866,7 @@ Rules for the completion report:
                                     let entry_id = drop_entry_id.clone();
                                     let param_key = drop_param_key.clone();
                                     entity
-                                        .update(cx, |this: &mut Dashboard, cx| {
+                                        .update(cx, |this: &mut DashboardItem, cx| {
                                             this.update_param_value(
                                                 &entry_id,
                                                 &param_key,
@@ -2883,7 +2884,7 @@ Rules for the completion report:
                                     let param_key = drop_param_key_ds.clone();
                                     let param_type = drop_param_type_ds.clone();
                                     entity
-                                        .update(cx, |this: &mut Dashboard, cx| {
+                                        .update(cx, |this: &mut DashboardItem, cx| {
                                             let Some(abs) =
                                                 this.resolve_dragged_first_path(sel, cx)
                                             else {
@@ -2936,7 +2937,7 @@ Rules for the completion report:
                                         None,
                                         move |_window, cx: &mut App| {
                                             entity
-                                                .update(cx, |this: &mut Dashboard, cx| {
+                                                .update(cx, |this: &mut DashboardItem, cx| {
                                                     this.param_values
                                                         .entry(entry_id.clone())
                                                         .or_default()
@@ -3589,7 +3590,7 @@ Rules for the completion report:
 // Render — Three-tier layout
 // ---------------------------------------------------------------------------
 
-impl Render for Dashboard {
+impl Render for DashboardItem {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Capture window handle on first render (needed by scheduler for spawn_in_terminal)
         if self.window_handle.is_none() {
@@ -3727,15 +3728,15 @@ impl Render for Dashboard {
 // Trait impls for docked Panel
 // ---------------------------------------------------------------------------
 
-impl EventEmitter<PanelEvent> for Dashboard {}
+impl EventEmitter<PanelEvent> for DashboardItem {}
 
-impl Focusable for Dashboard {
+impl Focusable for DashboardItem {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl Panel for Dashboard {
+impl Panel for DashboardItem {
     fn persistent_name() -> &'static str {
         "Dashboard"
     }
@@ -3797,6 +3798,32 @@ impl Panel for Dashboard {
 
     fn activation_priority(&self) -> u32 {
         8
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Trait impls for editor-pane Item surface
+// ---------------------------------------------------------------------------
+
+impl EventEmitter<ItemEvent> for DashboardItem {}
+
+impl Item for DashboardItem {
+    type Event = ItemEvent;
+
+    fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
+        "Dashboard".into()
+    }
+
+    fn show_toolbar(&self) -> bool {
+        false
+    }
+
+    fn prevent_close(&self, _cx: &App) -> bool {
+        false
+    }
+
+    fn to_item_events(event: &Self::Event, f: &mut dyn FnMut(ItemEvent)) {
+        f(*event)
     }
 }
 

@@ -1,4 +1,4 @@
-//! Dashboard-side reader for `kind = "notification"` bus events.
+//! DashboardItem-side reader for `kind = "notification"` bus events.
 //!
 //! Wraps [`postprod_events::bus::EventInbox`] configured for the
 //! `notification` kind, decodes each envelope into a

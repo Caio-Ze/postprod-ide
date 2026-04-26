@@ -2,7 +2,7 @@
 //!
 //! Extracted from `dashboard.rs` to keep the panel rendering modular.
 //! All functions take data by reference and return `AnyElement`, so the
-//! parent `Dashboard` stays in control of state mutations.
+//! parent `DashboardItem` stays in control of state mutations.
 //!
 //! Uses Zed's `ListItem` component for row layouts (session status, folder
 //! selectors) to get native hover, spacing, and slot layout for free.

@@ -18,7 +18,7 @@ use workspace::Workspace;
 
 use postprod_dashboard_config::AgentEntry;
 
-use crate::Dashboard;
+use crate::DashboardItem;
 use crate::dashboard_paths::resolve_bin;
 use crate::section;
 
@@ -31,7 +31,7 @@ pub fn render_ai_agents_section(
     agent_launchers: &[AgentEntry],
     workspace: &WeakEntity<Workspace>,
     cwd: PathBuf,
-    entity: WeakEntity<Dashboard>,
+    entity: WeakEntity<DashboardItem>,
     cx: &App,
 ) -> impl IntoElement {
     let is_open = !collapsed_sections.contains("ai-agents");

@@ -1,4 +1,4 @@
-//! Dashboard-local config adapter module.
+//! DashboardItem-local config adapter module.
 //!
 //! The shared schema types, loaders, resolvers, and config-root path helpers
 //! live in the `postprod_dashboard_config` crate. This file keeps only

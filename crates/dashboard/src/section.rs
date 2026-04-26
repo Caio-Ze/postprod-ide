@@ -2,7 +2,7 @@
 //!
 //! Provides reusable section and sub-section header components with
 //! disclosure (collapse/expand) support. State management stays in
-//! `Dashboard`; this module owns only the rendering.
+//! `DashboardItem`; this module owns only the rendering.
 
 use std::collections::HashSet;
 
@@ -11,18 +11,18 @@ use ui::{Color, Disclosure, Divider, DividerColor, DynamicSpacing, Label, LabelS
 
 use util::ResultExt as _;
 
-use crate::Dashboard;
+use crate::DashboardItem;
 
 /// Render a top-level section header.
 ///
 /// Layout: `[▸ disclosure] TITLE ——————————————`
 ///
-/// Clicking the disclosure toggles the section via `Dashboard::toggle_section`.
+/// Clicking the disclosure toggles the section via `DashboardItem::toggle_section`.
 pub fn section_header(
     title: &str,
     section_id: &str,
     collapsed_sections: &HashSet<String>,
-    entity: WeakEntity<Dashboard>,
+    entity: WeakEntity<DashboardItem>,
     cx: &App,
 ) -> impl IntoElement {
     let is_open = !collapsed_sections.contains(section_id);
@@ -59,7 +59,7 @@ pub fn sub_section_header(
     title: &str,
     section_id: &str,
     collapsed_sections: &HashSet<String>,
-    entity: WeakEntity<Dashboard>,
+    entity: WeakEntity<DashboardItem>,
     cx: &App,
 ) -> impl IntoElement {
     let is_open = !collapsed_sections.contains(section_id);

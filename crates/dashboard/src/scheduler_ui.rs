@@ -1,4 +1,4 @@
-use crate::Dashboard;
+use crate::DashboardItem;
 
 use gpui::{App, Context, IntoElement, ParentElement, SharedString, Styled, Window, prelude::*};
 use postprod_scheduler::RunResult;
@@ -9,7 +9,7 @@ use ui::{
 use util::ResultExt as _;
 
 // ---------------------------------------------------------------------------
-// Schedule helpers (pure functions, no Dashboard access)
+// Schedule helpers (pure functions, no DashboardItem access)
 // ---------------------------------------------------------------------------
 
 pub(crate) const SCHEDULE_INTERVALS: &[&str] = &[
@@ -156,10 +156,10 @@ pub(crate) fn schedule_summary(cron: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Scheduler UI rendering (impl Dashboard in a separate file)
+// Scheduler UI rendering (impl DashboardItem in a separate file)
 // ---------------------------------------------------------------------------
 
-impl Dashboard {
+impl DashboardItem {
     pub(crate) fn render_scheduled_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let scheduled: Vec<_> = self
             .automations
@@ -352,7 +352,7 @@ impl Dashboard {
                     };
                     menu = menu.entry(interval.to_string(), None, move |_window, cx: &mut App| {
                         entity
-                            .update(cx, |this: &mut Dashboard, cx| {
+                            .update(cx, |this: &mut DashboardItem, cx| {
                                 this.update_schedule_cron(
                                     &auto_id,
                                     &interval_str,
@@ -382,7 +382,7 @@ impl Dashboard {
                     let label = format_hour_ampm(hour);
                     menu = menu.entry(label, None, move |_window, cx: &mut App| {
                         entity
-                            .update(cx, |this: &mut Dashboard, cx| {
+                            .update(cx, |this: &mut DashboardItem, cx| {
                                 this.update_schedule_cron(&auto_id, &interval, hour, day, cx);
                             })
                             .log_err();
@@ -411,7 +411,7 @@ impl Dashboard {
                         menu =
                             menu.entry(day_name.to_string(), None, move |_window, cx: &mut App| {
                                 entity
-                                    .update(cx, |this: &mut Dashboard, cx| {
+                                    .update(cx, |this: &mut DashboardItem, cx| {
                                         this.update_schedule_cron(
                                             &auto_id,
                                             &interval,
@@ -447,7 +447,7 @@ impl Dashboard {
                         let label = format_dom(day);
                         menu = menu.entry(label, None, move |_window, cx: &mut App| {
                             entity
-                                .update(cx, |this: &mut Dashboard, cx| {
+                                .update(cx, |this: &mut DashboardItem, cx| {
                                     this.update_schedule_cron(
                                         &auto_id,
                                         &interval,

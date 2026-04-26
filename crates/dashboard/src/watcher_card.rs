@@ -20,7 +20,7 @@ use ui::{
 use util::ResultExt as _;
 use workspace::{OpenOptions, Workspace};
 
-use crate::Dashboard;
+use crate::DashboardItem;
 
 const SECTION_KEY: &str = "watchers";
 
@@ -33,8 +33,8 @@ pub fn render_watchers_section(
     watchers: &[Result<WatcherConfig, LoadError>],
     statuses: &HashMap<WatcherId, WatcherStatus>,
     workspace: &WeakEntity<Workspace>,
-    entity: WeakEntity<Dashboard>,
-    cx: &mut Context<Dashboard>,
+    entity: WeakEntity<DashboardItem>,
+    cx: &mut Context<DashboardItem>,
 ) -> impl IntoElement {
     let watchers_dir = watchers_config_dir_for(config_root);
     if watchers.is_empty() && !watchers_dir.exists() {

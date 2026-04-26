@@ -12,7 +12,7 @@
 //!
 //! Per `private/specs/dashboard-functional-extraction.md` (Decision 4), this
 //! stays as an internal module rather than a separate crate because all the
-//! logic is tightly bound to `Dashboard` state, `Window`, `Context<Self>`,
+//! logic is tightly bound to `DashboardItem` state, `Window`, `Context<Self>`,
 //! and `AsyncApp`.
 
 use std::path::PathBuf;
@@ -23,9 +23,9 @@ use postprod_dashboard_config as dcfg;
 use postprod_rules::note_store::NoteStore;
 use util::ResultExt as _;
 
-use crate::{Dashboard, PostProdInlineAssist};
+use crate::{DashboardItem, PostProdInlineAssist};
 
-impl Dashboard {
+impl DashboardItem {
     /// Open the PostProd Rules window in general mode (header button / keybinding).
     pub(crate) fn open_postprod_rules(
         &mut self,

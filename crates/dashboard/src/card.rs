@@ -22,7 +22,7 @@ use ui::{
 
 use postprod_dashboard_config::AutomationEntry;
 
-use crate::{AutomationRunStatus, Dashboard};
+use crate::{AutomationRunStatus, DashboardItem};
 
 // ---------------------------------------------------------------------------
 // CardRenderContext
@@ -40,7 +40,7 @@ pub(crate) struct CardRenderContext<'a> {
     pub is_expanded: bool,
     pub is_scheduled: bool,
     pub is_pending_delete: bool,
-    pub entity: WeakEntity<Dashboard>,
+    pub entity: WeakEntity<DashboardItem>,
     pub run_status: Option<&'a AutomationRunStatus>,
 }
 

@@ -1,4 +1,4 @@
-//! Dashboard-side reader for `kind = "notification.popup"` bus events.
+//! DashboardItem-side reader for `kind = "notification.popup"` bus events.
 //!
 //! Wraps [`postprod_events::bus::EventInbox`] configured for the
 //! `notification.popup` kind, decodes each envelope into a
@@ -45,7 +45,7 @@ use postprod_popup_notification::{
 };
 use util::ResultExt as _;
 
-use crate::Dashboard;
+use crate::DashboardItem;
 
 const FS_WATCH_LATENCY: Duration = Duration::from_millis(100);
 
@@ -89,12 +89,12 @@ impl DashboardPopupInbox {
     ///
     /// Honors the [`INBOX_ENV_VAR`] override so integration tests can point
     /// at a scratch dir.
-    pub fn new(fs: Arc<dyn Fs>, cx: &mut Context<Dashboard>) -> Self {
+    pub fn new(fs: Arc<dyn Fs>, cx: &mut Context<DashboardItem>) -> Self {
         let root = resolve_root();
         let inbox = EventInbox::new(NOTIFICATION_POPUP_KIND, root);
         let kind_dir = inbox.kind_dir();
 
-        let watch_task = cx.spawn(async move |this: WeakEntity<Dashboard>, cx: &mut AsyncApp| {
+        let watch_task = cx.spawn(async move |this: WeakEntity<DashboardItem>, cx: &mut AsyncApp| {
             fs.create_dir(&kind_dir).await.log_err();
 
             // Initial drain — events that accumulated while the dashboard
@@ -113,7 +113,7 @@ impl DashboardPopupInbox {
         }
     }
 
-    fn dispatch_event(&mut self, event: NotificationPopupEvent, cx: &mut Context<Dashboard>) {
+    fn dispatch_event(&mut self, event: NotificationPopupEvent, cx: &mut Context<DashboardItem>) {
         // Sound plays ONCE per event (not per popup). Matches upstream Zed
         // conversation_view pattern — sound is an event-level signal. Bursts
         // that fill the cap each get their own sound by definition.
@@ -132,7 +132,7 @@ impl DashboardPopupInbox {
         &mut self,
         event: &NotificationPopupEvent,
         display: Rc<dyn PlatformDisplay>,
-        cx: &mut Context<Dashboard>,
+        cx: &mut Context<DashboardItem>,
     ) {
         let display_id = display.id();
 
@@ -186,7 +186,7 @@ impl DashboardPopupInbox {
 
         let autohide = if matches!(event.severity, Severity::Info | Severity::Success) {
             Some(cx.spawn(
-                async move |this: WeakEntity<Dashboard>, cx: &mut AsyncApp| {
+                async move |this: WeakEntity<DashboardItem>, cx: &mut AsyncApp| {
                     cx.background_executor().timer(AUTOHIDE_AFTER).await;
                     this.update(cx, |dashboard, cx| {
                         dashboard.popup_inbox.close_popup(display_id, window, cx);
@@ -248,7 +248,7 @@ fn resolve_root() -> PathBuf {
 
 async fn drain_and_dispatch(
     inbox: &EventInbox,
-    dashboard: &WeakEntity<Dashboard>,
+    dashboard: &WeakEntity<DashboardItem>,
     cx: &mut AsyncApp,
 ) -> anyhow::Result<()> {
     let inbox = inbox.clone();
