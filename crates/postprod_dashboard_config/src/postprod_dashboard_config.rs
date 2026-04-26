@@ -85,6 +85,7 @@ pub enum ParamType {
     Text,
     Path,
     Select,
+    Cwd,
 }
 
 fn default_param_type() -> ParamType {
@@ -569,6 +570,38 @@ fn collect_scripts_recursive(dir: &Path) -> Vec<PathBuf> {
     result
 }
 
+/// Walk `entry.params` in declared order and drop subsequent entries whose
+/// `param_type == ParamType::Cwd`. Other param types (`Text`, `Path`, `Select`)
+/// are preserved unchanged. Returns a per-entry warning when any cwd-typed
+/// duplicates were dropped, formatted for accumulation into the loader's
+/// per-config-root error string.
+pub(crate) fn dedup_cwd_params(entry: &mut AutomationEntry) -> Option<String> {
+    let mut seen_cwd = false;
+    let mut dropped_keys: Vec<String> = Vec::new();
+    entry.params.retain(|p| {
+        if p.param_type != ParamType::Cwd {
+            return true;
+        }
+        if seen_cwd {
+            dropped_keys.push(p.key.clone());
+            false
+        } else {
+            seen_cwd = true;
+            true
+        }
+    });
+    if dropped_keys.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "automation '{}': dropped {} extra cwd params (keys: {}); only the first is honored",
+            entry.id,
+            dropped_keys.len(),
+            dropped_keys.join(", "),
+        ))
+    }
+}
+
 pub fn load_automations_registry(config_root: &Path) -> (Vec<AutomationEntry>, Option<String>) {
     let dir = automations_dir_for(config_root);
     if !dir.exists() {
@@ -583,6 +616,10 @@ pub fn load_automations_registry(config_root: &Path) -> (Vec<AutomationEntry>, O
         match load_single_automation(&path, config_root) {
             Ok(mut entry) => {
                 entry.source_path = Some(path.clone());
+                if let Some(warning) = dedup_cwd_params(&mut entry) {
+                    log::warn!("config: {warning}");
+                    errors.push(warning);
+                }
                 automations.push(entry);
             }
             Err(e) => {
@@ -956,6 +993,238 @@ prompt = "Run delivery for {session_path}"
         assert!(!auto.hidden);
         assert_eq!(auto.order, 100);
         Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // ParamType::Cwd — variant deserialization, defaults, dedup
+    // ---------------------------------------------------------------
+
+    /// Test 1 — `param_type = "cwd"` deserializes to `ParamType::Cwd`.
+    #[test]
+    fn test_param_type_cwd_deserializes() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("cwd-auto.toml");
+        std::fs::write(
+            &path,
+            r#"
+id = "general-coder"
+label = "General Coder"
+description = "d"
+icon = "sparkle"
+prompt = "p"
+
+[[param]]
+key = "cwd"
+label = "Working directory"
+default = "/Users/foo/bar"
+param_type = "cwd"
+"#,
+        )?;
+        let entry = load_single_automation(&path, tmp.path())?;
+        assert_eq!(entry.params.len(), 1);
+        assert_eq!(entry.params[0].param_type, ParamType::Cwd);
+        assert_eq!(entry.params[0].key, "cwd");
+        assert_eq!(entry.params[0].default, "/Users/foo/bar");
+        Ok(())
+    }
+
+    /// Test 2 — omitted `param_type` still defaults to `ParamType::Text`
+    /// (regression guard for `default_param_type`).
+    #[test]
+    fn test_param_type_default_is_text() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("default-param.toml");
+        std::fs::write(
+            &path,
+            r#"
+id = "x"
+label = "X"
+description = "d"
+icon = "sparkle"
+prompt = "p"
+
+[[param]]
+key = "name"
+label = "Name"
+default = "alice"
+"#,
+        )?;
+        let entry = load_single_automation(&path, tmp.path())?;
+        assert_eq!(entry.params[0].param_type, ParamType::Text);
+        Ok(())
+    }
+
+    /// Test 3 — a `[[param]]` with `param_type = "cwd"` round-trips through
+    /// serde without error (deserialize → serialize → deserialize).
+    #[test]
+    fn test_param_type_cwd_serde_roundtrip() -> Result<(), Box<dyn std::error::Error>> {
+        let original = ParamEntry {
+            key: "cwd".to_string(),
+            label: "Working directory".to_string(),
+            placeholder: String::new(),
+            default: "/Users/foo/bar".to_string(),
+            param_type: ParamType::Cwd,
+            options: Vec::new(),
+        };
+        let serialized = toml::to_string(&original)?;
+        let deserialized: ParamEntry = toml::from_str(&serialized)?;
+        assert_eq!(deserialized.key, "cwd");
+        assert_eq!(deserialized.param_type, ParamType::Cwd);
+        assert_eq!(deserialized.default, "/Users/foo/bar");
+        Ok(())
+    }
+
+    /// Test 12 — Tool TOML containing `param_type = "cwd"` deserializes
+    /// successfully. The value is unused at tool-spawn time (verified by
+    /// inspection of `resolve_tool_command`), but the parser must accept it.
+    #[test]
+    fn test_param_type_cwd_on_tool_parses() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let path = tmp.path().join("tool-with-cwd-param.toml");
+        std::fs::write(
+            &path,
+            r#"
+[tool]
+id = "t"
+label = "T"
+description = "d"
+icon = "sparkle"
+binary = "t"
+source = "agent"
+tier = "standard"
+
+[[tool.param]]
+key = "where"
+label = "Where"
+default = "/tmp"
+param_type = "cwd"
+"#,
+        )?;
+        let tool = load_single_tool(&path)?;
+        assert_eq!(tool.params.len(), 1);
+        assert_eq!(tool.params[0].param_type, ParamType::Cwd);
+        Ok(())
+    }
+
+    /// Test 13 — `dedup_cwd_params` walks `params` in declared order, drops
+    /// only subsequent cwd-typed entries, preserves non-cwd params, and
+    /// returns a per-entry warning when duplicates are dropped.
+    #[test]
+    fn test_dedup_cwd_params_drops_extras_preserves_others() {
+        let mut entry = AutomationEntry {
+            id: "general-coder".to_string(),
+            label: "General Coder".to_string(),
+            description: String::new(),
+            icon: String::new(),
+            prompt_file: None,
+            prompt: String::new(),
+            section: None,
+            order: 100,
+            hidden: false,
+            skip_default_context: false,
+            profile: None,
+            schedule: None,
+            steps: Vec::new(),
+            chain: None,
+            entry_type: None,
+            contexts: Vec::new(),
+            params: vec![
+                ParamEntry {
+                    key: "cwd".to_string(),
+                    label: "First cwd".to_string(),
+                    placeholder: String::new(),
+                    default: "/first".to_string(),
+                    param_type: ParamType::Cwd,
+                    options: Vec::new(),
+                },
+                ParamEntry {
+                    key: "name".to_string(),
+                    label: "Name".to_string(),
+                    placeholder: String::new(),
+                    default: String::new(),
+                    param_type: ParamType::Text,
+                    options: Vec::new(),
+                },
+                ParamEntry {
+                    key: "second_cwd".to_string(),
+                    label: "Second cwd".to_string(),
+                    placeholder: String::new(),
+                    default: "/second".to_string(),
+                    param_type: ParamType::Cwd,
+                    options: Vec::new(),
+                },
+                ParamEntry {
+                    key: "third_cwd".to_string(),
+                    label: "Third cwd".to_string(),
+                    placeholder: String::new(),
+                    default: "/third".to_string(),
+                    param_type: ParamType::Cwd,
+                    options: Vec::new(),
+                },
+            ],
+            source_path: None,
+        };
+
+        let warning = dedup_cwd_params(&mut entry);
+        let warning = warning.expect("warning expected when duplicates dropped");
+
+        assert!(warning.contains("general-coder"));
+        assert!(warning.contains("dropped 2 extra cwd params"));
+        assert!(warning.contains("second_cwd"));
+        assert!(warning.contains("third_cwd"));
+
+        assert_eq!(entry.params.len(), 2);
+        assert_eq!(entry.params[0].key, "cwd");
+        assert_eq!(entry.params[0].param_type, ParamType::Cwd);
+        assert_eq!(entry.params[1].key, "name");
+        assert_eq!(entry.params[1].param_type, ParamType::Text);
+    }
+
+    /// Test 13b — `dedup_cwd_params` returns `None` when there is at most
+    /// one cwd-typed param. Non-cwd params are untouched.
+    #[test]
+    fn test_dedup_cwd_params_no_duplicates_returns_none() {
+        let mut entry = AutomationEntry {
+            id: "x".to_string(),
+            label: "X".to_string(),
+            description: String::new(),
+            icon: String::new(),
+            prompt_file: None,
+            prompt: String::new(),
+            section: None,
+            order: 100,
+            hidden: false,
+            skip_default_context: false,
+            profile: None,
+            schedule: None,
+            steps: Vec::new(),
+            chain: None,
+            entry_type: None,
+            contexts: Vec::new(),
+            params: vec![
+                ParamEntry {
+                    key: "cwd".to_string(),
+                    label: "cwd".to_string(),
+                    placeholder: String::new(),
+                    default: "/p".to_string(),
+                    param_type: ParamType::Cwd,
+                    options: Vec::new(),
+                },
+                ParamEntry {
+                    key: "name".to_string(),
+                    label: "Name".to_string(),
+                    placeholder: String::new(),
+                    default: String::new(),
+                    param_type: ParamType::Text,
+                    options: Vec::new(),
+                },
+            ],
+            source_path: None,
+        };
+
+        let warning = dedup_cwd_params(&mut entry);
+        assert!(warning.is_none());
+        assert_eq!(entry.params.len(), 2);
     }
 
     #[test]

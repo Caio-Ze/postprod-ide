@@ -2726,7 +2726,7 @@ Rules for the completion report:
                             )
                             .into_any_element()
                     }
-                    ParamType::Path => {
+                    ParamType::Path | ParamType::Cwd => {
                         let current_value = self
                             .param_values
                             .get(entry_id)
