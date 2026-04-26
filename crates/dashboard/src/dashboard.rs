@@ -156,7 +156,7 @@ pub(crate) enum AutomationRunStatus {
 pub fn init(cx: &mut App) {
     cx.observe_new::<Workspace>(|workspace, _, _cx| {
         workspace.register_action(|workspace, _: &ToggleFocus, window, cx| {
-            workspace.toggle_panel_focus::<DashboardItem>(window, cx);
+            workspace.toggle_panel_focus::<DashboardPanel>(window, cx);
         });
         workspace.register_action(
             |workspace, _: &automation_picker::RunAutomationPicker, window, cx| {
@@ -492,22 +492,6 @@ pub(crate) fn effective_active_worktree_id<'a>(
 }
 
 impl DashboardItem {
-    pub async fn load(
-        workspace: WeakEntity<Workspace>,
-        mut cx: gpui::AsyncWindowContext,
-    ) -> anyhow::Result<Entity<Self>> {
-        workspace.update_in(&mut cx, |workspace, _window, cx| {
-            let config_root = workspace
-                .root_paths(cx)
-                .into_iter()
-                .find(|path| folder_has_dashboard_config(path))
-                .map(|arc_path| arc_path.to_path_buf())
-                .unwrap_or_else(suite_root);
-
-            DashboardItem::new(workspace, config_root, cx)
-        })
-    }
-
     fn render_watchers_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         watcher_card::render_watchers_section(
             &self.collapsed_sections,
@@ -3725,10 +3709,8 @@ impl Render for DashboardItem {
 }
 
 // ---------------------------------------------------------------------------
-// Trait impls for docked Panel
+// Trait impls for editor-pane Item surface
 // ---------------------------------------------------------------------------
-
-impl EventEmitter<PanelEvent> for DashboardItem {}
 
 impl Focusable for DashboardItem {
     fn focus_handle(&self, _: &App) -> FocusHandle {
@@ -3736,7 +3718,85 @@ impl Focusable for DashboardItem {
     }
 }
 
-impl Panel for DashboardItem {
+impl EventEmitter<ItemEvent> for DashboardItem {}
+
+impl Item for DashboardItem {
+    type Event = ItemEvent;
+
+    fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
+        "Dashboard".into()
+    }
+
+    fn show_toolbar(&self) -> bool {
+        false
+    }
+
+    fn prevent_close(&self, _cx: &App) -> bool {
+        false
+    }
+
+    fn to_item_events(event: &Self::Event, f: &mut dyn FnMut(ItemEvent)) {
+        f(*event)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DashboardPanel — dock-shell wrapper that hosts an Entity<DashboardItem>
+//
+// Mirrors the upstream `TerminalPanel + TerminalView` shape: the Panel
+// coordinates dock chrome (position, settings, icon, persistence) while the
+// Item presents the content. Both surfaces (the dock panel and an editor-pane
+// tab opened via `dashboard::OpenAsTab`) share a single `Entity<DashboardItem>`,
+// so state is unified and folder switches propagate automatically.
+// ---------------------------------------------------------------------------
+
+pub struct DashboardPanel {
+    pub(crate) item: Entity<DashboardItem>,
+    workspace: WeakEntity<Workspace>,
+    // Set when an `OpenAsTab` action moves the inner item into a pane. Drops
+    // when the tab is removed or another `OpenAsTab` overwrites it.
+    _tab_close_subscription: Option<Subscription>,
+}
+
+impl DashboardPanel {
+    pub async fn load(
+        workspace: WeakEntity<Workspace>,
+        mut cx: gpui::AsyncWindowContext,
+    ) -> anyhow::Result<Entity<Self>> {
+        workspace.update_in(&mut cx, |workspace, _window, cx| {
+            let config_root = workspace
+                .root_paths(cx)
+                .into_iter()
+                .find(|path| folder_has_dashboard_config(path))
+                .map(|arc_path| arc_path.to_path_buf())
+                .unwrap_or_else(suite_root);
+
+            let weak_workspace = workspace.weak_handle();
+            let item = DashboardItem::new(workspace, config_root, cx);
+            cx.new(|_| Self {
+                item,
+                workspace: weak_workspace,
+                _tab_close_subscription: None,
+            })
+        })
+    }
+}
+
+impl Focusable for DashboardPanel {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.item.read(cx).focus_handle.clone()
+    }
+}
+
+impl EventEmitter<PanelEvent> for DashboardPanel {}
+
+impl Render for DashboardPanel {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(self.item.clone())
+    }
+}
+
+impl Panel for DashboardPanel {
     fn persistent_name() -> &'static str {
         "Dashboard"
     }
@@ -3798,32 +3858,6 @@ impl Panel for DashboardItem {
 
     fn activation_priority(&self) -> u32 {
         8
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Trait impls for editor-pane Item surface
-// ---------------------------------------------------------------------------
-
-impl EventEmitter<ItemEvent> for DashboardItem {}
-
-impl Item for DashboardItem {
-    type Event = ItemEvent;
-
-    fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
-        "Dashboard".into()
-    }
-
-    fn show_toolbar(&self) -> bool {
-        false
-    }
-
-    fn prevent_close(&self, _cx: &App) -> bool {
-        false
-    }
-
-    fn to_item_events(event: &Self::Event, f: &mut dyn FnMut(ItemEvent)) {
-        f(*event)
     }
 }
 

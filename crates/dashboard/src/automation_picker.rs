@@ -18,7 +18,7 @@ use postprod_dashboard_config::{self as config, AutomationEntry, ToolEntry, stat
 use crate::hotkeys::{GlobalHotkeyManagerHandle, ResolvedHotkeyEntry};
 use crate::dashboard_paths::{resolve_agent_tools_path, resolve_runtime_path};
 use crate::persistence::read_background_tools;
-use crate::{DashboardItem, RunDashboardTool, resolve_tool_command};
+use crate::{DashboardPanel, RunDashboardTool, resolve_tool_command};
 
 use task::{RevealStrategy, SpawnInTerminal, TaskId};
 use util::ResultExt as _;
@@ -130,8 +130,9 @@ impl PickerEntry {
 pub(crate) fn build_picker_entries(workspace: &Workspace, cx: &App) -> Vec<PickerEntry> {
     let mut entries: Vec<PickerEntry> = Vec::new();
 
-    let dashboard_data = workspace.panel::<DashboardItem>(cx).map(|d| {
-        let d = d.read(cx);
+    let dashboard_data = workspace.panel::<DashboardPanel>(cx).map(|panel| {
+        let item = panel.read(cx).item.clone();
+        let d = item.read(cx);
         (
             d.tools.clone(),
             d.automations.clone(),
@@ -562,8 +563,9 @@ impl PickerDelegate for AutomationPickerDelegate {
                     let auto_id = auto.id.clone();
                     if let Some(workspace) = self.workspace.upgrade() {
                         workspace.update(cx, |workspace, cx| {
-                            if let Some(dashboard) = workspace.panel::<DashboardItem>(cx) {
-                                dashboard.update(cx, |d, cx| {
+                            if let Some(panel) = workspace.panel::<DashboardPanel>(cx) {
+                                let item = panel.read(cx).item.clone();
+                                item.update(cx, |d, cx| {
                                     if let Some(entry) =
                                         d.automations.iter().find(|a| a.id == auto_id)
                                     {
