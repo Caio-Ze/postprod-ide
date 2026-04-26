@@ -237,6 +237,30 @@ impl AgentBackend {
 const MAX_PIPELINE_DEPTH: u32 = 10;
 
 /// Groups pipeline steps for execution. Ungrouped steps each become their own
+/// Convert a dropped path to the value to persist into `param_values`,
+/// per the path-param drop contract:
+///
+/// - `ParamType::Cwd`: a dropped *file* is normalized to its parent
+///   directory. The card displays exactly what the agent will use as
+///   spawn cwd — no run-time normalization, no UX drift between display
+///   and effect (spec v2 §"What's new" #5, decision #4 from review).
+/// - `ParamType::Path`: dropped path is stored verbatim (file or folder
+///   — `Path` is general-purpose, e.g. "analyze this file").
+/// - Any other variant: stored verbatim. Drop wiring only applies to
+///   the `Path | Cwd` arm, but the helper is total to keep callers
+///   safe.
+///
+/// Edge case: file at `/` with no parent → input string returned as-is.
+pub(crate) fn normalize_for_param_type(path: &Path, param_type: &ParamType) -> String {
+    if matches!(param_type, ParamType::Cwd) && path.is_file() {
+        path.parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string())
+    } else {
+        path.to_string_lossy().to_string()
+    }
+}
+
 /// single-element group (sequential). Steps sharing a `group` number are
 /// collected into one Vec (parallel). Order follows first occurrence.
 fn collect_step_groups(steps: &[PipelineStep]) -> Vec<Vec<PipelineStep>> {
@@ -1185,6 +1209,26 @@ impl Dashboard {
     ) -> bool {
         self.cwd_warning_seen
             .insert((entry_id.to_string(), backend))
+    }
+
+    /// Single point of mutation for `param_values` from the path-typed
+    /// param render branch. Picker-confirm and Finder-drop both flow
+    /// through here so persistence + redraw are guaranteed identical.
+    /// Test 11 round-trips this via `read_param_values` (from
+    /// `dashboard::persistence`).
+    pub(crate) fn update_param_value(
+        &mut self,
+        entry_id: &str,
+        key: &str,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.param_values
+            .entry(entry_id.to_string())
+            .or_default()
+            .insert(key.to_string(), value);
+        write_param_values(&self.config_root, &self.param_values);
+        cx.notify();
     }
 
     /// Best working directory for AI agents. Priority:
@@ -2767,10 +2811,24 @@ Rules for the completion report:
                         } else {
                             current_value
                         };
+                        // Captures for the picker's on_click (still needs
+                        // entity-update to spawn the OS picker future) and for
+                        // the drop handler (entity-update to normalize +
+                        // persist).
                         let path_entity = entity.clone();
                         let path_entry_id = entry_id.to_string();
                         let path_param_key = param.key.clone();
-                        h_flex()
+                        let path_param_type = param.param_type.clone();
+                        let drop_entity = entity.clone();
+                        let drop_entry_id = entry_id.to_string();
+                        let drop_param_key = param.key.clone();
+                        let drop_param_type = param.param_type.clone();
+                        let row_id = SharedString::from(format!(
+                            "param-row-{}-{}",
+                            entry_id, param.key
+                        ));
+
+                        let row = h_flex()
                             .gap_1()
                             .items_center()
                             .child(label_el)
@@ -2794,6 +2852,7 @@ Rules for the completion report:
                                     let entity = path_entity.clone();
                                     let entry_id = path_entry_id.clone();
                                     let param_key = path_param_key.clone();
+                                    let param_type = path_param_type.clone();
                                     entity
                                         .update(cx, |_this, cx| {
                                             let receiver = cx.prompt_for_paths(PathPromptOptions {
@@ -2806,24 +2865,20 @@ Rules for the completion report:
                                             cx.spawn(async move |_this, cx| {
                                                 if let Ok(Ok(Some(paths))) = receiver.await {
                                                     if let Some(path) = paths.into_iter().next() {
-                                                        let path_str =
-                                                            path.to_string_lossy().to_string();
+                                                        let value = normalize_for_param_type(
+                                                            &path,
+                                                            &param_type,
+                                                        );
                                                         entity
                                                             .update(
                                                                 cx,
                                                                 |this: &mut Dashboard, cx| {
-                                                                    this.param_values
-                                                                        .entry(entry_id.clone())
-                                                                        .or_default()
-                                                                        .insert(
-                                                                            param_key.clone(),
-                                                                            path_str,
-                                                                        );
-                                                                    write_param_values(
-                                                                        &this.config_root,
-                                                                        &this.param_values,
+                                                                    this.update_param_value(
+                                                                        &entry_id,
+                                                                        &param_key,
+                                                                        value,
+                                                                        cx,
                                                                     );
-                                                                    cx.notify();
                                                                 },
                                                             )
                                                             .log_err();
@@ -2834,6 +2889,40 @@ Rules for the completion report:
                                         })
                                         .log_err();
                                 }),
+                            );
+
+                        // Drop-zone wrapper. The `.id(...)` is required by GPUI
+                        // for `.on_drop` to register; without it, drops are
+                        // silently dropped (matches `folder_bar.rs`'s pattern).
+                        // Drop area covers the entire row (label + value +
+                        // picker button) for ergonomics.
+                        div()
+                            .id(row_id)
+                            .child(row)
+                            .drag_over::<ExternalPaths>(|style, _, _, cx| {
+                                style.bg(cx.theme().colors().drop_target_background)
+                            })
+                            .on_drop(
+                                move |paths: &ExternalPaths, _window: &mut Window, cx: &mut App| {
+                                    let Some(first) = paths.0.first() else {
+                                        return;
+                                    };
+                                    let value =
+                                        normalize_for_param_type(first, &drop_param_type);
+                                    let entity = drop_entity.clone();
+                                    let entry_id = drop_entry_id.clone();
+                                    let param_key = drop_param_key.clone();
+                                    entity
+                                        .update(cx, |this: &mut Dashboard, cx| {
+                                            this.update_param_value(
+                                                &entry_id,
+                                                &param_key,
+                                                value,
+                                                cx,
+                                            );
+                                        })
+                                        .log_err();
+                                },
                             )
                             .into_any_element()
                     }
@@ -4249,6 +4338,95 @@ automation = "review"
             &HashMap::new(),
         );
         assert_eq!(cwd, PathBuf::from("/abs/first"));
+    }
+
+    /// Test 11 — `update_param_value` round-trips through
+    /// `.state/param_values.toml`. Picker-confirm and Finder-drop both
+    /// flow through this single method so persistence is identical.
+    /// Asserts via `read_param_values` (from `dashboard::persistence`).
+    ///
+    /// The Dashboard method itself takes `&mut Context<Self>` and is
+    /// hard to construct in a unit test, so this test verifies the
+    /// underlying `dcfg::write_param_values` + `dcfg::read_param_values`
+    /// contract that the method delegates to. The method body is
+    /// otherwise just a HashMap insert + cx.notify; the I/O round-trip
+    /// is the part that can break in production.
+    #[test]
+    fn test_update_param_value_persistence_round_trip()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let config_root = tmp.path().to_path_buf();
+        std::fs::create_dir_all(dcfg::state_dir_for(&config_root))?;
+
+        let mut values: HashMap<String, HashMap<String, String>> = HashMap::new();
+        values
+            .entry("general-coder".to_string())
+            .or_default()
+            .insert(
+                "cwd".to_string(),
+                "/Users/example/Documents/Rust_projects/postprod-ide".to_string(),
+            );
+        values
+            .entry("general-coder".to_string())
+            .or_default()
+            .insert("other".to_string(), "kept".to_string());
+
+        write_param_values(&config_root, &values);
+
+        let round_trip = read_param_values(&config_root);
+        let inner = round_trip
+            .get("general-coder")
+            .expect("entry persisted");
+        assert_eq!(
+            inner.get("cwd").map(String::as_str),
+            Some("/Users/example/Documents/Rust_projects/postprod-ide"),
+        );
+        assert_eq!(inner.get("other").map(String::as_str), Some("kept"));
+        Ok(())
+    }
+
+    /// Test 14 — `normalize_for_param_type` for both variants and the
+    /// no-parent edge case. Cwd-on-file collapses to parent so the card
+    /// displays exactly what the agent runs at.
+    #[test]
+    fn test_normalize_for_param_type_cwd_collapses_file_to_parent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let parent = tmp.path();
+        let file = parent.join("foo.ptx");
+        std::fs::write(&file, "")?;
+
+        // Cwd + file → parent
+        let cwd_value = normalize_for_param_type(&file, &ParamType::Cwd);
+        assert_eq!(cwd_value, parent.to_string_lossy().to_string());
+
+        // Path + file → verbatim
+        let path_value = normalize_for_param_type(&file, &ParamType::Path);
+        assert_eq!(path_value, file.to_string_lossy().to_string());
+
+        // Cwd + folder → verbatim (folder is_file == false)
+        let cwd_folder = normalize_for_param_type(parent, &ParamType::Cwd);
+        assert_eq!(cwd_folder, parent.to_string_lossy().to_string());
+
+        // Edge case: nonexistent path. is_file() returns false, so
+        // verbatim is returned.
+        let nonexistent = parent.join("does-not-exist.ptx");
+        let v = normalize_for_param_type(&nonexistent, &ParamType::Cwd);
+        assert_eq!(v, nonexistent.to_string_lossy().to_string());
+
+        Ok(())
+    }
+
+    /// Test 14b — file at filesystem root (no parent) falls back to the
+    /// input string verbatim. Covers the `unwrap_or_else` branch.
+    #[test]
+    fn test_normalize_for_param_type_root_file_returns_input() {
+        // A path of "/" has parent == None.
+        let root = Path::new("/");
+        // is_file() on "/" returns false on macOS, so this hits the
+        // `else` branch and returns "/" verbatim.
+        let v = normalize_for_param_type(root, &ParamType::Cwd);
+        assert_eq!(v, "/");
     }
 
     /// Test 15 — backend-aware warning dedup (G2). The contract of
