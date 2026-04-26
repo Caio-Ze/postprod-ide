@@ -42,6 +42,60 @@ use crate::{
     MAX_PIPELINE_DEPTH, collect_step_groups, resolve_tool_command,
 };
 
+/// Resolve the spawn cwd for an automation run.
+///
+/// Per spec `automation-cwd-override` v2 §"What's new" #2:
+///
+/// 1. If `entry` declares no `[[param]] param_type = "cwd"`, return
+///    `fallback` (the global `Dashboard::agent_cwd()` chain).
+/// 2. Otherwise, take the user-stored value from `param_values` (per-card
+///    picker / Finder drop), falling through to `param.default` when
+///    nothing is stored.
+/// 3. If the resolved string is empty, return `fallback` — preserves the
+///    existing chain when a TOML author declares the param but leaves
+///    no default and the user hasn't set one.
+/// 4. Apply `dcfg::expand_tilde`. If absolute, use verbatim. Otherwise
+///    resolve against `config_root` (mirrors `resolve_context_entry`'s
+///    semantics for `[[context]] source = "path"`).
+///
+/// No existence check on the resolved path: this matches `agent_cwd()`'s
+/// own semantics — failures surface at spawn time via the OS, consistent
+/// with the rest of the cwd chain.
+///
+/// Multiple cwd-typed params per entry are dropped at load time
+/// (`postprod_dashboard_config::dedup_cwd_params`); this resolver still
+/// uses `find` defensively so a duplicate that ever slipped past the
+/// loader doesn't panic.
+pub(crate) fn resolve_automation_cwd(
+    entry: &AutomationEntry,
+    fallback: PathBuf,
+    config_root: &Path,
+    param_values: &HashMap<String, HashMap<String, String>>,
+) -> PathBuf {
+    let Some(param) = entry
+        .params
+        .iter()
+        .find(|p| p.param_type == dcfg::ParamType::Cwd)
+    else {
+        return fallback;
+    };
+    let raw = param_values
+        .get(&entry.id)
+        .and_then(|m| m.get(&param.key))
+        .cloned()
+        .unwrap_or_else(|| param.default.clone());
+    if raw.is_empty() {
+        return fallback;
+    }
+    let expanded = dcfg::expand_tilde(&raw);
+    let candidate = PathBuf::from(&expanded);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        config_root.join(candidate)
+    }
+}
+
 impl Dashboard {
     pub(crate) fn run_automation(
         &mut self,
@@ -91,12 +145,15 @@ impl Dashboard {
         let workspace = self.workspace.clone();
         let agent_backend = self.agent_backend;
         let backends = self.backends.clone();
-        let agent_cwd = self.agent_cwd();
         let entry_id = entry_id.to_string();
         let entry_label = entry_label.to_string();
 
-        // Collect context entries (default + per-automation) and per-automation profile
-        let (contexts, automation_profile) = {
+        // Single entry lookup feeds: contexts, per-automation profile, the
+        // resolved spawn cwd (Phase 2), and the cwd-binding "is this entry
+        // declaring a cwd-typed param?" check used by the backend-aware
+        // warning below.
+        let fallback_cwd = self.agent_cwd();
+        let (contexts, automation_profile, agent_cwd, has_cwd_param) = {
             let entry = self.automations.iter().find(|a| a.id == entry_id);
             let mut all_contexts = if entry.is_some_and(|e| !e.skip_default_context) {
                 self.default_contexts.clone()
@@ -107,8 +164,48 @@ impl Dashboard {
             if let Some(e) = entry {
                 all_contexts.extend(e.contexts.clone());
             }
-            (all_contexts, profile)
+            let cwd = entry
+                .map(|e| {
+                    resolve_automation_cwd(
+                        e,
+                        fallback_cwd.clone(),
+                        &self.config_root,
+                        &self.param_values,
+                    )
+                })
+                .unwrap_or_else(|| fallback_cwd.clone());
+            let has_cwd = entry.is_some_and(|e| {
+                e.params.iter().any(|p| p.param_type == dcfg::ParamType::Cwd)
+            });
+            (all_contexts, profile, cwd, has_cwd)
         };
+
+        // Backend-aware warning (spec G2 / T2.6): a cwd-bound param has no
+        // effect on Native (Zed agent panel — no `work_dirs` plumbed) or
+        // CopyOnly (no spawn at all). Emit a one-shot toast per
+        // (entry_id, backend) so users aren't surprised.
+        let is_terminal = !matches!(
+            agent_backend,
+            AgentBackend::Native | AgentBackend::CopyOnly,
+        );
+        if has_cwd_param
+            && !is_terminal
+            && self.mark_cwd_warning_seen(&entry_id, agent_backend)
+        {
+            self.workspace
+                .update(cx, |workspace, cx| {
+                    workspace.show_toast(
+                        Toast::new(
+                            NotificationId::unique::<ContextLauncherToast>(),
+                            format!(
+                                "'{entry_label}' has a cwd-bound param; cwd binding takes effect only on terminal backends. The agent will run at the panel's default worktree."
+                            ),
+                        ),
+                        cx,
+                    );
+                })
+                .log_err();
+        }
         let config_root = self.config_root.clone();
         let session_path_for_env = self.session_path.clone().unwrap_or_default();
         let active_folder_for_env = self
@@ -353,7 +450,16 @@ impl Dashboard {
 
         let command = resolve_bin(&backend_config.command);
         let flags = backend_config.flags;
-        let agent_cwd = self.agent_cwd();
+        // `entry` is already cloned into scope above; reuse for the cwd
+        // resolver. Pipeline / scheduled steps each resolve cwd from
+        // their own entry's params — there is no pipeline-level cwd
+        // (spec §"What's new" #2).
+        let agent_cwd = resolve_automation_cwd(
+            &entry,
+            self.agent_cwd(),
+            &self.config_root,
+            &self.param_values,
+        );
         let entry_id = entry.id;
         let entry_label = entry.label;
 

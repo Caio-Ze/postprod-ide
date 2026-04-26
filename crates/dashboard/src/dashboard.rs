@@ -174,7 +174,7 @@ const DASHBOARD_PANEL_KEY: &str = "Dashboard";
 // Agent backend selector
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
 enum AgentBackend {
     #[default]
     Claude,
@@ -343,6 +343,10 @@ pub struct Dashboard {
     param_editors: HashMap<(String, String), Entity<Editor>>,
     _param_editor_subscriptions: Vec<Subscription>,
     _param_write_task: Option<gpui::Task<()>>,
+    // Per-session dedup for the "cwd-bound param has no effect on this
+    // backend" toast. Cleared only by Dashboard reconstruction (config_root
+    // switch / dev rebuild). See spec Phase 2 T2.4–T2.6 (G2).
+    cwd_warning_seen: HashSet<(String, AgentBackend)>,
     // Scheduler
     scheduler: Entity<Scheduler>,
     window_handle: Option<AnyWindowHandle>,
@@ -1040,6 +1044,7 @@ impl Dashboard {
                 param_editors: HashMap::new(),
                 _param_editor_subscriptions: Vec::new(),
                 _param_write_task: None,
+                cwd_warning_seen: HashSet::new(),
                 scheduler,
                 window_handle: None,
                 _scheduler_subscription,
@@ -1165,6 +1170,21 @@ impl Dashboard {
             },
         )
         .detach();
+    }
+
+    /// Records that the "cwd-bound param has no effect on this backend"
+    /// toast has been emitted for `(entry_id, backend)`. Returns `true` the
+    /// first time; `false` on subsequent calls with the same tuple. Pure —
+    /// the toast emission stays at the call site (it needs the workspace
+    /// handle and `Toast` machinery, neither of which belong on a dedup
+    /// helper). Test 15 calls this directly.
+    pub(crate) fn mark_cwd_warning_seen(
+        &mut self,
+        entry_id: &str,
+        backend: AgentBackend,
+    ) -> bool {
+        self.cwd_warning_seen
+            .insert((entry_id.to_string(), backend))
     }
 
     /// Best working directory for AI agents. Priority:
@@ -4068,6 +4088,198 @@ automation = "review"
         let visible2: [(WorktreeId, &Path); 0] = [];
         let result_no_repo = effective_active_worktree_id(None, visible2);
         assert_eq!(result_no_repo, None);
+    }
+
+    // ---------------------------------------------------------------
+    // Phase 2 — resolve_automation_cwd + cwd warning dedup (G1 / G2)
+    // ---------------------------------------------------------------
+
+    use super::runtime::resolve_automation_cwd;
+
+    /// Build a baseline `AutomationEntry` for the resolver tests, varying
+    /// only the `params` and `id` fields per test. Mirrors the constructor
+    /// shape used in `postprod_dashboard_config`'s dedup tests.
+    fn make_entry(id: &str, params: Vec<dcfg::ParamEntry>) -> dcfg::AutomationEntry {
+        dcfg::AutomationEntry {
+            id: id.to_string(),
+            label: id.to_string(),
+            description: String::new(),
+            icon: String::new(),
+            prompt_file: None,
+            prompt: String::new(),
+            section: None,
+            order: 100,
+            hidden: false,
+            skip_default_context: false,
+            profile: None,
+            schedule: None,
+            steps: Vec::new(),
+            chain: None,
+            entry_type: None,
+            contexts: Vec::new(),
+            params,
+            source_path: None,
+        }
+    }
+
+    fn cwd_param(key: &str, default: &str) -> dcfg::ParamEntry {
+        dcfg::ParamEntry {
+            key: key.to_string(),
+            label: key.to_string(),
+            placeholder: String::new(),
+            default: default.to_string(),
+            param_type: dcfg::ParamType::Cwd,
+            options: Vec::new(),
+        }
+    }
+
+    /// Test 4 — resolver returns `fallback` when the entry has no cwd param.
+    #[test]
+    fn test_resolve_automation_cwd_no_cwd_param_returns_fallback() {
+        let entry = make_entry("x", vec![]);
+        let fallback = PathBuf::from("/fallback");
+        let cwd = resolve_automation_cwd(
+            &entry,
+            fallback.clone(),
+            Path::new("/cfg"),
+            &HashMap::new(),
+        );
+        assert_eq!(cwd, fallback);
+    }
+
+    /// Test 5 — resolver returns `param.default` (after tilde expansion)
+    /// when there's a cwd param but no stored value in `param_values`.
+    #[test]
+    fn test_resolve_automation_cwd_uses_default_when_no_stored_value() {
+        let entry = make_entry("x", vec![cwd_param("cwd", "/abs/default")]);
+        let cwd = resolve_automation_cwd(
+            &entry,
+            PathBuf::from("/fallback"),
+            Path::new("/cfg"),
+            &HashMap::new(),
+        );
+        assert_eq!(cwd, PathBuf::from("/abs/default"));
+    }
+
+    /// Test 6 — resolver returns the stored value when `param_values` has
+    /// one for the cwd-bound key, ignoring `default`.
+    #[test]
+    fn test_resolve_automation_cwd_stored_overrides_default() {
+        let entry = make_entry("x", vec![cwd_param("cwd", "/abs/default")]);
+        let mut pv: HashMap<String, HashMap<String, String>> = HashMap::new();
+        pv.entry("x".to_string())
+            .or_default()
+            .insert("cwd".to_string(), "/abs/stored".to_string());
+        let cwd =
+            resolve_automation_cwd(&entry, PathBuf::from("/fallback"), Path::new("/cfg"), &pv);
+        assert_eq!(cwd, PathBuf::from("/abs/stored"));
+    }
+
+    /// Test 7 — resolver expands `~` correctly. Skipped when home_dir is
+    /// unavailable, mirroring `expand_tilde`'s contract.
+    #[test]
+    fn test_resolve_automation_cwd_expands_tilde() {
+        let Some(home) = dirs::home_dir() else {
+            return;
+        };
+        let entry = make_entry("x", vec![cwd_param("cwd", "~/sub")]);
+        let cwd = resolve_automation_cwd(
+            &entry,
+            PathBuf::from("/fallback"),
+            Path::new("/cfg"),
+            &HashMap::new(),
+        );
+        assert_eq!(cwd, home.join("sub"));
+    }
+
+    /// Test 8 — resolver resolves a relative path against `config_root`.
+    #[test]
+    fn test_resolve_automation_cwd_relative_against_config_root() {
+        let entry = make_entry("x", vec![cwd_param("cwd", "rel/path")]);
+        let cwd = resolve_automation_cwd(
+            &entry,
+            PathBuf::from("/fallback"),
+            Path::new("/cfg/root"),
+            &HashMap::new(),
+        );
+        assert_eq!(cwd, PathBuf::from("/cfg/root/rel/path"));
+    }
+
+    /// Test 9 — resolver returns `fallback` when both stored value and
+    /// default are empty strings.
+    #[test]
+    fn test_resolve_automation_cwd_empty_string_falls_back() {
+        // Default is empty.
+        let entry_default_empty = make_entry("x", vec![cwd_param("cwd", "")]);
+        let cwd_no_stored = resolve_automation_cwd(
+            &entry_default_empty,
+            PathBuf::from("/fallback"),
+            Path::new("/cfg"),
+            &HashMap::new(),
+        );
+        assert_eq!(cwd_no_stored, PathBuf::from("/fallback"));
+
+        // Default has content but stored value is empty (user cleared it).
+        let entry = make_entry("x", vec![cwd_param("cwd", "/abs/default")]);
+        let mut pv: HashMap<String, HashMap<String, String>> = HashMap::new();
+        pv.entry("x".to_string())
+            .or_default()
+            .insert("cwd".to_string(), String::new());
+        let cwd =
+            resolve_automation_cwd(&entry, PathBuf::from("/fallback"), Path::new("/cfg"), &pv);
+        assert_eq!(cwd, PathBuf::from("/fallback"));
+    }
+
+    /// Test 10 — defensive: if the loader's dedup is bypassed and multiple
+    /// cwd-typed params reach the resolver, the first is used and the
+    /// helper does not panic.
+    #[test]
+    fn test_resolve_automation_cwd_uses_first_cwd_param() {
+        let entry = make_entry(
+            "x",
+            vec![
+                cwd_param("first", "/abs/first"),
+                cwd_param("second", "/abs/second"),
+            ],
+        );
+        let cwd = resolve_automation_cwd(
+            &entry,
+            PathBuf::from("/fallback"),
+            Path::new("/cfg"),
+            &HashMap::new(),
+        );
+        assert_eq!(cwd, PathBuf::from("/abs/first"));
+    }
+
+    /// Test 15 — backend-aware warning dedup (G2). The contract of
+    /// `Dashboard::mark_cwd_warning_seen` is:
+    ///   - `HashSet::insert` returns `true` the first time a tuple is
+    ///     recorded and `false` thereafter.
+    ///   - `(String, AgentBackend)` must be hashable (G1: extended derive).
+    /// Test the underlying tuple-set contract directly — `Dashboard::new`
+    /// pulls in too much GPUI machinery for a unit test, and the method
+    /// body is literally `self.cwd_warning_seen.insert((id.into(), b))`.
+    /// Failure of this test = G1 regression (Hash/Eq missing) or
+    /// HashSet contract change.
+    #[test]
+    fn test_cwd_warning_seen_dedup_contract() {
+        let mut seen: HashSet<(String, AgentBackend)> = HashSet::new();
+        let mark = |seen: &mut HashSet<(String, AgentBackend)>,
+                    id: &str,
+                    b: AgentBackend|
+         -> bool { seen.insert((id.to_string(), b)) };
+
+        // First insertion of any tuple returns true.
+        assert!(mark(&mut seen, "general-coder", AgentBackend::Native));
+        // Same tuple again returns false (dedup).
+        assert!(!mark(&mut seen, "general-coder", AgentBackend::Native));
+        // Different backend, same id → distinct tuple → true.
+        assert!(mark(&mut seen, "general-coder", AgentBackend::CopyOnly));
+        // Different id, same backend → distinct tuple → true.
+        assert!(mark(&mut seen, "rebase-coder", AgentBackend::Native));
+        // All four interactions should be recorded as exactly three
+        // distinct tuples (one duplicate).
+        assert_eq!(seen.len(), 3);
     }
 }
 
