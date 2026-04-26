@@ -19,6 +19,9 @@ mod scheduler_ui;
 mod section;
 mod tool_card;
 
+#[cfg(test)]
+mod dashboard_as_tab_tests;
+
 use config::FolderTarget;
 use dashboard_paths::{
     DeliveryStatus, ensure_config_extracted, ensure_workspace_dirs, folder_has_dashboard_config,
@@ -217,17 +220,23 @@ fn open_dashboard_as_tab(
         let subscription = panel_cx.subscribe_in(
             &workspace_entity,
             window,
-            move |panel, workspace, event, window, cx| {
+            move |_panel, workspace, event, window, cx| {
                 if let WorkspaceEvent::ItemRemoved {
                     item_id: removed_id,
                 } = event
+                    && *removed_id == item_id
                 {
-                    if *removed_id == item_id {
+                    // Defer the panel focus so it runs after the current
+                    // pane-removal effect cycle finishes — re-entering
+                    // `panel.update` synchronously here triggers a
+                    // double-borrow panic since the subscription callback
+                    // already holds `&mut DashboardPanel`.
+                    let workspace = workspace.clone();
+                    window.defer(cx, move |window, cx| {
                         workspace.update(cx, |workspace, cx| {
                             workspace.focus_panel::<DashboardPanel>(window, cx);
                         });
-                        panel._tab_close_subscription = None;
-                    }
+                    });
                 }
             },
         );
