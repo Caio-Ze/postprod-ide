@@ -459,6 +459,31 @@ pub(crate) fn resolve_tool_command(
     (command, args, cwd, env)
 }
 
+/// 2-tier resolver mirroring upstream's `TitleBar::effective_active_worktree`
+/// (PR #53645): worktree containing the active repository wins; otherwise
+/// fall back to the first visible worktree. Pure function so the GPUI-free
+/// behavior can be unit-tested directly.
+pub(crate) fn effective_active_worktree_id<'a>(
+    active_repo_path: Option<&Path>,
+    visible: impl IntoIterator<Item = (WorktreeId, &'a Path)>,
+) -> Option<WorktreeId> {
+    let mut first: Option<WorktreeId> = None;
+    let mut matched: Option<WorktreeId> = None;
+    for (id, wt_path) in visible {
+        if first.is_none() {
+            first = Some(id);
+        }
+        if matched.is_none() {
+            if let Some(repo_path) = active_repo_path {
+                if wt_path == repo_path || wt_path.starts_with(repo_path) {
+                    matched = Some(id);
+                }
+            }
+        }
+    }
+    matched.or(first)
+}
+
 impl Dashboard {
     pub async fn load(
         workspace: WeakEntity<Workspace>,
@@ -825,32 +850,27 @@ impl Dashboard {
             // when user picks a folder via the recent-project menu). Upstream
             // PR #53645 removed `active_worktree_override`; pickers now set
             // `Project::active_repository`, and the worktree containing that
-            // repo is the new "effective active worktree." We mirror
-            // `Workspace::effective_active_worktree_id`'s 2-tier resolution
-            // (active_repository → first visible) inline.
+            // repo is the new "effective active worktree." 2-tier resolution
+            // delegated to `effective_active_worktree_id` so it stays
+            // unit-testable.
             let workspace_observation = workspace.weak_handle().upgrade().map(|ws_entity| {
                 cx.observe(&ws_entity, |dashboard: &mut Dashboard, workspace_entity, cx| {
                     let workspace = workspace_entity.read(cx);
                     let project = workspace.project().read(cx);
-                    let current = project
+                    let active_repo_path = project
                         .active_repository(cx)
-                        .and_then(|repo| {
-                            let repo = repo.read(cx);
-                            let repo_path = repo.work_directory_abs_path.clone();
-                            project.visible_worktrees(cx).find_map(|wt| {
-                                let wt_ref = wt.read(cx);
-                                let wt_path = wt_ref.abs_path();
-                                (wt_path == repo_path
-                                    || wt_path.starts_with(repo_path.as_ref()))
-                                .then(|| wt_ref.id())
-                            })
+                        .map(|repo| repo.read(cx).work_directory_abs_path.clone());
+                    let visible: Vec<(WorktreeId, Arc<Path>)> = project
+                        .visible_worktrees(cx)
+                        .map(|wt| {
+                            let wt_ref = wt.read(cx);
+                            (wt_ref.id(), wt_ref.abs_path())
                         })
-                        .or_else(|| {
-                            project
-                                .visible_worktrees(cx)
-                                .next()
-                                .map(|wt| wt.read(cx).id())
-                        });
+                        .collect();
+                    let current = effective_active_worktree_id(
+                        active_repo_path.as_deref(),
+                        visible.iter().map(|(id, p)| (*id, p.as_ref())),
+                    );
                     if current == dashboard.last_worktree_override {
                         return;
                     }
@@ -3979,6 +3999,75 @@ automation = "review"
         assert!(entry.is_pipeline());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_effective_active_worktree_id_returns_match_on_starts_with() {
+        let a = Path::new("/proj/A");
+        let b = Path::new("/proj/B");
+        let repo = Path::new("/proj/A/sub/repo");
+        let id_a = WorktreeId::from_usize(1);
+        let id_b = WorktreeId::from_usize(2);
+
+        let result = effective_active_worktree_id(
+            Some(repo),
+            [(id_a, a), (id_b, b)],
+        );
+        assert_eq!(result, Some(id_a));
+    }
+
+    #[test]
+    fn test_effective_active_worktree_id_returns_match_on_exact_equal() {
+        let a = Path::new("/proj/A");
+        let b = Path::new("/proj/B");
+        let id_a = WorktreeId::from_usize(1);
+        let id_b = WorktreeId::from_usize(2);
+
+        let result = effective_active_worktree_id(
+            Some(b),
+            [(id_a, a), (id_b, b)],
+        );
+        assert_eq!(result, Some(id_b));
+    }
+
+    #[test]
+    fn test_effective_active_worktree_id_falls_back_when_no_repo_match() {
+        let a = Path::new("/proj/A");
+        let b = Path::new("/proj/B");
+        let unrelated = Path::new("/elsewhere/repo");
+        let id_a = WorktreeId::from_usize(1);
+        let id_b = WorktreeId::from_usize(2);
+
+        let result = effective_active_worktree_id(
+            Some(unrelated),
+            [(id_a, a), (id_b, b)],
+        );
+        assert_eq!(result, Some(id_a));
+    }
+
+    #[test]
+    fn test_effective_active_worktree_id_falls_back_when_active_repo_is_none() {
+        let a = Path::new("/proj/A");
+        let b = Path::new("/proj/B");
+        let id_a = WorktreeId::from_usize(1);
+        let id_b = WorktreeId::from_usize(2);
+
+        let result = effective_active_worktree_id(
+            None,
+            [(id_a, a), (id_b, b)],
+        );
+        assert_eq!(result, Some(id_a));
+    }
+
+    #[test]
+    fn test_effective_active_worktree_id_returns_none_when_no_visible() {
+        let visible: [(WorktreeId, &Path); 0] = [];
+        let result = effective_active_worktree_id(Some(Path::new("/proj/A")), visible);
+        assert_eq!(result, None);
+
+        let visible2: [(WorktreeId, &Path); 0] = [];
+        let result_no_repo = effective_active_worktree_id(None, visible2);
+        assert_eq!(result_no_repo, None);
     }
 }
 
