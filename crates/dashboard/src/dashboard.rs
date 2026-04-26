@@ -261,6 +261,20 @@ pub(crate) fn normalize_for_param_type(path: &Path, param_type: &ParamType) -> S
     }
 }
 
+/// Pure-iterator helper for `Dashboard::resolve_dragged_first_path` (spec
+/// automation-cwd-override v3 Phase 5). Walks `entry_ids`, returns the
+/// `PathBuf` from the first entry whose `resolve` closure returns
+/// `Some(...)`. Empty iterator or all-None returns `None`. Extracted
+/// from the Dashboard method so the iteration semantics can be unit-
+/// tested without constructing a real Workspace/Project.
+pub(crate) fn first_resolvable_abs_path<I, F>(entry_ids: I, mut resolve: F) -> Option<PathBuf>
+where
+    I: IntoIterator,
+    F: FnMut(I::Item) -> Option<PathBuf>,
+{
+    entry_ids.into_iter().find_map(&mut resolve)
+}
+
 /// single-element group (sequential). Steps sharing a `group` number are
 /// collected into one Vec (parallel). Order follows first occurrence.
 fn collect_step_groups(steps: &[PipelineStep]) -> Vec<Vec<PipelineStep>> {
@@ -1461,6 +1475,26 @@ impl Dashboard {
             }
         }
         None
+    }
+
+    /// File-or-folder generalization of `resolve_dragged_directory` used by
+    /// path-typed param-card drop zones (spec: automation-cwd-override v3,
+    /// Phase 5). Returns the first selection entry that resolves to an
+    /// absolute path, regardless of whether it points at a file or a
+    /// directory. The caller (`normalize_for_param_type`) handles the
+    /// file→parent normalization for `ParamType::Cwd`.
+    fn resolve_dragged_first_path(
+        &self,
+        selection: &DraggedSelection,
+        cx: &App,
+    ) -> Option<PathBuf> {
+        let workspace = self.workspace.upgrade()?;
+        let project = workspace.read(cx).project().read(cx);
+        first_resolvable_abs_path(selection.items().map(|e| e.entry_id), |id| {
+            project
+                .path_for_entry(id, cx)
+                .and_then(|pp| project.absolute_path(&pp, cx))
+        })
     }
 
     fn pick_active_folder(&mut self, cx: &mut Context<Self>) {
@@ -2823,6 +2857,12 @@ Rules for the completion report:
                         let drop_entry_id = entry_id.to_string();
                         let drop_param_key = param.key.clone();
                         let drop_param_type = param.param_type.clone();
+                        // Second capture set for the DraggedSelection handler
+                        // (Zed project-panel drags, spec v3 Phase 5).
+                        let drop_entity_ds = entity.clone();
+                        let drop_entry_id_ds = entry_id.to_string();
+                        let drop_param_key_ds = param.key.clone();
+                        let drop_param_type_ds = param.param_type.clone();
                         let row_id = SharedString::from(format!(
                             "param-row-{}-{}",
                             entry_id, param.key
@@ -2902,6 +2942,9 @@ Rules for the completion report:
                             .drag_over::<ExternalPaths>(|style, _, _, cx| {
                                 style.bg(cx.theme().colors().drop_target_background)
                             })
+                            .drag_over::<DraggedSelection>(|style, _, _, cx| {
+                                style.bg(cx.theme().colors().drop_target_background)
+                            })
                             .on_drop(
                                 move |paths: &ExternalPaths, _window: &mut Window, cx: &mut App| {
                                     let Some(first) = paths.0.first() else {
@@ -2914,6 +2957,31 @@ Rules for the completion report:
                                     let param_key = drop_param_key.clone();
                                     entity
                                         .update(cx, |this: &mut Dashboard, cx| {
+                                            this.update_param_value(
+                                                &entry_id,
+                                                &param_key,
+                                                value,
+                                                cx,
+                                            );
+                                        })
+                                        .log_err();
+                                },
+                            )
+                            .on_drop(
+                                move |sel: &DraggedSelection, _window: &mut Window, cx: &mut App| {
+                                    let entity = drop_entity_ds.clone();
+                                    let entry_id = drop_entry_id_ds.clone();
+                                    let param_key = drop_param_key_ds.clone();
+                                    let param_type = drop_param_type_ds.clone();
+                                    entity
+                                        .update(cx, |this: &mut Dashboard, cx| {
+                                            let Some(abs) =
+                                                this.resolve_dragged_first_path(sel, cx)
+                                            else {
+                                                return;
+                                            };
+                                            let value =
+                                                normalize_for_param_type(&abs, &param_type);
                                             this.update_param_value(
                                                 &entry_id,
                                                 &param_key,
@@ -4458,6 +4526,58 @@ automation = "review"
         // All four interactions should be recorded as exactly three
         // distinct tuples (one duplicate).
         assert_eq!(seen.len(), 3);
+    }
+
+    /// Test 16 — `first_resolvable_abs_path` (spec automation-cwd-override
+    /// v3 Phase 5). Pure helper extracted from
+    /// `Dashboard::resolve_dragged_first_path` so the iteration semantics
+    /// are unit-testable without constructing a real Workspace/Project.
+    /// Constructing the Dashboard wrapper is exercised by M12 against the
+    /// shipped binary; the iteration logic is what could regress here.
+    #[test]
+    fn test_first_resolvable_abs_path_empty_returns_none() {
+        let result: Option<PathBuf> =
+            first_resolvable_abs_path(std::iter::empty::<u32>(), |_| None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_first_resolvable_abs_path_all_fail_returns_none() {
+        let ids = vec![1u32, 2, 3];
+        let result = first_resolvable_abs_path(ids, |_| None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_first_resolvable_abs_path_returns_first_success() {
+        let ids = vec![1u32, 2, 3];
+        let result = first_resolvable_abs_path(ids, |id| {
+            if id == 2 {
+                Some(PathBuf::from("/abs/path/two"))
+            } else {
+                None
+            }
+        });
+        assert_eq!(result, Some(PathBuf::from("/abs/path/two")));
+    }
+
+    #[test]
+    fn test_first_resolvable_abs_path_short_circuits_on_first_match() {
+        // Once a Some is returned, later items must not be probed.
+        // Asserts find_map semantics — relevant if a future refactor
+        // ever switches to `.fold(...)` or similar that would over-walk.
+        let ids = vec![1u32, 2, 3, 4];
+        let mut probed: Vec<u32> = Vec::new();
+        let result = first_resolvable_abs_path(ids, |id| {
+            probed.push(id);
+            if id == 2 {
+                Some(PathBuf::from("/match/at/two"))
+            } else {
+                None
+            }
+        });
+        assert_eq!(result, Some(PathBuf::from("/match/at/two")));
+        assert_eq!(probed, vec![1, 2]); // 3 and 4 never probed.
     }
 }
 
