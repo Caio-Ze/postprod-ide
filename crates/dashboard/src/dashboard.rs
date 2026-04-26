@@ -3750,6 +3750,19 @@ impl Render for DashboardItem {
                             .child(Headline::new("PostProd Tools").size(HeadlineSize::Small))
                             .child(div().flex_grow())
                             .child(
+                                IconButton::new("open-as-tab", IconName::ArrowUpRight)
+                                    .icon_size(IconSize::Small)
+                                    .icon_color(Color::Muted)
+                                    .tooltip(Tooltip::text("Open as Tab"))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        if let Some(workspace) = this.workspace.upgrade() {
+                                            workspace.update(cx, |workspace, cx| {
+                                                open_dashboard_as_tab(workspace, window, cx);
+                                            });
+                                        }
+                                    })),
+                            )
+                            .child(
                                 IconButton::new("open-postprod-rules", IconName::Notepad)
                                     .icon_size(IconSize::Small)
                                     .icon_color(Color::Muted)
