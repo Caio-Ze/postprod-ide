@@ -190,14 +190,14 @@ impl DashboardItem {
 
         self.note_store = None;
         let db_path = dcfg::state_dir_for(&self.config_root).join("notes.mdb");
-        let note_store_task = NoteStore::new(db_path, cx);
+        let note_store_future = NoteStore::for_path(db_path, cx);
         self._note_store_init =
             Some(cx.spawn(
-                async move |dashboard, cx: &mut AsyncApp| match note_store_task.await {
-                    Ok(store) => {
+                async move |dashboard, cx: &mut AsyncApp| match note_store_future.await {
+                    Ok(entity) => {
                         dashboard
                             .update(cx, |dashboard, cx| {
-                                dashboard.note_store = Some(cx.new(|_| store));
+                                dashboard.note_store = Some(entity);
                                 dashboard._note_store_init = None;
                                 cx.notify();
                             })

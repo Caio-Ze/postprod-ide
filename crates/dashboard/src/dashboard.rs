@@ -958,12 +958,12 @@ impl DashboardItem {
 
             // Create NoteStore init task before building the struct
             let db_path = state_dir_for(&config_root).join("notes.mdb");
-            let note_store_task = NoteStore::new(db_path, cx);
+            let note_store_future = NoteStore::for_path(db_path, cx);
             let note_store_init = cx.spawn(async move |dashboard, cx: &mut AsyncApp| {
-                match note_store_task.await {
-                    Ok(store) => {
+                match note_store_future.await {
+                    Ok(entity) => {
                         dashboard.update(cx, |dashboard, cx| {
-                            dashboard.note_store = Some(cx.new(|_| store));
+                            dashboard.note_store = Some(entity);
                             dashboard._note_store_init = None;
                             cx.notify();
                         }).log_err();
