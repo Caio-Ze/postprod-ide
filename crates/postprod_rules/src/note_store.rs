@@ -1,18 +1,19 @@
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use collections::HashMap;
+use futures::{FutureExt as _, future::Shared};
 use fuzzy::StringMatchCandidate;
-use gpui::{App, AppContext as _, Context, EventEmitter, SharedString, Task};
+use gpui::{App, AppContext as _, Context, Entity, EventEmitter, Global, SharedString, Task};
 use heed::{
     Database, RoTxn,
     types::{SerdeJson, Str},
 };
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use rope::Rope;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Reverse,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
 };
 use uuid::Uuid;
@@ -324,6 +325,80 @@ impl NoteStore {
             anyhow::Ok(())
         })
     }
+}
+
+pub type SharedNoteStoreFuture =
+    Shared<Task<std::result::Result<Entity<NoteStore>, Arc<anyhow::Error>>>>;
+
+#[derive(Default)]
+pub struct GlobalNoteStores {
+    by_path: Arc<Mutex<HashMap<PathBuf, SharedNoteStoreFuture>>>,
+}
+
+impl Global for GlobalNoteStores {}
+
+impl NoteStore {
+    /// Process-singleton accessor. Returns a shared future that resolves to
+    /// `Entity<NoteStore>`; concurrent callers for the same canonical path
+    /// receive the same future (and after resolution, the same Entity), so
+    /// LMDB never sees a duplicate `open()` on one path in one process.
+    ///
+    /// Path canonicalization uses `std::fs::canonicalize` to match heed's
+    /// own internal dedup keying. Falls back to the input path verbatim
+    /// when the parent directory does not exist yet (LMDB will create the
+    /// dir on open).
+    pub fn for_path(db_path: PathBuf, cx: &mut App) -> SharedNoteStoreFuture {
+        let canonical = canonicalize_for_singleton(&db_path);
+
+        // Clone the Arc first so the `&mut App` borrow obtained via
+        // `default_global` ends here. After this line, `cx` is free to
+        // re-borrow for `NoteStore::new` and `cx.spawn`, while the lock
+        // is held across both — making the lookup → create → insert
+        // sequence atomic by construction.
+        let map_arc = cx.default_global::<GlobalNoteStores>().by_path.clone();
+        let mut map = map_arc.lock();
+
+        if let Some(shared) = map.get(&canonical) {
+            return shared.clone();
+        }
+
+        let open_task = NoteStore::new(canonical.clone(), cx);
+        let pending: SharedNoteStoreFuture = cx
+            .spawn(async move |cx| {
+                open_task
+                    .await
+                    .map(|store| cx.new(|_| store))
+                    .map_err(Arc::new)
+            })
+            .shared();
+
+        map.insert(canonical, pending.clone());
+        pending
+    }
+}
+
+fn canonicalize_for_singleton(path: &Path) -> PathBuf {
+    // For a yet-to-be-created LMDB dir, `canonicalize` fails. Canonicalize
+    // the deepest existing ancestor and re-attach the missing tail so two
+    // callers passing the same logical path always hash to the same key
+    // even when the dir hasn't been created yet.
+    if let Ok(p) = std::fs::canonicalize(path) {
+        return p;
+    }
+    let mut existing = path;
+    let mut tail = PathBuf::new();
+    while !existing.exists() {
+        let Some(parent) = existing.parent() else {
+            return path.to_path_buf();
+        };
+        if let Some(name) = existing.file_name() {
+            tail = PathBuf::from(name).join(&tail);
+        }
+        existing = parent;
+    }
+    std::fs::canonicalize(existing)
+        .map(|p| p.join(tail))
+        .unwrap_or_else(|_| path.to_path_buf())
 }
 
 #[cfg(test)]
@@ -669,5 +744,90 @@ mod tests {
             notes.iter().all(|n| n.id != id),
             "cleared note should not appear for automation 'a'"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Singleton accessor (`NoteStore::for_path`) — covers the multi-workspace
+    // bug where two `DashboardItem`s on the same config-root state dir would
+    // each call `NoteStore::new` and the second `heed::EnvOpenOptions::open`
+    // would fail with `EnvAlreadyOpened`.
+    // -----------------------------------------------------------------------
+
+    #[gpui::test]
+    async fn for_path_dedupes_same_path(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let tmp = tempfile::tempdir().unwrap();
+        let db_path = tmp.path().join("notes.mdb");
+
+        let entity_a = cx
+            .update(|cx| NoteStore::for_path(db_path.clone(), cx))
+            .await
+            .unwrap();
+        let entity_b = cx
+            .update(|cx| NoteStore::for_path(db_path.clone(), cx))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            entity_a.entity_id(),
+            entity_b.entity_id(),
+            "second for_path call must return the same Entity, not open a duplicate env"
+        );
+    }
+
+    #[gpui::test]
+    async fn for_path_isolates_distinct_paths(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let tmp = tempfile::tempdir().unwrap();
+        let db_a = tmp.path().join("notes_a.mdb");
+        let db_b = tmp.path().join("notes_b.mdb");
+
+        let entity_a = cx
+            .update(|cx| NoteStore::for_path(db_a.clone(), cx))
+            .await
+            .unwrap();
+        let entity_b = cx
+            .update(|cx| NoteStore::for_path(db_b.clone(), cx))
+            .await
+            .unwrap();
+
+        assert_ne!(
+            entity_a.entity_id(),
+            entity_b.entity_id(),
+            "distinct canonical paths must produce distinct Entities"
+        );
+
+        let id = NoteId::new();
+        entity_a
+            .update(cx, |store, cx| {
+                store.save(id, None, false, Vec::new(), Rope::from("A only"), cx)
+            })
+            .await
+            .unwrap();
+
+        let a_metadata = entity_a.read_with(cx, |store, _| store.all_metadata());
+        let b_metadata = entity_b.read_with(cx, |store, _| store.all_metadata());
+        assert!(
+            a_metadata.iter().any(|m| m.id == id),
+            "A must contain the note it just saved"
+        );
+        assert!(
+            b_metadata.iter().all(|m| m.id != id),
+            "B must NOT see notes saved against A's env"
+        );
+    }
+
+    #[gpui::test]
+    async fn for_path_concurrent_callers_share(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("notes.mdb");
+
+        let f_a = cx.update(|cx| NoteStore::for_path(db.clone(), cx));
+        let f_b = cx.update(|cx| NoteStore::for_path(db.clone(), cx));
+
+        let (a, b) = futures::join!(f_a, f_b);
+        let (a, b) = (a.unwrap(), b.unwrap());
+        assert_eq!(a.entity_id(), b.entity_id());
     }
 }
