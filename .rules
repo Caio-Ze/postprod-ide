@@ -1,5 +1,8 @@
 # PostProd IDE — Fork Rules
 
+> **Source of truth: `CLAUDE.md`** (gitignored, loaded by Claude Code).
+> This file is a secondary rules file for other agent frameworks. Keep it in sync with CLAUDE.md when rules change.
+
 This is a Zed fork. These rules override upstream conventions where they conflict.
 
 ## Branch model
@@ -53,11 +56,16 @@ Before any destructive action (rewrite, delete module, force-push):
 | Full project rules | `private/PROJECT_RULES.md` |
 | Fork maintenance | `private/fork/FORK_GUIDE.md` |
 | What we changed upstream | `private/fork/FORK_OUR_CHANGES.md` |
-| Dashboard internals | `private/DASHBOARD_ARCHITECTURE.md` |
-| GPUI framework | `private/GPUI_REFERENCE.md` |
-| Architectural principles | `private/DESIGN_CHOICES.md` |
-| Skill/automation/agent system | `private/SKILL_SYSTEM.md` |
+| Dashboard internals | `private/reference/DASHBOARD_ARCHITECTURE.md` |
+| GPUI framework | `private/reference/GPUI_REFERENCE.md` |
+| Architectural principles | `private/principles/DESIGN_CHOICES.md` |
+| Design philosophy | `private/principles/DESIGN_PHILOSOPHY.md` |
+| Engineering philosophy | `private/principles/ENGINEERING_PHILOSOPHY.md` |
+| Skill/automation/agent system | `private/reference/SKILL_SYSTEM.md` |
 | Current improvement roadmap | `private/IMPROVEMENT_PLAN.md` |
+| Task breakdown for agents | `private/IMPROVEMENT_TASKS.md` |
+| Release and distribution | `private/release/DISTRIBUTION_PLAN.md` |
+| Project story and history | `private/PROJECT_STORY.md` |
 | GitHub safety | `private/GITHUB_INSTRUCTIONS.md` |
 
 ---
@@ -225,7 +233,6 @@ Release Notes:
 - Crash investigation prompts: `.factory/prompts/crash/investigate.md`
 - Crash fix prompts: `.factory/prompts/crash/fix.md`
 - Fetch crash reports: `script/sentry-fetch <issue-id>`
-- Generate investigation prompt from crash: `script/crash-to-prompt <issue-id>`
 
 # Rules Hygiene
 
