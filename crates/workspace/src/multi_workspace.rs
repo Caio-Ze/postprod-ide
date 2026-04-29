@@ -1451,13 +1451,6 @@ impl MultiWorkspace {
 
         cx.emit(MultiWorkspaceEvent::ActiveWorkspaceChanged { source_workspace });
         self.serialize(cx);
-        // Preserve the existing Activate emission and also re-apply the
-        // per-worktree settings profile so sidebar workspace switches
-        // track the newly active worktree.
-        self.workspace().update(cx, |workspace, cx| {
-            cx.emit(WorkspaceEvent::Activate);
-            workspace.apply_local_active_profile(cx);
-        });
         self.focus_active_workspace(window, cx);
         cx.notify();
     }

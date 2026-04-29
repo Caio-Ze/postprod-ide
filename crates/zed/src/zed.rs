@@ -489,10 +489,6 @@ pub fn initialize_workspace(app_state: Arc<AppState>, cx: &mut App) {
                     title,
                     language,
                 } => open_bundled_file(workspace, text.clone(), title, language, window, cx),
-                // Per-worktree settings profile activation runs directly in
-                // `MultiWorkspace::activate`, so there's nothing else to do
-                // here.
-                workspace::Event::Activate => {}
                 _ => {}
             }
         })
