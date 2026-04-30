@@ -314,7 +314,17 @@ pub fn open_postprod_rules(
                     window_background: cx.theme().window_background_appearance(),
                     window_decorations: Some(window_decorations),
                     window_min_size: Some(DEFAULT_ADDITIONAL_WINDOW_SIZE),
-                    kind: gpui::WindowKind::Floating,
+                    // `Floating` (inherited from upstream `rules_library` at
+                    // Phase 1) puts the window at NSFloatingWindowLevel on
+                    // macOS — above NSOpenPanel's window level. That makes
+                    // `cx.prompt_for_paths` (the "+ Add Context" file
+                    // picker) physically un-raisable: the OS window server
+                    // refuses to bring a Normal-level window in front of a
+                    // Floating-level window of the same app, so even
+                    // clicking the OS picker leaves it stuck behind. Our
+                    // use case is a heavy editing surface, not a quick
+                    // reference pop-over, so Normal is the right kind.
+                    kind: gpui::WindowKind::Normal,
                     ..Default::default()
                 },
                 |window, cx| {
