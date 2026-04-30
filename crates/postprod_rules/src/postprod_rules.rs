@@ -1694,38 +1694,64 @@ impl PostProdRules {
         .detach_and_log_err(cx);
     }
 
-    /// 10.11: Editor-toolbar `&AddFileToDefaultContext` handler. Reads the
-    /// active file path, classifies its role, and dispatches the shared
-    /// helper with the correct `toml_index_to_strip` per the table:
+    /// Read the picker's currently-selected entry and project it to the
+    /// data the action handlers need: `(source_path, automation_id,
+    /// toml_index_to_strip)` where `toml_index_to_strip` is `Some(ix)` for a
+    /// top-level `ContextSource` row and `None` for a `FolderChild` row.
+    /// Returns `None` for any other selection (Header, PromptFile, etc.) or
+    /// when `set_active_entry` hasn't synced selection to a file yet.
     ///
-    /// | FileRole | toml_index_to_strip |
-    /// |---|---|
-    /// | ContextSource { toml_index } | Some(toml_index) |
-    /// | FolderChildOf { .. } | None — parent_toml_index intentionally discarded |
-    /// | Prompt / DefaultContext / Unknown | unreachable; defensive return |
+    /// Preferred over `classify_file_role` for action handlers because:
+    ///   1. The picker entry holds the exact `(automation_id, toml_index)`
+    ///      tuple already — no path-comparison needed.
+    ///   2. Robust when the same file is referenced by multiple automations
+    ///      (`classify_file_role` walks all and returns the first match,
+    ///      which may be the wrong automation in the picker's perspective).
+    ///   3. Robust when a context entry happens to point at a file under
+    ///      `config/prompts/` or `config/default-context/` (where
+    ///      `classify_file_role`'s prefix check returns `Prompt`/`DefaultContext`).
+    fn selected_context_source(
+        &self,
+        cx: &App,
+    ) -> Option<(PathBuf, String, Option<usize>)> {
+        let picker = self.picker.read(cx);
+        let entry = picker
+            .delegate
+            .filtered_entries
+            .get(picker.delegate.selected_index)?;
+        match entry {
+            PostProdPickerEntry::ContextSource(c) if !c.is_directory => Some((
+                c.resolved_path.clone(),
+                c.automation_id.clone(),
+                Some(c.toml_index),
+            )),
+            PostProdPickerEntry::FolderChild(c) => Some((
+                c.resolved_path.clone(),
+                c.automation_id.clone(),
+                None,
+            )),
+            _ => None,
+        }
+    }
+
+    /// 10.11: Editor-toolbar `&AddFileToDefaultContext` handler.
+    /// Sources `(automation_id, toml_index_to_strip)` from the picker's
+    /// currently-selected entry rather than `classify_file_role`.
     fn add_active_file_to_default_context_action(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let path = match &self.active_entry {
-            Some(ActiveEntryId::File(p)) => p.clone(),
-            _ => return,
-        };
-        let role = self.classify_file_role(&path);
-        let (automation_id, toml_index_to_strip) = match role {
-            FileRole::ContextSource {
-                automation_id,
-                toml_index,
-            } => (automation_id, Some(toml_index)),
-            FileRole::FolderChildOf {
-                automation_id,
-                parent_toml_index: _,
-            } => (automation_id, None),
-            FileRole::Prompt | FileRole::DefaultContext | FileRole::Unknown => return,
+        let Some((source_path, automation_id, toml_index_to_strip)) =
+            self.selected_context_source(cx)
+        else {
+            log::warn!(
+                "AddFileToDefaultContext: picker has no ContextSource/FolderChild selected"
+            );
+            return;
         };
         self.add_active_file_to_default_context(
-            path,
+            source_path,
             automation_id,
             toml_index_to_strip,
             window,
@@ -1734,26 +1760,23 @@ impl PostProdRules {
     }
 
     /// 10.11: Editor-toolbar `&RemoveFileFromAutomationContext` handler.
-    /// Only fires when role is `ContextSource` (FolderChild has no Trash per
-    /// the toolbar table; Prompt/DefaultContext/Unknown have no actions).
+    /// Only fires when the picker selection is a top-level `ContextSource`
+    /// (FolderChild has no Trash per the toolbar table).
     fn remove_active_file_from_automation_context_action(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let path = match &self.active_entry {
-            Some(ActiveEntryId::File(p)) => p.clone(),
-            _ => return,
-        };
-        let (automation_id, toml_index) = match self.classify_file_role(&path) {
-            FileRole::ContextSource {
-                automation_id,
-                toml_index,
-            } => (automation_id, toml_index),
-            _ => return,
+        let Some((source_path, automation_id, Some(toml_index))) =
+            self.selected_context_source(cx)
+        else {
+            log::warn!(
+                "RemoveFileFromAutomationContext: picker has no top-level ContextSource selected"
+            );
+            return;
         };
         self.remove_active_file_from_automation_context(
-            path,
+            source_path,
             automation_id,
             toml_index,
             window,
