@@ -163,12 +163,32 @@ impl DashboardItem {
                 })
             },
             add_script: {
-                let weak = dashboard_weak;
+                let weak = dashboard_weak.clone();
                 Box::new(
                     move |automation_id: &str, script_name: String, cx: &mut App| {
                         let auto_id = automation_id.to_string();
                         weak.update(cx, |dashboard, cx| {
                             dashboard.add_context_script_entry(&auto_id, script_name, cx);
+                        })
+                        .log_err();
+                    },
+                )
+            },
+            add_to_default_context: {
+                let weak = dashboard_weak;
+                Box::new(
+                    move |source_path: PathBuf,
+                          automation_id: &str,
+                          toml_index_to_strip: Option<usize>,
+                          cx: &mut App| {
+                        let auto_id = automation_id.to_string();
+                        weak.update(cx, |dashboard, cx| {
+                            dashboard.add_file_to_default_context(
+                                source_path,
+                                &auto_id,
+                                toml_index_to_strip,
+                                cx,
+                            );
                         })
                         .log_err();
                     },

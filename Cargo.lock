@@ -4637,6 +4637,7 @@ dependencies = [
  "fuzzy",
  "global-hotkey",
  "gpui",
+ "libc",
  "log",
  "menu",
  "paths",

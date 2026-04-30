@@ -44,6 +44,12 @@ actions!(
         DuplicateNote,
         /// Toggles whether the selected note is a default note.
         ToggleDefaultNote,
+        /// Promotes the active file out of an automation's `[[context]]` into
+        /// `config/default-context/` (so every automation includes it).
+        AddFileToDefaultContext,
+        /// Strips the active file's `[[context]]` entry from its automation's
+        /// TOML. Does not delete the file from disk.
+        RemoveFileFromAutomationContext,
     ]
 );
 
@@ -93,6 +99,11 @@ pub struct ContextCallbacks {
     pub remove: Box<dyn Fn(&str, usize, &mut App) + Send + Sync>,
     pub add_path: Box<dyn Fn(&str, PathBuf, &mut App) + Send + Sync>,
     pub add_script: Box<dyn Fn(&str, String, &mut App) + Send + Sync>,
+    /// 10.9: Move a file into `config/default-context/`. The third arg
+    /// `Option<usize>` is `Some(toml_index)` when the source is a top-level
+    /// `[[context]]` entry to strip after the move; `None` when the source is
+    /// a child of a directory `[[context]]` (parent folder entry stays).
+    pub add_to_default_context: Box<dyn Fn(PathBuf, &str, Option<usize>, &mut App) + Send + Sync>,
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +140,129 @@ struct ContextSourceEntry {
 enum ActiveEntryId {
     Note(NoteId),
     File(PathBuf),
+}
+
+/// 10.4: The role of a file path within the current `PostProdRules` data
+/// model. Computed at render time by `classify_file_role` — pure function over
+/// `(path, config_root, automations)`. Driving the editor toolbar shape and
+/// action-handler dispatch (see 10.11 table).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum FileRole {
+    Prompt,
+    ContextSource {
+        automation_id: String,
+        toml_index: usize,
+    },
+    FolderChildOf {
+        automation_id: String,
+        #[allow(dead_code)]
+        parent_toml_index: usize,
+    },
+    DefaultContext,
+    /// File loaded but doesn't match any known section. Defensive fallback —
+    /// no toolbar action icons should be active for this role.
+    Unknown,
+}
+
+/// 10.4: Pure classification — no GPUI, no `Self`. Directly unit-testable.
+/// Stateless: derived from `config_root` + each automation's resolved
+/// `[[context]]` entries. Robust against picker-state drift — the picker
+/// strips section info at confirm time (`ActiveEntryId::File(path)`), so the
+/// toolbar derives the role here at render time instead.
+pub(crate) fn classify_file_role(
+    path: &Path,
+    config_root: &Path,
+    automations: &[ResolvedAutomationInfo],
+) -> FileRole {
+    let prompts_dir = config_root.join("config/prompts");
+    let default_dir = config_root.join("config/default-context");
+    if path.starts_with(&prompts_dir) {
+        return FileRole::Prompt;
+    }
+    if path.starts_with(&default_dir) {
+        return FileRole::DefaultContext;
+    }
+    for automation in automations {
+        for (ix, ctx) in automation.contexts.iter().enumerate() {
+            if ctx.resolved_path == path {
+                return FileRole::ContextSource {
+                    automation_id: automation.id.clone(),
+                    toml_index: ix,
+                };
+            }
+            if ctx.resolved_path.is_dir() && path.starts_with(&ctx.resolved_path) {
+                return FileRole::FolderChildOf {
+                    automation_id: automation.id.clone(),
+                    parent_toml_index: ix,
+                };
+            }
+        }
+    }
+    FileRole::Unknown
+}
+
+/// 10.7 pre-flight: failure modes for promoting a file into `default-context/`.
+/// Stateless / I/O-only-via-explicit-deps so the validation is unit-testable
+/// without GPUI. Used by `add_active_file_to_default_context` before opening
+/// the confirmation modal.
+#[derive(Debug, PartialEq)]
+pub(crate) enum PromotionPreflightError {
+    NotMarkdown,
+    Symlink,
+    Collision,
+    SourceMissing,
+}
+
+/// Pre-flight gate. Returns `Ok(target_path)` when the move can proceed.
+pub(crate) fn validate_promotion(
+    source_path: &Path,
+    target_dir: &Path,
+) -> Result<PathBuf, PromotionPreflightError> {
+    if source_path.extension().and_then(|s| s.to_str()) != Some("md") {
+        return Err(PromotionPreflightError::NotMarkdown);
+    }
+    let meta = std::fs::symlink_metadata(source_path)
+        .map_err(|_| PromotionPreflightError::SourceMissing)?;
+    if meta.file_type().is_symlink() {
+        return Err(PromotionPreflightError::Symlink);
+    }
+    let basename = source_path
+        .file_name()
+        .ok_or(PromotionPreflightError::SourceMissing)?;
+    let target = target_dir.join(basename);
+    if target.exists() {
+        return Err(PromotionPreflightError::Collision);
+    }
+    Ok(target)
+}
+
+/// 10.5: Union of note-state and file-role, consumed by `render_entry_toolbar`
+/// to render the editor-toolbar action group on the right.
+///
+/// File-variant fields (`automation_id`, `toml_index`, `source_path`) are
+/// retained for spec parity even though `render_entry_toolbar` only switches
+/// on the variant tag — toolbar buttons dispatch GPUI actions, and the
+/// action handlers re-derive these values via `classify_file_role` at handler
+/// time (10.11). Keeping the data in the role lets future call sites (e.g.
+/// status indicators, breadcrumbs) reuse it without re-classifying.
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+pub(crate) enum EntryToolbarRole {
+    Note {
+        default: bool,
+    },
+    ContextSource {
+        automation_id: String,
+        toml_index: usize,
+        source_path: PathBuf,
+    },
+    FolderChild {
+        automation_id: String,
+        source_path: PathBuf,
+    },
+    Prompt,
+    DefaultContext,
+    Unknown,
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +440,15 @@ enum PostProdPickerEvent {
     },
     AddScopedNote {
         automation_id: String,
+    },
+    /// 10.10: Picker hover-row Paperclip on a FolderChild row. Editor-toolbar
+    /// Paperclip uses the action-dispatch path (10.11), not this event.
+    AddToDefaultContext {
+        source_path: PathBuf,
+        automation_id: String,
+        /// `Some(ix)` for top-level CONTEXT SOURCES; `None` for FolderChild (the
+        /// parent folder's `[[context]]` must NOT be stripped).
+        toml_index_to_strip: Option<usize>,
     },
 }
 
@@ -1039,12 +1182,22 @@ impl PickerDelegate for PostProdPickerDelegate {
                         .into_any_element(),
                     )
                 } else {
-                    Some(item.into_any_element())
+                    // 10.1: Register a no-op click handler so GPUI tags the row as
+                    // interactive. Without this, `.end_slot_on_hover(...)` above never
+                    // fires its hover state and Up/Down/Trash icons stay hidden.
+                    Some(
+                        item.on_click(cx.listener(|_, _, _, _| {}))
+                            .into_any_element(),
+                    )
                 }
             }
             PostProdPickerEntry::FolderChild(entry) => {
                 let label: SharedString = entry.filename.clone().into();
                 let full_path: SharedString = entry.resolved_path.display().to_string().into();
+                let source_path = entry.resolved_path.clone();
+                let automation_id = entry.automation_id.clone();
+                // 10.10: parent_toml_index (entry.toml_index) is intentionally NOT
+                // captured — passing it would orphan the parent folder's [[context]].
                 Some(
                     ListItem::new(ix)
                         .inset(true)
@@ -1059,6 +1212,37 @@ impl PickerDelegate for PostProdPickerDelegate {
                         )
                         .child(Label::new(label).truncate().mr_10())
                         .tooltip(Tooltip::text(full_path))
+                        // 10.3: Paperclip-only hover row. No Trash/Up/Down — the parent
+                        // folder is the [[context]] unit; removing one child without
+                        // rewriting the directory contents on disk would do nothing.
+                        // toml_index_to_strip is None (parent folder entry stays).
+                        .end_slot_on_hover(
+                            h_flex().gap_0p5().child(
+                                IconButton::new(
+                                    SharedString::from(format!("folder-child-paperclip-{ix}")),
+                                    IconName::Paperclip,
+                                )
+                                .icon_size(IconSize::XSmall)
+                                .icon_color(Color::Muted)
+                                .tooltip(move |_window, cx| {
+                                    Tooltip::with_meta(
+                                        "Add to Default Context",
+                                        None,
+                                        "Always included in every automation's context.",
+                                        cx,
+                                    )
+                                })
+                                .on_click(cx.listener(move |_, _, _, cx| {
+                                    cx.emit(PostProdPickerEvent::AddToDefaultContext {
+                                        source_path: source_path.clone(),
+                                        automation_id: automation_id.clone(),
+                                        toml_index_to_strip: None,
+                                    });
+                                })),
+                            ),
+                        )
+                        // 10.3: no-op click registers the row as interactive so hover fires.
+                        .on_click(cx.listener(|_, _, _, _| {}))
                         .into_any_element(),
                 )
             }
@@ -1316,7 +1500,265 @@ impl PostProdRules {
             PostProdPickerEvent::AddScopedNote { automation_id } => {
                 self.new_note_for_automation(automation_id.clone(), window, cx);
             }
+            PostProdPickerEvent::AddToDefaultContext {
+                source_path,
+                automation_id,
+                toml_index_to_strip,
+            } => {
+                self.add_active_file_to_default_context(
+                    source_path.clone(),
+                    automation_id.clone(),
+                    *toml_index_to_strip,
+                    window,
+                    cx,
+                );
+            }
         }
+    }
+
+    /// 10.11: Shared helper used by both the picker FolderChild Paperclip
+    /// (event-driven) and the editor-toolbar `&AddFileToDefaultContext` action.
+    /// Runs **pre-flight validation first** (extension, symlink, collision —
+    /// 10.7 spec: the user shouldn't read "this will move X" then get a toast
+    /// saying it can't), then opens the confirmation modal, then on confirm
+    /// invokes the `add_to_default_context` callback. The callback (Dashboard
+    /// side) runs the EXDEV-safe move + TOML strip + toast + picker refresh.
+    fn add_active_file_to_default_context(
+        &mut self,
+        source_path: PathBuf,
+        automation_id: String,
+        toml_index_to_strip: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let basename = source_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| source_path.display().to_string());
+
+        // Pre-flight: extension (.md-only) → symlink-refuse → collision.
+        // Surfaced via the validation helper so the same logic is unit-tested
+        // (10.18 collision, 10.19 symlink, 10.20a non-`.md`).
+        let target_dir = self.config_root.join("config/default-context");
+        if let Err(err) = validate_promotion(&source_path, &target_dir) {
+            let (title, body) = match err {
+                PromotionPreflightError::NotMarkdown => (
+                    "Cannot promote to default-context",
+                    "Only .md files can be promoted to default-context (the picker scans only .md).".to_string(),
+                ),
+                PromotionPreflightError::Symlink => (
+                    "Cannot promote a symlink",
+                    "Cannot promote a symlink to default-context. Use the actual file.".to_string(),
+                ),
+                PromotionPreflightError::Collision => (
+                    "Already exists in default-context",
+                    format!("{} already exists in default-context/. Cannot move.", basename),
+                ),
+                PromotionPreflightError::SourceMissing => {
+                    log::warn!(
+                        "add_to_default_context: source missing: {}",
+                        source_path.display()
+                    );
+                    return;
+                }
+            };
+            self.show_preflight_error(title, &body, window, cx);
+            return;
+        }
+
+        let body = match toml_index_to_strip {
+            Some(_) => format!(
+                "This will:\n\
+                 • Move {} → config/default-context/{}\n\
+                 • Remove the [[context]] entry from {}.toml\n\n\
+                 The file will be loaded by every automation as default context going forward. \
+                 Other references to the original path will break.",
+                source_path.display(),
+                basename,
+                automation_id
+            ),
+            None => format!(
+                "This will:\n\
+                 • Move {} → config/default-context/{}\n\
+                 • Leave the parent folder's [[context]] entry in place\n\n\
+                 The file will be loaded by every automation as default context going forward. \
+                 Other references to the original path will break.",
+                source_path.display(),
+                basename
+            ),
+        };
+        let confirmation = window.prompt(
+            PromptLevel::Warning,
+            &format!("Move {} to default-context/?", basename),
+            Some(&body),
+            &["Move", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if confirmation.await.ok() == Some(0) {
+                this.update_in(cx, |this, _window, cx| {
+                    if let Some(callbacks) = &this.context_callbacks {
+                        (callbacks.add_to_default_context)(
+                            source_path,
+                            &automation_id,
+                            toml_index_to_strip,
+                            cx,
+                        );
+                    }
+                })?;
+            }
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
+    fn show_preflight_error(
+        &self,
+        title: &str,
+        body: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let prompt = window.prompt(PromptLevel::Critical, title, Some(body), &["OK"], cx);
+        cx.spawn(async move |_, _| {
+            let _ = prompt.await;
+        })
+        .detach();
+    }
+
+    /// 10.8: Re-scan `config/default-context/` for `.md` files and update the
+    /// picker delegate. Required after a file has been moved into the dir
+    /// (e.g. by `add_file_to_default_context` on the Dashboard side) — the
+    /// 10s automations-reload poll picks up automation TOML changes but does
+    /// NOT rescan `default-context/`. Without this, the moved file doesn't
+    /// appear under DEFAULT CONTEXT until the user closes and reopens the
+    /// window.
+    pub fn refresh_default_context_files(&mut self, cx: &mut Context<Self>) {
+        let dir = self.config_root.join("config/default-context");
+        let files = scan_md_files(&dir, PickerSection::DefaultContext);
+        self.picker.update(cx, |picker, _cx| {
+            picker.delegate.default_context_files = files;
+        });
+        cx.notify();
+    }
+
+    /// 10.7 step 7: Two-step refresh (rebuild data, then re-filter into
+    /// `filtered_entries`). Order is load-bearing: reversing it causes
+    /// `update_matches` to filter over the stale `default_context_files`
+    /// vec. Exposed so the dashboard can call it via the rules window
+    /// handle after `add_file_to_default_context` succeeds.
+    pub fn refresh_after_default_context_change(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.refresh_default_context_files(cx);
+        self.picker
+            .update(cx, |picker, cx| picker.refresh(window, cx));
+    }
+
+    /// 10.13: Editor-toolbar Trash confirmation for files. Picker hover Trash
+    /// continues to fire immediately (intentional asymmetry — picker hover is
+    /// the surgical/quick path).
+    fn remove_active_file_from_automation_context(
+        &mut self,
+        source_path: PathBuf,
+        automation_id: String,
+        toml_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let basename = source_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| source_path.display().to_string());
+        let confirmation = window.prompt(
+            PromptLevel::Warning,
+            &format!("Remove {} from {}?", basename, automation_id),
+            Some("The file stays on disk; only the [[context]] reference is removed."),
+            &["Remove", "Cancel"],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if confirmation.await.ok() == Some(0) {
+                this.update_in(cx, |this, window, cx| {
+                    if let Some(callbacks) = &this.context_callbacks {
+                        (callbacks.remove)(&automation_id, toml_index, cx);
+                        this.picker
+                            .update(cx, |picker, cx| picker.refresh(window, cx));
+                    }
+                })?;
+            }
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
+    /// 10.11: Editor-toolbar `&AddFileToDefaultContext` handler. Reads the
+    /// active file path, classifies its role, and dispatches the shared
+    /// helper with the correct `toml_index_to_strip` per the table:
+    ///
+    /// | FileRole | toml_index_to_strip |
+    /// |---|---|
+    /// | ContextSource { toml_index } | Some(toml_index) |
+    /// | FolderChildOf { .. } | None — parent_toml_index intentionally discarded |
+    /// | Prompt / DefaultContext / Unknown | unreachable; defensive return |
+    fn add_active_file_to_default_context_action(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let path = match &self.active_entry {
+            Some(ActiveEntryId::File(p)) => p.clone(),
+            _ => return,
+        };
+        let role = self.classify_file_role(&path);
+        let (automation_id, toml_index_to_strip) = match role {
+            FileRole::ContextSource {
+                automation_id,
+                toml_index,
+            } => (automation_id, Some(toml_index)),
+            FileRole::FolderChildOf {
+                automation_id,
+                parent_toml_index: _,
+            } => (automation_id, None),
+            FileRole::Prompt | FileRole::DefaultContext | FileRole::Unknown => return,
+        };
+        self.add_active_file_to_default_context(
+            path,
+            automation_id,
+            toml_index_to_strip,
+            window,
+            cx,
+        );
+    }
+
+    /// 10.11: Editor-toolbar `&RemoveFileFromAutomationContext` handler.
+    /// Only fires when role is `ContextSource` (FolderChild has no Trash per
+    /// the toolbar table; Prompt/DefaultContext/Unknown have no actions).
+    fn remove_active_file_from_automation_context_action(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let path = match &self.active_entry {
+            Some(ActiveEntryId::File(p)) => p.clone(),
+            _ => return,
+        };
+        let (automation_id, toml_index) = match self.classify_file_role(&path) {
+            FileRole::ContextSource {
+                automation_id,
+                toml_index,
+            } => (automation_id, toml_index),
+            _ => return,
+        };
+        self.remove_active_file_from_automation_context(
+            path,
+            automation_id,
+            toml_index,
+            window,
+            cx,
+        );
     }
 
     fn load_entry(
@@ -2379,39 +2821,112 @@ impl PostProdRules {
             })
     }
 
-    fn render_note_controls(&self, default: bool) -> impl IntoElement {
-        h_flex()
-            .gap_1()
-            .child(
-                IconButton::new("toggle-default-note", IconName::Paperclip)
-                    .toggle_state(default)
-                    .when(default, |this| this.icon_color(Color::Accent))
-                    .map(|this| {
-                        if default {
-                            this.tooltip(Tooltip::text("Remove from Default Notes"))
-                        } else {
-                            this.tooltip(move |_window, cx| {
+    /// 10.5: Unified editor toolbar for the active entry. Replaces
+    /// `render_note_controls` (notes-only) with a role-aware function that
+    /// also handles file roles (CONTEXT SOURCES top-level, FolderChild,
+    /// PROMPT, DEFAULT CONTEXT). Buttons dispatch actions; the action
+    /// handlers (registered on the `Render` impl) call the shared helpers
+    /// `add_active_file_to_default_context` / `remove_active_file_from_automation_context`
+    /// which open the same `window.prompt` confirmation modal that the
+    /// picker FolderChild Paperclip uses (10.11 single-channel design).
+    fn render_entry_toolbar(&self, role: EntryToolbarRole) -> impl IntoElement {
+        let action_group = match role {
+            EntryToolbarRole::Note { default } => Some(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        IconButton::new("toggle-default-note", IconName::Paperclip)
+                            .toggle_state(default)
+                            .when(default, |this| this.icon_color(Color::Accent))
+                            .map(|this| {
+                                if default {
+                                    this.tooltip(Tooltip::text("Remove from Default Notes"))
+                                } else {
+                                    this.tooltip(move |_window, cx| {
+                                        Tooltip::with_meta(
+                                            "Add to Default Notes",
+                                            None,
+                                            "Always included in standalone runs.",
+                                            cx,
+                                        )
+                                    })
+                                }
+                            })
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(ToggleDefaultNote), cx);
+                            }),
+                    )
+                    .child(self.render_duplicate_note_button())
+                    .child(
+                        IconButton::new("delete-note", IconName::Trash)
+                            .tooltip(move |_window, cx| {
+                                Tooltip::for_action("Delete Note", &DeleteNote, cx)
+                            })
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(DeleteNote), cx);
+                            }),
+                    )
+                    .into_any_element(),
+            ),
+            EntryToolbarRole::ContextSource { .. } => Some(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        IconButton::new("file-add-default-context", IconName::Paperclip)
+                            .tooltip(move |_window, cx| {
                                 Tooltip::with_meta(
-                                    "Add to Default Notes",
+                                    "Add to Default Context",
                                     None,
-                                    "Always included in standalone runs.",
+                                    "Always included in every automation's context.",
                                     cx,
                                 )
                             })
-                        }
-                    })
-                    .on_click(|_, window, cx| {
-                        window.dispatch_action(Box::new(ToggleDefaultNote), cx);
-                    }),
-            )
-            .child(self.render_duplicate_note_button())
-            .child(
-                IconButton::new("delete-note", IconName::Trash)
-                    .tooltip(move |_window, cx| Tooltip::for_action("Delete Note", &DeleteNote, cx))
-                    .on_click(|_, window, cx| {
-                        window.dispatch_action(Box::new(DeleteNote), cx);
-                    }),
-            )
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(AddFileToDefaultContext), cx);
+                            }),
+                    )
+                    .child(
+                        IconButton::new("file-remove-from-automation", IconName::Trash)
+                            .tooltip(move |_window, cx| {
+                                Tooltip::for_action(
+                                    "Remove from Automation Context",
+                                    &RemoveFileFromAutomationContext,
+                                    cx,
+                                )
+                            })
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(
+                                    Box::new(RemoveFileFromAutomationContext),
+                                    cx,
+                                );
+                            }),
+                    )
+                    .into_any_element(),
+            ),
+            EntryToolbarRole::FolderChild { .. } => Some(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        IconButton::new("folder-child-add-default-context", IconName::Paperclip)
+                            .tooltip(move |_window, cx| {
+                                Tooltip::with_meta(
+                                    "Add to Default Context",
+                                    None,
+                                    "Always included in every automation's context.",
+                                    cx,
+                                )
+                            })
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(AddFileToDefaultContext), cx);
+                            }),
+                    )
+                    .into_any_element(),
+            ),
+            EntryToolbarRole::Prompt
+            | EntryToolbarRole::DefaultContext
+            | EntryToolbarRole::Unknown => None,
+        };
+        h_flex().gap_1().children(action_group)
     }
 
     fn render_active_editor_panel(
@@ -2443,7 +2958,9 @@ impl PostProdRules {
                             focus_handle,
                             token_count,
                             model,
-                            Some(note_metadata.default),
+                            EntryToolbarRole::Note {
+                                default: note_metadata.default,
+                            },
                             false,
                             cx,
                         );
@@ -2458,6 +2975,31 @@ impl PostProdRules {
                         let is_symlink = file_editor.is_symlink;
                         let automation = self.automation_for_prompt_file(path).cloned();
 
+                        // 10.6: Path-based role classification at render time.
+                        // Section info from the picker is lost at confirm time
+                        // (`ActiveEntryId::File(path)`), so the toolbar derives
+                        // the role here.
+                        let toolbar_role = match self.classify_file_role(path) {
+                            FileRole::Prompt => EntryToolbarRole::Prompt,
+                            FileRole::DefaultContext => EntryToolbarRole::DefaultContext,
+                            FileRole::ContextSource {
+                                automation_id,
+                                toml_index,
+                            } => EntryToolbarRole::ContextSource {
+                                automation_id,
+                                toml_index,
+                                source_path: path.clone(),
+                            },
+                            FileRole::FolderChildOf {
+                                automation_id,
+                                parent_toml_index: _,
+                            } => EntryToolbarRole::FolderChild {
+                                automation_id,
+                                source_path: path.clone(),
+                            },
+                            FileRole::Unknown => EntryToolbarRole::Unknown,
+                        };
+
                         let mut panel = self.render_entry_inner(
                             None,
                             Some(&title),
@@ -2465,7 +3007,7 @@ impl PostProdRules {
                             focus_handle,
                             token_count,
                             model,
-                            None, // files don't have default toggle
+                            toolbar_role,
                             is_symlink,
                             cx,
                         );
@@ -2608,6 +3150,14 @@ impl PostProdRules {
             .find(|a| a.prompt_file.as_deref() == Some(filename))
     }
 
+    /// 10.4: Pure path-based classification of a file loaded into the editor.
+    /// Method-form thin wrapper over the free function `classify_file_role`
+    /// so the latter can be unit-tested without constructing a full
+    /// `PostProdRules` (no GPUI required).
+    pub(crate) fn classify_file_role(&self, path: &Path) -> FileRole {
+        classify_file_role(path, &self.config_root, &self.automations)
+    }
+
     fn render_context_list(
         &self,
         automation: &ResolvedAutomationInfo,
@@ -2729,7 +3279,7 @@ impl PostProdRules {
         focus_handle: gpui::FocusHandle,
         token_count: Option<u64>,
         model: Option<Arc<dyn language_model::LanguageModel>>,
-        note_default: Option<bool>, // Some = note (show controls), None = file
+        toolbar_role: EntryToolbarRole, // 10.6: replaces note_default Option<bool>
         is_symlink: bool,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<Div> {
@@ -2794,9 +3344,7 @@ impl PostProdRules {
                                         .size(LabelSize::XSmall),
                                 )
                             })
-                            .when_some(note_default, |this, default| {
-                                this.child(self.render_note_controls(default))
-                            }),
+                            .child(self.render_entry_toolbar(toolbar_role)),
                     ),
             )
             .child(
@@ -2846,6 +3394,16 @@ impl Render for PostProdRules {
                 .on_action(cx.listener(|this, &ToggleDefaultNote, window, cx| {
                     this.toggle_default_for_active_note(window, cx)
                 }))
+                .on_action(cx.listener(
+                    |this, &AddFileToDefaultContext, window, cx| {
+                        this.add_active_file_to_default_context_action(window, cx)
+                    },
+                ))
+                .on_action(cx.listener(
+                    |this, &RemoveFileFromAutomationContext, window, cx| {
+                        this.remove_active_file_from_automation_context_action(window, cx)
+                    },
+                ))
                 .size_full()
                 .overflow_hidden()
                 .font(ui_font)
@@ -3220,5 +3778,157 @@ mod tests {
         assert_eq!(scripts.len(), 2);
         assert_eq!(scripts[0], "collect.py");
         assert_eq!(scripts[1], "gather.sh");
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 10 — File classification + toolbar
+    // -----------------------------------------------------------------------
+
+    /// 10.15
+    #[test]
+    fn classify_file_role_returns_correct_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        // Layout:
+        //   <root>/config/prompts/foo.md
+        //   <root>/config/default-context/bar.md
+        //   <root>/some-place/single.md          (top-level [[context]])
+        //   <root>/some-folder/                  (directory [[context]])
+        //   <root>/some-folder/inner.md          (FolderChildOf)
+        //   <root>/elsewhere/orphan.md           (Unknown)
+        let prompts_dir = root.join("config/prompts");
+        let dc_dir = root.join("config/default-context");
+        let single = root.join("some-place/single.md");
+        let folder = root.join("some-folder");
+        let inner = folder.join("inner.md");
+        let orphan = root.join("elsewhere/orphan.md");
+        for d in [
+            &prompts_dir,
+            &dc_dir,
+            &single.parent().unwrap().to_path_buf(),
+            &folder,
+            &orphan.parent().unwrap().to_path_buf(),
+        ] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        std::fs::write(prompts_dir.join("foo.md"), "# foo").unwrap();
+        std::fs::write(dc_dir.join("bar.md"), "# bar").unwrap();
+        std::fs::write(&single, "# single").unwrap();
+        std::fs::write(&inner, "# inner").unwrap();
+        std::fs::write(&orphan, "# orphan").unwrap();
+
+        let automation = ResolvedAutomationInfo {
+            id: "auto-1".into(),
+            label: "Auto 1".into(),
+            prompt_file: None,
+            contexts: vec![
+                ResolvedContextInfo {
+                    source_type: "path".into(),
+                    label: "single".into(),
+                    resolved_path: single.clone(),
+                    required: true,
+                },
+                ResolvedContextInfo {
+                    source_type: "path".into(),
+                    label: "folder".into(),
+                    resolved_path: folder,
+                    required: true,
+                },
+            ],
+            skip_default_context: false,
+        };
+        let automations = vec![automation];
+
+        assert_eq!(
+            classify_file_role(&prompts_dir.join("foo.md"), root, &automations),
+            FileRole::Prompt
+        );
+        assert_eq!(
+            classify_file_role(&dc_dir.join("bar.md"), root, &automations),
+            FileRole::DefaultContext
+        );
+        assert_eq!(
+            classify_file_role(&single, root, &automations),
+            FileRole::ContextSource {
+                automation_id: "auto-1".into(),
+                toml_index: 0,
+            }
+        );
+        assert_eq!(
+            classify_file_role(&inner, root, &automations),
+            FileRole::FolderChildOf {
+                automation_id: "auto-1".into(),
+                parent_toml_index: 1,
+            }
+        );
+        assert_eq!(
+            classify_file_role(&orphan, root, &automations),
+            FileRole::Unknown
+        );
+    }
+
+    /// 10.18 — pre-flight rejects collision.
+    #[test]
+    fn validate_promotion_refuses_on_collision() {
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = dir.path().join("dc");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let source = dir.path().join("note.md");
+        std::fs::write(&source, "# note").unwrap();
+        std::fs::write(target_dir.join("note.md"), "# pre-existing").unwrap();
+        assert_eq!(
+            validate_promotion(&source, &target_dir),
+            Err(PromotionPreflightError::Collision)
+        );
+    }
+
+    /// 10.19 — pre-flight rejects symlink source.
+    #[test]
+    fn validate_promotion_refuses_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = dir.path().join("dc");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let real = dir.path().join("real.md");
+        std::fs::write(&real, "# real").unwrap();
+        let link = dir.path().join("link.md");
+        symlink(&real, &link).unwrap();
+        assert_eq!(
+            validate_promotion(&link, &target_dir),
+            Err(PromotionPreflightError::Symlink)
+        );
+    }
+
+    /// 10.20a — pre-flight rejects non-`.md` extensions.
+    #[test]
+    fn validate_promotion_rejects_non_md_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = dir.path().join("dc");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let source_toml = dir.path().join("note.toml");
+        std::fs::write(&source_toml, "x=1").unwrap();
+        assert_eq!(
+            validate_promotion(&source_toml, &target_dir),
+            Err(PromotionPreflightError::NotMarkdown)
+        );
+        let source_txt = dir.path().join("note.txt");
+        std::fs::write(&source_txt, "txt").unwrap();
+        assert_eq!(
+            validate_promotion(&source_txt, &target_dir),
+            Err(PromotionPreflightError::NotMarkdown)
+        );
+    }
+
+    /// Sanity: validate_promotion succeeds in the happy path.
+    #[test]
+    fn validate_promotion_ok_for_fresh_md() {
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = dir.path().join("dc");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let source = dir.path().join("fresh.md");
+        std::fs::write(&source, "# fresh").unwrap();
+        let target = validate_promotion(&source, &target_dir).unwrap();
+        assert_eq!(target, target_dir.join("fresh.md"));
     }
 }

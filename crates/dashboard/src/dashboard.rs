@@ -152,6 +152,10 @@ struct ContextLauncherToast;
 /// Marker type for the auto-disable toast notification ID.
 struct AutoDisableToast;
 
+/// Marker type for the "Add to Default Context" toast notification ID
+/// (success/failure of `add_file_to_default_context`, 10.7).
+struct AddToDefaultContextToast;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum AutomationRunStatus {
     GatheringContext,
@@ -1887,6 +1891,120 @@ Rules for the completion report:
             self.write_context_entries(automation_id, &contexts, cx);
             cx.notify();
         }
+    }
+
+    /// 10.7: Move a file into `config/default-context/` and (optionally)
+    /// strip the source `[[context]]` entry from the automation's TOML.
+    ///
+    /// Pre-flight (extension/collision/symlink) and the confirmation modal
+    /// run on the `PostProdRules` side before this method is invoked — by the
+    /// time we get here the user has already confirmed.
+    ///
+    /// `toml_index_to_strip = Some(ix)` means the source was a top-level
+    /// `[[context]]` entry that must be stripped after the move.
+    /// `None` means the source was a child of a directory `[[context]]` —
+    /// the parent folder's entry stays in place.
+    pub(crate) fn add_file_to_default_context(
+        &mut self,
+        source_path: PathBuf,
+        source_automation_id: &str,
+        toml_index_to_strip: Option<usize>,
+        cx: &mut Context<Self>,
+    ) {
+        let basename = source_path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| source_path.display().to_string());
+        let target = self
+            .config_root
+            .join("config/default-context")
+            .join(&basename);
+
+        // Defensive re-check: pre-flight already ran on the PostProdRules side
+        // but races (another process, a tab) could change disk between then
+        // and now. Cheap and we'd rather fail loudly than silently overwrite.
+        if target.exists() {
+            self.show_add_to_default_context_toast(
+                format!("{} already exists in default-context/. Move aborted.", basename),
+                cx,
+            );
+            return;
+        }
+
+        // Step 4: move with EXDEV fallback.
+        let move_result = match std::fs::rename(&source_path, &target) {
+            Ok(()) => Ok(()),
+            Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
+                std::fs::copy(&source_path, &target)
+                    .and_then(|_| std::fs::remove_file(&source_path))
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(err) = move_result {
+            log::error!(
+                "add_file_to_default_context: move {} -> {} failed: {}",
+                source_path.display(),
+                target.display(),
+                err
+            );
+            self.show_add_to_default_context_toast(
+                format!("Failed to move {}: {}", basename, err),
+                cx,
+            );
+            return;
+        }
+
+        // Step 5: strip the [[context]] entry (top-level only).
+        //
+        // Spec 10.7 step 5 calls for "Rollback on step-5 failure" — but the
+        // existing `remove_context_entry` shrinks the in-memory `contexts`
+        // vec unconditionally and fires a detached background TOML write
+        // (`dashboard.rs` `fn write_context_entries`) that only `log::warn!`s
+        // on disk failure. There is no synchronous error to react to here,
+        // so a rollback branch would be dead code. If the TOML write fails
+        // asynchronously the user will see a stale `[[context]]` line in
+        // memory get out of sync with disk — surfaced via the existing
+        // 10s reload poll. Best-effort recovery: re-add the path manually.
+        if let Some(ix) = toml_index_to_strip {
+            self.remove_context_entry(source_automation_id, ix, cx);
+        }
+
+        let summary = match toml_index_to_strip {
+            Some(_) => format!(
+                "Moved {} to default-context/. [[context]] entry stripped from {}.toml.",
+                basename, source_automation_id
+            ),
+            None => format!(
+                "Moved {} to default-context/. Parent folder context entry unchanged.",
+                basename
+            ),
+        };
+        self.show_add_to_default_context_toast(summary, cx);
+
+        // Step 7: refresh the rules window. Order is load-bearing —
+        // refresh_default_context_files first (rebuilds data), then
+        // picker.refresh (re-filters into filtered_entries).
+        if let Some(handle) = self.postprod_rules_window.as_ref() {
+            handle
+                .update(cx, |rules, window, cx| {
+                    rules.refresh_after_default_context_change(window, cx);
+                })
+                .ok();
+        }
+    }
+
+    fn show_add_to_default_context_toast(&self, message: String, cx: &mut Context<Self>) {
+        self.workspace
+            .update(cx, |workspace, cx| {
+                workspace.show_toast(
+                    workspace::Toast::new(
+                        workspace::notifications::NotificationId::unique::<AddToDefaultContextToast>(),
+                        message,
+                    ),
+                    cx,
+                );
+            })
+            .log_err();
     }
 
     fn toggle_skip_default_context(&mut self, automation_id: &str, cx: &mut Context<Self>) {
