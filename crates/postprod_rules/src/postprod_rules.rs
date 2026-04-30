@@ -14,9 +14,7 @@ use language_model::{ConfiguredModel, LanguageModelRegistry};
 use note_store::*;
 use picker::{Picker, PickerDelegate};
 use platform_title_bar::PlatformTitleBar;
-use postprod_dashboard_config::ResolvedAutomationInfo;
-#[cfg(test)]
-use postprod_dashboard_config::ResolvedContextInfo;
+use postprod_dashboard_config::{ResolvedAutomationInfo, ResolvedContextInfo};
 use release_channel::ReleaseChannel;
 use rope::Rope;
 use settings::{ActionSequence, Settings};
@@ -1475,20 +1473,44 @@ impl PostProdRules {
                 toml_index,
                 direction,
             } => {
-                if let Some(callbacks) = &self.context_callbacks {
+                if self.context_callbacks.is_some() {
+                    let callbacks = self.context_callbacks.clone().unwrap();
                     (callbacks.reorder)(automation_id, *toml_index, *direction, cx);
-                    self.picker
-                        .update(cx, |picker, cx| picker.refresh(window, cx));
+                    let from = *toml_index;
+                    let direction = *direction;
+                    self.apply_local_context_change(
+                        move |contexts| {
+                            let to_signed = from as i32 + direction;
+                            if to_signed < 0 {
+                                return;
+                            }
+                            let to = to_signed as usize;
+                            if from < contexts.len() && to < contexts.len() {
+                                contexts.swap(from, to);
+                            }
+                        },
+                        window,
+                        cx,
+                    );
                 }
             }
             PostProdPickerEvent::ContextRemove {
                 automation_id,
                 toml_index,
             } => {
-                if let Some(callbacks) = &self.context_callbacks {
+                if self.context_callbacks.is_some() {
+                    let callbacks = self.context_callbacks.clone().unwrap();
                     (callbacks.remove)(automation_id, *toml_index, cx);
-                    self.picker
-                        .update(cx, |picker, cx| picker.refresh(window, cx));
+                    let ix = *toml_index;
+                    self.apply_local_context_change(
+                        move |contexts| {
+                            if ix < contexts.len() {
+                                contexts.remove(ix);
+                            }
+                        },
+                        window,
+                        cx,
+                    );
                 }
             }
             PostProdPickerEvent::AddContextFile { automation_id } => {
@@ -1596,8 +1618,8 @@ impl PostProdRules {
         );
         cx.spawn_in(window, async move |this, cx| {
             if confirmation.await.ok() == Some(0) {
-                this.update_in(cx, |this, _window, cx| {
-                    if let Some(callbacks) = &this.context_callbacks {
+                this.update_in(cx, |this, window, cx| {
+                    if let Some(callbacks) = this.context_callbacks.clone() {
                         (callbacks.add_to_default_context)(
                             source_path,
                             &automation_id,
@@ -1605,6 +1627,27 @@ impl PostProdRules {
                             cx,
                         );
                     }
+                    // Apply the same change locally — Dashboard cannot push
+                    // back via `handle.update` from inside this callback
+                    // chain (re-entrant entity update; silently fails). See
+                    // `apply_local_context_change` for the reasoning.
+                    if let Some(ix) = toml_index_to_strip {
+                        this.apply_local_context_change(
+                            move |contexts| {
+                                if ix < contexts.len() {
+                                    contexts.remove(ix);
+                                }
+                            },
+                            window,
+                            cx,
+                        );
+                    }
+                    // The new file is now in `config/default-context/` on
+                    // disk; rebuild the picker delegate's
+                    // `default_context_files` from the directory and refresh
+                    // the picker so the new entry shows under DEFAULT
+                    // CONTEXT.
+                    this.refresh_after_default_context_change(window, cx);
                 })?;
             }
             anyhow::Ok(())
@@ -1682,16 +1725,63 @@ impl PostProdRules {
         cx.spawn_in(window, async move |this, cx| {
             if confirmation.await.ok() == Some(0) {
                 this.update_in(cx, |this, window, cx| {
-                    if let Some(callbacks) = &this.context_callbacks {
+                    if let Some(callbacks) = this.context_callbacks.clone() {
                         (callbacks.remove)(&automation_id, toml_index, cx);
-                        this.picker
-                            .update(cx, |picker, cx| picker.refresh(window, cx));
+                        this.apply_local_context_change(
+                            move |contexts| {
+                                if toml_index < contexts.len() {
+                                    contexts.remove(toml_index);
+                                }
+                            },
+                            window,
+                            cx,
+                        );
                     }
                 })?;
             }
             anyhow::Ok(())
         })
         .detach_and_log_err(cx);
+    }
+
+    /// Apply a context-vec mutation locally to `WindowMode::Scoped`'s
+    /// `ResolvedAutomationInfo` AND propagate the new value to
+    /// `picker.delegate.scoped_automation`, then refresh the picker.
+    ///
+    /// **Why this exists:** the picker's `update_matches` rebuilds
+    /// `filtered_entries` from `scoped_automation`. When the dashboard mutates
+    /// its in-memory `automations` Vec via the `ContextCallbacks` (Trash,
+    /// Reorder, Add to Default Context, etc.), the rules window's local
+    /// `scoped_automation` stays stale until the dashboard's 10s
+    /// automations-reload poll calls `update_automation` to push fresh data.
+    /// During that ~10s window, `picker.refresh` shows the OLD list.
+    ///
+    /// We can't fix this by having the dashboard call `handle.update` on
+    /// the rules window from inside the callback, because we're already
+    /// inside a rules-window update at that point — the re-entrant
+    /// `handle.update` returns Err and is silently swallowed. Instead, the
+    /// rules window applies the same mutation it just asked the dashboard to
+    /// make, locally, on the way back from the callback. This keeps the
+    /// picker in sync with the dashboard's authoritative state on the next
+    /// 10s poll without any race.
+    fn apply_local_context_change(
+        &mut self,
+        mutate: impl FnOnce(&mut Vec<ResolvedContextInfo>),
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let cloned = if let WindowMode::Scoped(ref mut info) = self.mode {
+            mutate(&mut info.contexts);
+            Some(info.clone())
+        } else {
+            None
+        };
+        self.picker.update(cx, |picker, cx| {
+            if let Some(info) = cloned {
+                picker.delegate.scoped_automation = Some(info);
+            }
+            picker.refresh(window, cx);
+        });
     }
 
     /// Read the picker's currently-selected entry and project it to the

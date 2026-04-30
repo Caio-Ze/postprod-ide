@@ -1981,16 +1981,14 @@ Rules for the completion report:
         };
         self.show_add_to_default_context_toast(summary, cx);
 
-        // Step 7: refresh the rules window. Order is load-bearing —
-        // refresh_default_context_files first (rebuilds data), then
-        // picker.refresh (re-filters into filtered_entries).
-        if let Some(handle) = self.postprod_rules_window.as_ref() {
-            handle
-                .update(cx, |rules, window, cx| {
-                    rules.refresh_after_default_context_change(window, cx);
-                })
-                .ok();
-        }
+        // Step 7: rules-window refresh is now done by the rules window
+        // itself, locally, after this callback returns. Calling
+        // `handle.update` here would re-enter the rules entity (we're
+        // inside a callback chain that originated from a rules-window
+        // update) — the re-entrant `update` returns Err, we'd `.ok()`
+        // it, and the picker would stay stale. See
+        // `PostProdRules::apply_local_context_change` and
+        // `add_active_file_to_default_context` for the local-mutation path.
     }
 
     fn show_add_to_default_context_toast(&self, message: String, cx: &mut Context<Self>) {
