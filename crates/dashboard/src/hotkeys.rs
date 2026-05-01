@@ -448,11 +448,6 @@ impl GlobalHotkeyManager {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn hotkey_display_for(&self, tool_id: &str) -> Option<String> {
-        self.keystroke_map.get(tool_id).cloned()
-    }
-
     pub(crate) fn all_hotkey_entries(&self) -> &[ResolvedHotkeyEntry] {
         &self.hotkey_entries
     }
