@@ -108,19 +108,11 @@ pub struct ContextCallbacks {
 // Internal types
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq)]
-enum PickerSection {
-    Prompt,
-    DefaultContext,
-}
-
 #[derive(Clone, Debug)]
 struct PromptFileEntry {
     pub(crate) filename: String,
     pub(crate) display_name: String,
     pub(crate) path: PathBuf,
-    #[allow(dead_code)]
-    pub(crate) section: PickerSection,
     pub(crate) is_symlink: bool,
 }
 
@@ -539,7 +531,7 @@ impl PostProdPickerDelegate {
 // File scanning helpers
 // ---------------------------------------------------------------------------
 
-fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
+fn scan_md_files(dir: &Path) -> Vec<PromptFileEntry> {
     let mut entries = Vec::new();
     let read_dir = match std::fs::read_dir(dir) {
         Ok(rd) => rd,
@@ -563,7 +555,6 @@ fn scan_md_files(dir: &Path, section: PickerSection) -> Vec<PromptFileEntry> {
             filename,
             display_name,
             path,
-            section: section.clone(),
             is_symlink,
         });
     }
@@ -1343,12 +1334,9 @@ impl PostProdRules {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let prompt_files =
-            scan_md_files(&config_root.join("config/prompts"), PickerSection::Prompt);
-        let default_context_files = scan_md_files(
-            &config_root.join("config/default-context"),
-            PickerSection::DefaultContext,
-        );
+        let prompt_files = scan_md_files(&config_root.join("config/prompts"));
+        let default_context_files =
+            scan_md_files(&config_root.join("config/default-context"));
 
         let scoped_automation = match &mode {
             WindowMode::Scoped(info) => Some(info.clone()),
@@ -1688,7 +1676,7 @@ impl PostProdRules {
     /// window.
     pub fn refresh_default_context_files(&mut self, cx: &mut Context<Self>) {
         let dir = self.config_root.join("config/default-context");
-        let files = scan_md_files(&dir, PickerSection::DefaultContext);
+        let files = scan_md_files(&dir);
         self.picker.update(cx, |picker, _cx| {
             picker.delegate.default_context_files = files;
         });
@@ -3560,7 +3548,7 @@ mod tests {
         std::fs::write(dir.path().join("bar.md"), "# Bar").unwrap();
         std::fs::write(dir.path().join("ignored.txt"), "nope").unwrap();
 
-        let entries = scan_md_files(dir.path(), PickerSection::Prompt);
+        let entries = scan_md_files(dir.path());
         assert_eq!(entries.len(), 2);
         // Sorted by display_name: "bar" < "foo"
         assert_eq!(entries[0].display_name, "bar");
@@ -3578,7 +3566,7 @@ mod tests {
         std::fs::write(&real_path, "# Real").unwrap();
         symlink(&real_path, dir.path().join("linked.md")).unwrap();
 
-        let entries = scan_md_files(dir.path(), PickerSection::DefaultContext);
+        let entries = scan_md_files(dir.path());
         assert_eq!(entries.len(), 2);
 
         let real_entry = entries.iter().find(|e| e.filename == "real.md").unwrap();
@@ -3591,13 +3579,13 @@ mod tests {
     #[test]
     fn scan_empty_dir() {
         let dir = tempfile::tempdir().unwrap();
-        let entries = scan_md_files(dir.path(), PickerSection::Prompt);
+        let entries = scan_md_files(dir.path());
         assert!(entries.is_empty());
     }
 
     #[test]
     fn scan_missing_dir() {
-        let entries = scan_md_files(Path::new("/nonexistent/path"), PickerSection::Prompt);
+        let entries = scan_md_files(Path::new("/nonexistent/path"));
         assert!(entries.is_empty());
     }
 
@@ -3609,14 +3597,14 @@ mod tests {
         for name in &["alpha.md", "beta.md", "gamma.md"] {
             std::fs::write(dir.join(name), format!("# {name}")).unwrap();
         }
-        scan_md_files(dir, PickerSection::Prompt)
+        scan_md_files(dir)
     }
 
     fn make_test_default_context(dir: &Path) -> Vec<PromptFileEntry> {
         for name in &["project-notes.md", "tier-guidelines.md"] {
             std::fs::write(dir.join(name), format!("# {name}")).unwrap();
         }
-        scan_md_files(dir, PickerSection::DefaultContext)
+        scan_md_files(dir)
     }
 
     fn count_entries_of_type(entries: &[PostProdPickerEntry], section: &str) -> usize {
