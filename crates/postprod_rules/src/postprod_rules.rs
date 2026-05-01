@@ -417,7 +417,6 @@ struct PostProdPickerDelegate {
     filtered_entries: Vec<PostProdPickerEntry>,
 }
 
-#[allow(dead_code)]
 enum PostProdPickerEvent {
     Selected {
         entry_id: ActiveEntryId,
@@ -443,6 +442,7 @@ enum PostProdPickerEvent {
     AddContextFile {
         automation_id: String,
     },
+    #[allow(dead_code)]
     AddContextScript {
         automation_id: String,
     },
