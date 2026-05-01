@@ -4054,4 +4054,17 @@ mod tests {
         let target = validate_promotion(&source, &target_dir).unwrap();
         assert_eq!(target, target_dir.join("fresh.md"));
     }
+
+    /// 10.20b — pre-flight rejects nonexistent source (user moved/deleted file mid-flight).
+    #[test]
+    fn validate_promotion_returns_source_missing_for_nonexistent_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let target_dir = dir.path().join("dc");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let source = dir.path().join("missing.md");
+        assert_eq!(
+            validate_promotion(&source, &target_dir),
+            Err(PromotionPreflightError::SourceMissing)
+        );
+    }
 }
