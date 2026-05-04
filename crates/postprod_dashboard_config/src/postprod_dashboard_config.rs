@@ -641,6 +641,23 @@ pub fn load_automations_registry(config_root: &Path) -> (Vec<AutomationEntry>, O
 // Agent backends — loaded from TOML at runtime
 // ---------------------------------------------------------------------------
 
+/// How the dashboard automation-card dispatch helper delivers a prompt to a backend.
+///
+/// `command`, `flags`, and `exec_subcommand` on `BackendEntry` are trusted local
+/// dashboard configuration fragments interpolated into a shell command. They must
+/// not be populated from untrusted user input.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BackendTransport {
+    /// `cat 'P' | C F` — backend tolerates piped stdin while starting interactively.
+    #[default]
+    StdinPipe,
+    /// `C F "$(cat 'P')"` — backend accepts the prompt as a trailing positional argv.
+    ArgvPositional,
+    /// `cat 'P' | C SUB F` — backend has an explicit non-interactive subcommand.
+    ExecSubcommand,
+}
+
 #[derive(Deserialize, Clone)]
 pub struct BackendEntry {
     pub id: String,
@@ -651,6 +668,12 @@ pub struct BackendEntry {
     #[serde(default)]
     #[allow(dead_code)] // Parsed from AGENTS.toml; reserved for backends that use prompt flags
     pub prompt_flag: String,
+    #[serde(default)]
+    pub transport: BackendTransport,
+    /// For `transport = "exec-subcommand"`, the subcommand inserted between
+    /// `command` and `flags`. Empty for non-exec backends.
+    #[serde(default)]
+    pub exec_subcommand: String,
 }
 
 #[derive(Deserialize, Clone)]
@@ -1943,5 +1966,60 @@ required = false
         assert_eq!(resolved.contexts.len(), 1, "missing context is dropped");
         assert_eq!(resolved.contexts[0].label, "Good");
         Ok(())
+    }
+
+    // ---------------------------------------------------------------
+    // BackendTransport schema (codex-automation-card-transport spec)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn backend_entry_default_transport_is_stdin_pipe() {
+        let toml_src = r#"
+            id = "claude"
+            label = "run with Claude"
+            command = "claude"
+            flags = "-p"
+        "#;
+        let entry: BackendEntry = toml::from_str(toml_src).unwrap();
+        assert_eq!(entry.transport, BackendTransport::StdinPipe);
+        assert_eq!(entry.exec_subcommand, "");
+    }
+
+    #[test]
+    fn backend_entry_kebab_case_deserialization() {
+        let argv: BackendEntry = toml::from_str(
+            r#"
+                id = "codex"
+                label = "run with Codex"
+                command = "codex"
+                transport = "argv-positional"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(argv.transport, BackendTransport::ArgvPositional);
+
+        let exec: BackendEntry = toml::from_str(
+            r#"
+                id = "codex-exec"
+                label = "run with Codex (exec)"
+                command = "codex"
+                transport = "exec-subcommand"
+                exec_subcommand = "exec"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(exec.transport, BackendTransport::ExecSubcommand);
+        assert_eq!(exec.exec_subcommand, "exec");
+
+        let stdin: BackendEntry = toml::from_str(
+            r#"
+                id = "claude"
+                label = "claude"
+                command = "claude"
+                transport = "stdin-pipe"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(stdin.transport, BackendTransport::StdinPipe);
     }
 }
