@@ -11,6 +11,7 @@ use ui::{
     Button, ButtonStyle, Label, LabelSize, Modal, ModalFooter, ModalHeader, Section, prelude::*,
 };
 use util::ResultExt as _;
+use util::paths::home_dir;
 use workspace::{
     ModalView, MultiWorkspace,
     notifications::{
@@ -179,9 +180,7 @@ pub(crate) struct ResolvedHotkeyEntry {
 
 fn expand_tilde(path_str: &str) -> PathBuf {
     if let Some(rest) = path_str.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(rest);
-        }
+        return home_dir().join(rest);
     }
     PathBuf::from(path_str)
 }
