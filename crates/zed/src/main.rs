@@ -275,6 +275,20 @@ fn main() {
         return;
     }
 
+    // Make external CLIs (OpenCode, etc.) discover the fork's database
+    // instead of upstream Zed's hardcoded paths. OpenCode 1.14.x looks up
+    // OPENCODE_ZED_DB before its built-in defaults — see
+    // private/specs/opencode-zed-db-path.md for the upstream lookup contract.
+    if std::env::var_os("OPENCODE_ZED_DB").is_none() {
+        let db_path = db::db_path(paths::database_dir(), *release_channel::RELEASE_CHANNEL);
+        // SAFETY: set early in main(), before any threads spawn that read env.
+        // The single-threaded window ends at the rayon::ThreadPoolBuilder
+        // build_global() call below.
+        unsafe {
+            std::env::set_var("OPENCODE_ZED_DB", db_path);
+        }
+    }
+
     zlog::init();
 
     if stdout_is_a_pty() {

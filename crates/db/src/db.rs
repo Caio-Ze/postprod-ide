@@ -299,7 +299,26 @@ mod tests {
     use sqlez::domain::Domain;
     use sqlez_macros::sql;
 
-    use crate::open_db;
+    use crate::{db_path, open_db};
+
+    #[test]
+    fn db_path_uses_release_channel_dev_name() {
+        let tempdir = tempfile::Builder::new()
+            .prefix("DbPathTests")
+            .tempdir()
+            .unwrap();
+        let cases = [
+            (release_channel::ReleaseChannel::Dev, "0-dev"),
+            (release_channel::ReleaseChannel::Nightly, "0-nightly"),
+            (release_channel::ReleaseChannel::Preview, "0-preview"),
+            (release_channel::ReleaseChannel::Stable, "0-stable"),
+        ];
+        for (channel, scope_dir) in cases {
+            let path = db_path(tempdir.path(), channel);
+            assert_eq!(path.parent().unwrap().file_name().unwrap(), scope_dir);
+            assert_eq!(path.file_name().unwrap(), "db.sqlite");
+        }
+    }
 
     // Test bad migration panics
     #[gpui::test]
