@@ -1110,7 +1110,30 @@ pub(crate) fn build_temp_file_terminal_command(
     let command = resolve_bin(&config.command);
     let flags = &config.flags;
     let temp_escaped = temp_path.display().to_string().replace('\'', "'\\''");
-    let full_command = format!("cat '{temp_escaped}' | {command} {flags}");
+    // Per spec private/specs/codex-automation-card-transport.md: branch the
+    // shell template on the backend's declared transport. `command`, `flags`,
+    // and `exec_subcommand` are trusted local config fragments — they must
+    // never be populated from untrusted user input.
+    let full_command = match config.transport {
+        dcfg::BackendTransport::StdinPipe => {
+            format!("cat '{temp_escaped}' | {command} {flags}")
+        }
+        dcfg::BackendTransport::ArgvPositional => {
+            format!("{command} {flags} \"$(cat '{temp_escaped}')\"")
+        }
+        dcfg::BackendTransport::ExecSubcommand => {
+            let sub = &config.exec_subcommand;
+            if sub.is_empty() {
+                log::warn!(
+                    "backend {id}: transport=exec-subcommand requires non-empty exec_subcommand; falling back to stdin-pipe",
+                    id = config.id,
+                );
+                format!("cat '{temp_escaped}' | {command} {flags}")
+            } else {
+                format!("cat '{temp_escaped}' | {command} {sub} {flags}")
+            }
+        }
+    };
 
     Some(SpawnInTerminal {
         id: TaskId(format!("automation-{}", entry_id)),
@@ -1127,4 +1150,136 @@ pub(crate) fn build_temp_file_terminal_command(
         show_rerun: true,
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Tests for the BackendTransport branching in
+    //! `build_temp_file_terminal_command`. See
+    //! private/specs/codex-automation-card-transport.md § "Tests".
+    //!
+    //! The dispatch helper writes the prompt to `std::env::temp_dir()` —
+    //! tests use unique entry_ids so the per-test temp files do not collide
+    //! and to keep `resolve_bin` deterministic, command names are chosen
+    //! that do not exist on disk (so the bare name is returned).
+
+    use super::*;
+    use crate::AgentBackend;
+    use std::path::PathBuf;
+
+    fn make_backend(
+        transport: dcfg::BackendTransport,
+        exec_subcommand: &str,
+    ) -> dcfg::BackendEntry {
+        // id must match `AgentBackend::Claude.backend_id()` so the dispatch
+        // helper finds it.
+        dcfg::BackendEntry {
+            id: "claude".to_string(),
+            label: "test".to_string(),
+            // Use a name that does not exist in resolve_bin's candidate dirs
+            // so the bare name comes back unchanged.
+            command: "__test_codex_transport_cmd".to_string(),
+            flags: "-x".to_string(),
+            prompt_flag: String::new(),
+            transport,
+            exec_subcommand: exec_subcommand.to_string(),
+        }
+    }
+
+    fn dispatch_command(backend: dcfg::BackendEntry, entry_id: &str) -> String {
+        let backends = vec![backend];
+        let cwd = PathBuf::from("/tmp");
+        let spawn = build_temp_file_terminal_command(
+            "test prompt",
+            entry_id,
+            "test entry",
+            AgentBackend::Claude,
+            &backends,
+            &cwd,
+            &None,
+        )
+        .expect("dispatch should produce a SpawnInTerminal");
+        spawn.command.expect("spawn must have a command")
+    }
+
+    fn expected_temp_path(entry_id: &str) -> String {
+        let temp = std::env::temp_dir().join(format!("postprod_prompt_{entry_id}.md"));
+        temp.display().to_string().replace('\'', "'\\''")
+    }
+
+    #[test]
+    fn build_temp_file_terminal_command_stdin_pipe() {
+        let backend = make_backend(dcfg::BackendTransport::StdinPipe, "");
+        let entry_id = "test_codex_transport_stdin_pipe";
+        let cmd = dispatch_command(backend, entry_id);
+        let temp = expected_temp_path(entry_id);
+        assert_eq!(cmd, format!("cat '{temp}' | __test_codex_transport_cmd -x"));
+    }
+
+    #[test]
+    fn build_temp_file_terminal_command_argv_positional() {
+        let backend = make_backend(dcfg::BackendTransport::ArgvPositional, "");
+        let entry_id = "test_codex_transport_argv";
+        let cmd = dispatch_command(backend, entry_id);
+        let temp = expected_temp_path(entry_id);
+        assert_eq!(
+            cmd,
+            format!("__test_codex_transport_cmd -x \"$(cat '{temp}')\"")
+        );
+    }
+
+    #[test]
+    fn build_temp_file_terminal_command_exec_subcommand() {
+        let backend = make_backend(dcfg::BackendTransport::ExecSubcommand, "exec");
+        let entry_id = "test_codex_transport_exec";
+        let cmd = dispatch_command(backend, entry_id);
+        let temp = expected_temp_path(entry_id);
+        assert_eq!(
+            cmd,
+            format!("cat '{temp}' | __test_codex_transport_cmd exec -x")
+        );
+    }
+
+    #[test]
+    fn build_temp_file_terminal_command_exec_empty_subcommand_falls_back() {
+        let backend = make_backend(dcfg::BackendTransport::ExecSubcommand, "");
+        let entry_id = "test_codex_transport_exec_empty";
+        let cmd = dispatch_command(backend, entry_id);
+        let temp = expected_temp_path(entry_id);
+        // Empty exec_subcommand falls back to the stdin-pipe shape.
+        // The warning is logged via `log::warn!` — we do not assert the
+        // log output here per the spec (manual verification covers it).
+        assert_eq!(cmd, format!("cat '{temp}' | __test_codex_transport_cmd -x"));
+    }
+
+    #[test]
+    fn build_temp_file_terminal_command_escapes_single_quote_paths() {
+        // Inject a single quote into the temp path via the entry_id, which
+        // becomes part of the temp filename. The helper's existing escape
+        // pattern (`'` → `'\''`) must be preserved across all transports.
+        let entry_id = "test_codex_transport_quote's_id";
+        let temp = expected_temp_path(entry_id);
+        assert!(
+            temp.contains("'\\''"),
+            "escaped path must contain '\\'' sequence, got {temp}"
+        );
+
+        for transport in [
+            dcfg::BackendTransport::StdinPipe,
+            dcfg::BackendTransport::ArgvPositional,
+            dcfg::BackendTransport::ExecSubcommand,
+        ] {
+            let exec_sub = if matches!(transport, dcfg::BackendTransport::ExecSubcommand) {
+                "exec"
+            } else {
+                ""
+            };
+            let backend = make_backend(transport, exec_sub);
+            let cmd = dispatch_command(backend, entry_id);
+            assert!(
+                cmd.contains(&temp),
+                "transport {transport:?} command did not embed escaped path: {cmd}"
+            );
+        }
+    }
 }
