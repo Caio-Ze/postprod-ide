@@ -94,18 +94,20 @@ impl DashboardPopupInbox {
         let inbox = EventInbox::new(NOTIFICATION_POPUP_KIND, root);
         let kind_dir = inbox.kind_dir();
 
-        let watch_task = cx.spawn(async move |this: WeakEntity<DashboardItem>, cx: &mut AsyncApp| {
-            fs.create_dir(&kind_dir).await.log_err();
+        let watch_task = cx.spawn(
+            async move |this: WeakEntity<DashboardItem>, cx: &mut AsyncApp| {
+                fs.create_dir(&kind_dir).await.log_err();
 
-            // Initial drain — events that accumulated while the dashboard
-            // was closed surface immediately on open.
-            drain_and_dispatch(&inbox, &this, cx).await.log_err();
-
-            let (mut events, _handle) = fs.watch(&kind_dir, FS_WATCH_LATENCY).await;
-            while events.next().await.is_some() {
+                // Initial drain — events that accumulated while the dashboard
+                // was closed surface immediately on open.
                 drain_and_dispatch(&inbox, &this, cx).await.log_err();
-            }
-        });
+
+                let (mut events, _handle) = fs.watch(&kind_dir, FS_WATCH_LATENCY).await;
+                while events.next().await.is_some() {
+                    drain_and_dispatch(&inbox, &this, cx).await.log_err();
+                }
+            },
+        );
 
         Self {
             stacks: HashMap::new(),
@@ -146,7 +148,12 @@ impl DashboardPopupInbox {
             .map(|s| s.len() >= STACK_CAP)
             .unwrap_or(false);
         if needs_eviction {
-            if let Some(oldest) = self.stacks.get(&display_id).and_then(|s| s.first()).map(|slot| slot.window) {
+            if let Some(oldest) = self
+                .stacks
+                .get(&display_id)
+                .and_then(|s| s.first())
+                .map(|slot| slot.window)
+            {
                 self.close_popup(display_id, oldest, cx);
             }
         }
@@ -176,13 +183,12 @@ impl DashboardPopupInbox {
             }
         };
 
-        let dismiss_subscription = cx.subscribe(&entity, move |this, _popup, event, cx| {
-            match event {
+        let dismiss_subscription =
+            cx.subscribe(&entity, move |this, _popup, event, cx| match event {
                 PopupNotificationEvent::Dismissed => {
                     this.popup_inbox.close_popup(display_id, window, cx);
                 }
-            }
-        });
+            });
 
         let autohide = if matches!(event.severity, Severity::Info | Severity::Success) {
             Some(cx.spawn(
@@ -198,15 +204,12 @@ impl DashboardPopupInbox {
             None
         };
 
-        self.stacks
-            .entry(display_id)
-            .or_default()
-            .push(PopupSlot {
-                window,
-                stack_index,
-                _dismiss_subscription: dismiss_subscription,
-                _autohide: autohide,
-            });
+        self.stacks.entry(display_id).or_default().push(PopupSlot {
+            window,
+            stack_index,
+            _dismiss_subscription: dismiss_subscription,
+            _autohide: autohide,
+        });
     }
 
     fn close_popup(
@@ -223,9 +226,7 @@ impl DashboardPopupInbox {
         // Explicit OS-window close — `remove_window` does not emit
         // PopupNotificationEvent::Dismissed on its own (matches upstream
         // AgentNotification pattern).
-        window
-            .update(cx, |_, w, _| w.remove_window())
-            .log_err();
+        window.update(cx, |_, w, _| w.remove_window()).log_err();
     }
 
     /// Test-only stack inspector. Kept per `popup-notifications.md` § Tests

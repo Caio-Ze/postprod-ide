@@ -9,7 +9,7 @@
 
 use std::path::PathBuf;
 
-use gpui::{App, Anchor, ExternalPaths, IntoElement, ParentElement, SharedString, Styled, Window};
+use gpui::{Anchor, App, ExternalPaths, IntoElement, ParentElement, SharedString, Styled, Window};
 use ui::{
     ButtonLike, ButtonStyle, ContextMenu, DynamicSpacing, Icon, IconName, IconSize, Label,
     LabelSize, ListItem, ListItemSpacing, PopoverMenu, prelude::*,

@@ -34,8 +34,8 @@ fn default_bus_root_matches_paths_data_dir() {
         std::env::set_var("HOME", paths::home_dir());
     }
 
-    let hand_rolled = postprod_events::bus::default_bus_root()
-        .expect("HOME must be set in the test environment");
+    let hand_rolled =
+        postprod_events::bus::default_bus_root().expect("HOME must be set in the test environment");
     let workspace_path = paths::data_dir().join("events");
 
     assert_eq!(

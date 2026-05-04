@@ -77,7 +77,10 @@ fn validate_rejects_empty_emit_kind() {
 fn validate_rejects_invalid_glob() {
     let mut cfg = sample_cfg("ok");
     cfg.trigger.glob = "[invalid".into();
-    assert!(matches!(validate(&cfg), Err(WatcherError::InvalidGlob { .. })));
+    assert!(matches!(
+        validate(&cfg),
+        Err(WatcherError::InvalidGlob { .. })
+    ));
 }
 
 // Test 32: hardcoded ignore rules — dotfiles + suffix matches.
@@ -148,7 +151,10 @@ fn matches_trigger_handles_kind_none_and_rescan() {
     assert!(matches_trigger(TriggerKind::FileDeleted, None));
 
     // Rescan never matches.
-    assert!(!matches_trigger(TriggerKind::Any, Some(PathEventKind::Rescan)));
+    assert!(!matches_trigger(
+        TriggerKind::Any,
+        Some(PathEventKind::Rescan)
+    ));
     assert!(!matches_trigger(
         TriggerKind::FileCreated,
         Some(PathEventKind::Rescan)
@@ -159,7 +165,10 @@ fn matches_trigger_handles_kind_none_and_rescan() {
         TriggerKind::FileCreated,
         Some(PathEventKind::Created)
     ));
-    assert!(matches_trigger(TriggerKind::Any, Some(PathEventKind::Created)));
+    assert!(matches_trigger(
+        TriggerKind::Any,
+        Some(PathEventKind::Created)
+    ));
     assert!(!matches_trigger(
         TriggerKind::FileCreated,
         Some(PathEventKind::Removed)

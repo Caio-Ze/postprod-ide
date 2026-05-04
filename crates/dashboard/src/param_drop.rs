@@ -23,8 +23,8 @@ use gpui::{App, Context};
 use postprod_dashboard_config::ParamType;
 use workspace::DraggedSelection;
 
-use crate::DashboardItem;
 use crate::AgentBackend;
+use crate::DashboardItem;
 use crate::persistence::write_param_values;
 
 /// Convert a dropped path to the value to persist into `param_values`,
@@ -72,11 +72,7 @@ impl DashboardItem {
     /// the toast emission stays at the call site (it needs the workspace
     /// handle and `Toast` machinery, neither of which belong on a dedup
     /// helper). Test 15 calls this directly.
-    pub(crate) fn mark_cwd_warning_seen(
-        &mut self,
-        entry_id: &str,
-        backend: AgentBackend,
-    ) -> bool {
+    pub(crate) fn mark_cwd_warning_seen(&mut self, entry_id: &str, backend: AgentBackend) -> bool {
         self.cwd_warning_seen
             .insert((entry_id.to_string(), backend))
     }
@@ -143,8 +139,7 @@ mod tests {
     /// otherwise just a HashMap insert + cx.notify; the I/O round-trip
     /// is the part that can break in production.
     #[test]
-    fn test_update_param_value_persistence_round_trip()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn test_update_param_value_persistence_round_trip() -> Result<(), Box<dyn std::error::Error>> {
         let tmp = tempfile::tempdir()?;
         let config_root = tmp.path().to_path_buf();
         std::fs::create_dir_all(dcfg::state_dir_for(&config_root))?;
@@ -165,9 +160,7 @@ mod tests {
         write_param_values(&config_root, &values);
 
         let round_trip = read_param_values(&config_root);
-        let inner = round_trip
-            .get("general-coder")
-            .expect("entry persisted");
+        let inner = round_trip.get("general-coder").expect("entry persisted");
         assert_eq!(
             inner.get("cwd").map(String::as_str),
             Some("/Users/example/Documents/Rust_projects/postprod-ide"),

@@ -352,13 +352,13 @@ pub fn expand_payload(value: &toml::Value, vars: &TemplateVars) -> toml::Value {
 /// (it's a worktree-rescan hint, not a file event).
 fn matches_trigger(configured: TriggerKind, observed: Option<PathEventKind>) -> bool {
     match observed {
-        None => configured == TriggerKind::Any
-            || matches!(
-                configured,
-                TriggerKind::FileCreated
-                    | TriggerKind::FileModified
-                    | TriggerKind::FileDeleted
-            ),
+        None => {
+            configured == TriggerKind::Any
+                || matches!(
+                    configured,
+                    TriggerKind::FileCreated | TriggerKind::FileModified | TriggerKind::FileDeleted
+                )
+        }
         Some(PathEventKind::Rescan) => false,
         Some(kind) => match configured {
             TriggerKind::Any => true,

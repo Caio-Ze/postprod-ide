@@ -305,7 +305,8 @@ impl EventInbox {
         if envelope.kind != self.kind {
             log::warn!(
                 "postprod_events: file {filename} declares kind {:?} but reader is {:?}; moving to rejected/",
-                envelope.kind, self.kind
+                envelope.kind,
+                self.kind
             );
             let _ = std::fs::rename(path, rejected_dir.join(&filename));
             return;
@@ -334,7 +335,9 @@ mod tests {
             .map(|it| {
                 it.filter_map(Result::ok)
                     .map(|e| e.path())
-                    .filter(|p| p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("json"))
+                    .filter(|p| {
+                        p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("json")
+                    })
                     .collect()
             })
             .unwrap_or_default();
@@ -344,21 +347,13 @@ mod tests {
 
     fn list_processed(dir: &Path, kind: &str) -> Vec<PathBuf> {
         fs::read_dir(dir.join(kind).join("processed"))
-            .map(|it| {
-                it.filter_map(Result::ok)
-                    .map(|e| e.path())
-                    .collect()
-            })
+            .map(|it| it.filter_map(Result::ok).map(|e| e.path()).collect())
             .unwrap_or_default()
     }
 
     fn list_rejected(dir: &Path, kind: &str) -> Vec<PathBuf> {
         fs::read_dir(dir.join(kind).join("rejected"))
-            .map(|it| {
-                it.filter_map(Result::ok)
-                    .map(|e| e.path())
-                    .collect()
-            })
+            .map(|it| it.filter_map(Result::ok).map(|e| e.path()).collect())
             .unwrap_or_default()
     }
 
@@ -366,10 +361,19 @@ mod tests {
     #[test]
     fn emit_writes_envelope_at_correct_path() {
         let dir = TempDir::new().expect("tempdir");
-        emit_to(dir.path(), "notification", serde_json::json!({"hi": 1}), Some("src"));
+        emit_to(
+            dir.path(),
+            "notification",
+            serde_json::json!({"hi": 1}),
+            Some("src"),
+        );
 
         let pending = list_pending(dir.path(), "notification");
-        assert_eq!(pending.len(), 1, "exactly one .json file at <root>/notification/");
+        assert_eq!(
+            pending.len(),
+            1,
+            "exactly one .json file at <root>/notification/"
+        );
         let body = fs::read_to_string(&pending[0]).unwrap();
         let env: EventEnvelope = serde_json::from_str(&body).unwrap();
         assert_eq!(env.schema, ENVELOPE_SCHEMA);
@@ -386,7 +390,10 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         emit_to(dir.path(), "notification", serde_json::json!({}), None);
         let kind_dir = dir.path().join("notification");
-        let entries: Vec<_> = fs::read_dir(&kind_dir).unwrap().filter_map(Result::ok).collect();
+        let entries: Vec<_> = fs::read_dir(&kind_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
         for entry in &entries {
             let name = entry.file_name();
             let s = name.to_string_lossy();
@@ -404,7 +411,12 @@ mod tests {
     fn filename_sort_is_chronological_within_process() {
         let dir = TempDir::new().expect("tempdir");
         for i in 0..1000 {
-            emit_to(dir.path(), "notification", serde_json::json!({"i": i}), None);
+            emit_to(
+                dir.path(),
+                "notification",
+                serde_json::json!({"i": i}),
+                None,
+            );
         }
         let pending = list_pending(dir.path(), "notification");
         assert_eq!(pending.len(), 1000);
@@ -447,7 +459,12 @@ mod tests {
     #[test]
     fn drain_consumes_valid_event() {
         let (dir, inbox) = fresh_inbox("notification");
-        emit_to(dir.path(), "notification", serde_json::json!({"a": 1}), None);
+        emit_to(
+            dir.path(),
+            "notification",
+            serde_json::json!({"a": 1}),
+            None,
+        );
 
         let mut got = Vec::new();
         inbox.drain(|env, id| got.push((env, id)));
@@ -465,8 +482,11 @@ mod tests {
         let (dir, inbox) = fresh_inbox("notification");
         let kind_dir = dir.path().join("notification");
         fs::create_dir_all(&kind_dir).unwrap();
-        fs::write(kind_dir.join("2026-04-18T00-00-00-000000-000001.json"), "not json")
-            .unwrap();
+        fs::write(
+            kind_dir.join("2026-04-18T00-00-00-000000-000001.json"),
+            "not json",
+        )
+        .unwrap();
 
         let mut called = false;
         inbox.drain(|_, _| called = true);
@@ -600,7 +620,10 @@ mod tests {
         let inbox = EventInbox::new("notification", dir.path().to_path_buf());
         let mut count = 0;
         inbox.drain(|_, _| count += 1);
-        assert_eq!(count, 0, "notification reader must not consume sibling-kind events");
+        assert_eq!(
+            count, 0,
+            "notification reader must not consume sibling-kind events"
+        );
 
         // The sibling-kind files are still pending in their own subdir.
         assert_eq!(list_pending(dir.path(), "bounce.completed").len(), 2);

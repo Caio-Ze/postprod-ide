@@ -49,11 +49,7 @@ impl DashboardNotificationInbox {
     /// Honors the [`INBOX_ENV_VAR`] override (so integration tests can point
     /// at a `tempfile::TempDir`); otherwise uses
     /// `paths::data_dir().join("events")`.
-    pub fn new(
-        fs: Arc<dyn Fs>,
-        workspace: WeakEntity<Workspace>,
-        cx: &mut App,
-    ) -> Self {
+    pub fn new(fs: Arc<dyn Fs>, workspace: WeakEntity<Workspace>, cx: &mut App) -> Self {
         let root = resolve_root();
         let inbox = EventInbox::new(NOTIFICATION_KIND, root);
         let kind_dir = inbox.kind_dir();

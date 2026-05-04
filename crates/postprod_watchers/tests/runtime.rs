@@ -124,7 +124,12 @@ async fn reconcile_starts_one_task_per_enabled_valid_watcher(cx: &mut TestAppCon
         },
     ];
     cx.update(|cx| {
-        runtime.reconcile(configs, fs.clone() as Arc<dyn Fs>, bus.path().to_path_buf(), cx);
+        runtime.reconcile(
+            configs,
+            fs.clone() as Arc<dyn Fs>,
+            bus.path().to_path_buf(),
+            cx,
+        );
     });
     cx.run_until_parked();
     assert_eq!(runtime.running_count(), 2, "two enabled valid watchers");
@@ -148,7 +153,12 @@ async fn reconcile_empty_stops_all(cx: &mut TestAppContext) {
     assert_eq!(runtime.running_count(), 1);
 
     cx.update(|cx| {
-        runtime.reconcile(vec![], fs.clone() as Arc<dyn Fs>, bus.path().to_path_buf(), cx);
+        runtime.reconcile(
+            vec![],
+            fs.clone() as Arc<dyn Fs>,
+            bus.path().to_path_buf(),
+            cx,
+        );
     });
     assert_eq!(runtime.running_count(), 0);
 }
@@ -156,7 +166,9 @@ async fn reconcile_empty_stops_all(cx: &mut TestAppContext) {
 // Helper: drain all pending status messages from the channel, return the
 // count of `Idle` messages (each fresh task spawn sends exactly one Idle
 // before subscribing to fs.watch).
-fn drain_idle_count(rx: &smol::channel::Receiver<(postprod_watchers::WatcherId, WatcherStatus)>) -> usize {
+fn drain_idle_count(
+    rx: &smol::channel::Receiver<(postprod_watchers::WatcherId, WatcherStatus)>,
+) -> usize {
     let mut count = 0;
     while let Ok((_, status)) = rx.try_recv() {
         if matches!(status, WatcherStatus::Idle) {
@@ -178,26 +190,53 @@ async fn reconcile_hash_short_circuits_on_identical_config(cx: &mut TestAppConte
     let configs = vec![cfg("a", TriggerKind::Any, "*")];
 
     cx.update(|cx| {
-        runtime.reconcile(configs.clone(), fs.clone() as Arc<dyn Fs>, bus.path().to_path_buf(), cx);
+        runtime.reconcile(
+            configs.clone(),
+            fs.clone() as Arc<dyn Fs>,
+            bus.path().to_path_buf(),
+            cx,
+        );
     });
     cx.run_until_parked();
-    assert_eq!(drain_idle_count(&rx), 1, "first reconcile spawns one task → one Idle");
+    assert_eq!(
+        drain_idle_count(&rx),
+        1,
+        "first reconcile spawns one task → one Idle"
+    );
 
     // Second reconcile with identical config — hash-equal short-circuit, NO restart.
     cx.update(|cx| {
-        runtime.reconcile(configs.clone(), fs.clone() as Arc<dyn Fs>, bus.path().to_path_buf(), cx);
+        runtime.reconcile(
+            configs.clone(),
+            fs.clone() as Arc<dyn Fs>,
+            bus.path().to_path_buf(),
+            cx,
+        );
     });
     cx.run_until_parked();
-    assert_eq!(drain_idle_count(&rx), 0, "hash-equal reconcile must NOT respawn → no new Idle");
+    assert_eq!(
+        drain_idle_count(&rx),
+        0,
+        "hash-equal reconcile must NOT respawn → no new Idle"
+    );
 
     // Third reconcile with a *different* config — full restart (per D5).
     let mut changed = configs;
     changed[0].label = "different".into();
     cx.update(|cx| {
-        runtime.reconcile(changed, fs.clone() as Arc<dyn Fs>, bus.path().to_path_buf(), cx);
+        runtime.reconcile(
+            changed,
+            fs.clone() as Arc<dyn Fs>,
+            bus.path().to_path_buf(),
+            cx,
+        );
     });
     cx.run_until_parked();
-    assert_eq!(drain_idle_count(&rx), 1, "config-change reconcile spawns fresh → one new Idle");
+    assert_eq!(
+        drain_idle_count(&rx),
+        1,
+        "config-change reconcile spawns fresh → one new Idle"
+    );
 }
 
 // Test 28: reconcile-on-change blanket restart (D5). With ONE config
@@ -213,7 +252,12 @@ async fn reconcile_on_change_restarts_all_tasks(cx: &mut TestAppContext) {
         cfg("b", TriggerKind::Any, "*"),
     ];
     cx.update(|cx| {
-        runtime.reconcile(initial.clone(), fs.clone() as Arc<dyn Fs>, bus.path().to_path_buf(), cx);
+        runtime.reconcile(
+            initial.clone(),
+            fs.clone() as Arc<dyn Fs>,
+            bus.path().to_path_buf(),
+            cx,
+        );
     });
     cx.run_until_parked();
     assert_eq!(drain_idle_count(&rx), 2, "two initial spawns → two Idle");
@@ -222,7 +266,12 @@ async fn reconcile_on_change_restarts_all_tasks(cx: &mut TestAppContext) {
     let mut changed = initial;
     changed[1].label = "changed".into();
     cx.update(|cx| {
-        runtime.reconcile(changed, fs.clone() as Arc<dyn Fs>, bus.path().to_path_buf(), cx);
+        runtime.reconcile(
+            changed,
+            fs.clone() as Arc<dyn Fs>,
+            bus.path().to_path_buf(),
+            cx,
+        );
     });
     cx.run_until_parked();
     assert_eq!(
@@ -249,7 +298,12 @@ async fn file_create_matching_trigger_emits_once(cx: &mut TestAppContext) {
     let mut runtime = WatcherRuntime::new();
     let configs = vec![cfg("a", TriggerKind::FileCreated, "*.wav")];
     cx.update(|cx| {
-        runtime.reconcile(configs, fs.clone() as Arc<dyn Fs>, bus.path().to_path_buf(), cx);
+        runtime.reconcile(
+            configs,
+            fs.clone() as Arc<dyn Fs>,
+            bus.path().to_path_buf(),
+            cx,
+        );
     });
     cx.run_until_parked();
 
@@ -448,7 +502,9 @@ async fn atomic_write_sequence_emits_once_for_final(cx: &mut TestAppContext) {
     let final_path = Path::new("/watched/foo.wav");
     fs.write(tmp, b"data").await.unwrap();
     cx.run_until_parked();
-    fs.rename(tmp, final_path, Default::default()).await.unwrap();
+    fs.rename(tmp, final_path, Default::default())
+        .await
+        .unwrap();
     cx.run_until_parked();
     drain_debounce(cx);
 
@@ -495,7 +551,10 @@ async fn debounce_trailing_edge_collapses_to_latest(cx: &mut TestAppContext) {
     // Trailing-edge: nothing has fired yet — both deferred timers are
     // still waiting for the debounce window to close.
     let initial = count_pending(bus.path(), "notification");
-    assert_eq!(initial, 0, "trailing-edge: nothing fires until window closes");
+    assert_eq!(
+        initial, 0,
+        "trailing-edge: nothing fires until window closes"
+    );
 
     // Advance the clock past the debounce window. Both deferred tasks
     // wake up; the first sees its seq superseded and exits; the second
@@ -504,7 +563,11 @@ async fn debounce_trailing_edge_collapses_to_latest(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     let after_window = read_pending(bus.path(), "notification");
-    assert_eq!(after_window.len(), 1, "exactly one emit per debounce window");
+    assert_eq!(
+        after_window.len(),
+        1,
+        "exactly one emit per debounce window"
+    );
     let body = after_window[0]["payload"]["body"].as_str().unwrap();
     assert!(
         body.contains("size 4"),
@@ -519,9 +582,16 @@ async fn debounce_trailing_edge_collapses_to_latest(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     let final_pending = read_pending(bus.path(), "notification");
-    assert_eq!(final_pending.len(), 2, "third write fires its own debounce cycle");
+    assert_eq!(
+        final_pending.len(),
+        2,
+        "third write fires its own debounce cycle"
+    );
     let last_body = final_pending[1]["payload"]["body"].as_str().unwrap();
-    assert!(last_body.contains("size 8"), "second emit reports latest size — got {last_body:?}");
+    assert!(
+        last_body.contains("size 8"),
+        "second emit reports latest size — got {last_body:?}"
+    );
 }
 
 // Test 34: file_deleted trigger fires on removal; min_size_mb does NOT
@@ -558,12 +628,17 @@ async fn file_deleted_trigger_fires_with_zero_size(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
 
-    fs.remove_file(target, RemoveOptions::default()).await.unwrap();
+    fs.remove_file(target, RemoveOptions::default())
+        .await
+        .unwrap();
     cx.run_until_parked();
     drain_debounce(cx);
 
     let pending = read_pending(bus.path(), "notification");
     assert_eq!(pending.len(), 1);
     let body = pending[0]["payload"]["body"].as_str().unwrap();
-    assert!(body.contains("0.0"), "body should report size_mb=0.0, got {body}");
+    assert!(
+        body.contains("0.0"),
+        "body should report size_mb=0.0, got {body}"
+    );
 }

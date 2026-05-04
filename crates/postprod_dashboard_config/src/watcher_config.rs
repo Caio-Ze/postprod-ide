@@ -169,10 +169,8 @@ pub fn load_watchers(config_root: &Path) -> Vec<Result<WatcherConfig, LoadError>
 }
 
 fn load_single_watcher(path: &Path) -> Result<WatcherConfig, String> {
-    let content =
-        std::fs::read_to_string(path).map_err(|e| format!("read failed: {e}"))?;
-    let cfg: WatcherConfig =
-        toml::from_str(&content).map_err(|e| format!("parse failed: {e}"))?;
+    let content = std::fs::read_to_string(path).map_err(|e| format!("read failed: {e}"))?;
+    let cfg: WatcherConfig = toml::from_str(&content).map_err(|e| format!("parse failed: {e}"))?;
     validate(&cfg)?;
     Ok(cfg)
 }
@@ -272,8 +270,11 @@ mod tests {
         let results = load_watchers(dir.path());
         assert_eq!(results.len(), 1);
         let err = results[0].as_ref().unwrap_err();
-        assert!(err.detail.contains("parse") || err.detail.contains("path"),
-            "error should mention parse or path, got {}", err.detail);
+        assert!(
+            err.detail.contains("parse") || err.detail.contains("path"),
+            "error should mention parse or path, got {}",
+            err.detail
+        );
     }
 
     // Test 25 cont.: empty emits → validation error.
@@ -294,7 +295,11 @@ mod tests {
         );
         let results = load_watchers(dir.path());
         let err = results[0].as_ref().unwrap_err();
-        assert!(err.detail.contains("emit"), "error should mention emit, got {}", err.detail);
+        assert!(
+            err.detail.contains("emit"),
+            "error should mention emit, got {}",
+            err.detail
+        );
     }
 
     // Test 25 cont.: invalid trigger.on → parse error.
@@ -316,8 +321,11 @@ mod tests {
         );
         let results = load_watchers(dir.path());
         let err = results[0].as_ref().unwrap_err();
-        assert!(err.detail.contains("parse") || err.detail.contains("bogus"),
-            "error should mention parse failure, got {}", err.detail);
+        assert!(
+            err.detail.contains("parse") || err.detail.contains("bogus"),
+            "error should mention parse failure, got {}",
+            err.detail
+        );
     }
 
     // Hash stability: same config hashes identically (D19 short-circuit
@@ -338,9 +346,12 @@ mod tests {
             },
             emits: vec![WatcherEmit {
                 kind: "notification".into(),
-                payload: toml::from_str(r#"title = "t"
+                payload: toml::from_str(
+                    r#"title = "t"
 body = "b"
-severity = "info""#).unwrap(),
+severity = "info""#,
+                )
+                .unwrap(),
             }],
         };
         assert_eq!(hash_one(&cfg), hash_one(&cfg.clone()));

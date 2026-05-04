@@ -5,20 +5,20 @@ pub(crate) mod card;
 mod config;
 mod context_editor;
 mod dashboard_panel;
+mod dashboard_paths;
 mod event_inbox;
 mod folder_bar;
 mod hotkeys;
-mod popup_inbox;
-mod dashboard_paths;
 mod param_drop;
 pub(crate) mod persistence;
 mod pipeline_card;
+mod popup_inbox;
 mod rules_integration;
-mod watcher_card;
 mod runtime;
 mod scheduler_ui;
 mod section;
 mod tool_card;
+mod watcher_card;
 
 #[cfg(test)]
 mod dashboard_as_tab_tests;
@@ -28,17 +28,17 @@ use dashboard_paths::{
     DeliveryStatus, ensure_config_extracted, ensure_workspace_dirs, folder_has_dashboard_config,
     local_tools_dir_for, resolve_agent_tools_path, resolve_runtime_path, scan_delivery_folder,
 };
-use postprod_dashboard_config as dcfg;
-use postprod_dashboard_config::{
-    AgentEntry, AutomationEntry, BackendEntry, ParamEntry, ParamType, PipelineStep, ScheduleConfig,
-    ToolEntry, ToolSource, ToolTier, automations_dir_for, load_agents_config,
-    load_automations_registry, load_tools_registry, state_dir_for, tools_config_dir_for,
-};
 use persistence::{
     group_by_section, read_active_folder, read_background_tools, read_collapsed_sections,
     read_destination_folder, read_param_values, read_recent_destinations, read_recent_folders,
     read_section_order, write_active_folder, write_background_tools, write_collapsed_sections,
     write_destination_folder, write_param_values,
+};
+use postprod_dashboard_config as dcfg;
+use postprod_dashboard_config::{
+    AgentEntry, AutomationEntry, BackendEntry, ParamEntry, ParamType, PipelineStep, ScheduleConfig,
+    ToolEntry, ToolSource, ToolTier, automations_dir_for, load_agents_config,
+    load_automations_registry, load_tools_registry, state_dir_for, tools_config_dir_for,
 };
 
 use card::CardRenderContext;
@@ -1306,7 +1306,6 @@ impl DashboardItem {
     // build_temp_file_terminal_command) live in
     // `crates/dashboard/src/runtime.rs`.
 
-
     fn resolve_variables(&self, prompt: &str, entry_id: &str) -> String {
         let mut resolved = if let Some(session) = &self.session_path {
             prompt.replace("{session_path}", session)
@@ -1511,16 +1510,19 @@ impl DashboardItem {
 
         let entry_id_for_sub = entry_id.to_string();
         let param_key_for_sub = param.key.clone();
-        let subscription = cx.subscribe(&editor, move |this: &mut DashboardItem, editor, event, cx| {
-            if let EditorEvent::BufferEdited = event {
-                let text = editor.read(cx).text(cx);
-                this.param_values
-                    .entry(entry_id_for_sub.clone())
-                    .or_default()
-                    .insert(param_key_for_sub.clone(), text);
-                this.schedule_param_write(cx);
-            }
-        });
+        let subscription = cx.subscribe(
+            &editor,
+            move |this: &mut DashboardItem, editor, event, cx| {
+                if let EditorEvent::BufferEdited = event {
+                    let text = editor.read(cx).text(cx);
+                    this.param_values
+                        .entry(entry_id_for_sub.clone())
+                        .or_default()
+                        .insert(param_key_for_sub.clone(), text);
+                    this.schedule_param_write(cx);
+                }
+            },
+        );
 
         self._param_editor_subscriptions.push(subscription);
         self.param_editors.insert(key, editor.clone());
@@ -1925,7 +1927,10 @@ Rules for the completion report:
         // and now. Cheap and we'd rather fail loudly than silently overwrite.
         if target.exists() {
             self.show_add_to_default_context_toast(
-                format!("{} already exists in default-context/. Move aborted.", basename),
+                format!(
+                    "{} already exists in default-context/. Move aborted.",
+                    basename
+                ),
                 cx,
             );
             return;
@@ -1934,10 +1939,8 @@ Rules for the completion report:
         // Step 4: move with EXDEV fallback.
         let move_result = match std::fs::rename(&source_path, &target) {
             Ok(()) => Ok(()),
-            Err(e) if e.raw_os_error() == Some(libc::EXDEV) => {
-                std::fs::copy(&source_path, &target)
-                    .and_then(|_| std::fs::remove_file(&source_path))
-            }
+            Err(e) if e.raw_os_error() == Some(libc::EXDEV) => std::fs::copy(&source_path, &target)
+                .and_then(|_| std::fs::remove_file(&source_path)),
             Err(e) => Err(e),
         };
         if let Err(err) = move_result {
@@ -2883,10 +2886,8 @@ Rules for the completion report:
                         let drop_entry_id_ds = entry_id.to_string();
                         let drop_param_key_ds = param.key.clone();
                         let drop_param_type_ds = param.param_type.clone();
-                        let row_id = SharedString::from(format!(
-                            "param-row-{}-{}",
-                            entry_id, param.key
-                        ));
+                        let row_id =
+                            SharedString::from(format!("param-row-{}-{}", entry_id, param.key));
 
                         let row = h_flex()
                             .gap_1()
@@ -2934,10 +2935,8 @@ Rules for the completion report:
                                                                 cx,
                                                                 |this: &mut DashboardItem, cx| {
                                                                     this.update_param_value(
-                                                                        &entry_id,
-                                                                        &param_key,
-                                                                        value,
-                                                                        cx,
+                                                                        &entry_id, &param_key,
+                                                                        value, cx,
                                                                     );
                                                                 },
                                                             )
@@ -2970,25 +2969,23 @@ Rules for the completion report:
                                     let Some(first) = paths.0.first() else {
                                         return;
                                     };
-                                    let value =
-                                        normalize_for_param_type(first, &drop_param_type);
+                                    let value = normalize_for_param_type(first, &drop_param_type);
                                     let entity = drop_entity.clone();
                                     let entry_id = drop_entry_id.clone();
                                     let param_key = drop_param_key.clone();
                                     entity
                                         .update(cx, |this: &mut DashboardItem, cx| {
                                             this.update_param_value(
-                                                &entry_id,
-                                                &param_key,
-                                                value,
-                                                cx,
+                                                &entry_id, &param_key, value, cx,
                                             );
                                         })
                                         .log_err();
                                 },
                             )
                             .on_drop(
-                                move |sel: &DraggedSelection, _window: &mut Window, cx: &mut App| {
+                                move |sel: &DraggedSelection,
+                                      _window: &mut Window,
+                                      cx: &mut App| {
                                     let entity = drop_entity_ds.clone();
                                     let entry_id = drop_entry_id_ds.clone();
                                     let param_key = drop_param_key_ds.clone();
@@ -3000,13 +2997,9 @@ Rules for the completion report:
                                             else {
                                                 return;
                                             };
-                                            let value =
-                                                normalize_for_param_type(&abs, &param_type);
+                                            let value = normalize_for_param_type(&abs, &param_type);
                                             this.update_param_value(
-                                                &entry_id,
-                                                &param_key,
-                                                value,
-                                                cx,
+                                                &entry_id, &param_key, value, cx,
                                             );
                                         })
                                         .log_err();
@@ -4183,10 +4176,7 @@ automation = "review"
         let id_a = WorktreeId::from_usize(1);
         let id_b = WorktreeId::from_usize(2);
 
-        let result = effective_active_worktree_id(
-            Some(repo),
-            [(id_a, a), (id_b, b)],
-        );
+        let result = effective_active_worktree_id(Some(repo), [(id_a, a), (id_b, b)]);
         assert_eq!(result, Some(id_a));
     }
 
@@ -4197,10 +4187,7 @@ automation = "review"
         let id_a = WorktreeId::from_usize(1);
         let id_b = WorktreeId::from_usize(2);
 
-        let result = effective_active_worktree_id(
-            Some(b),
-            [(id_a, a), (id_b, b)],
-        );
+        let result = effective_active_worktree_id(Some(b), [(id_a, a), (id_b, b)]);
         assert_eq!(result, Some(id_b));
     }
 
@@ -4212,10 +4199,7 @@ automation = "review"
         let id_a = WorktreeId::from_usize(1);
         let id_b = WorktreeId::from_usize(2);
 
-        let result = effective_active_worktree_id(
-            Some(unrelated),
-            [(id_a, a), (id_b, b)],
-        );
+        let result = effective_active_worktree_id(Some(unrelated), [(id_a, a), (id_b, b)]);
         assert_eq!(result, Some(id_a));
     }
 
@@ -4226,10 +4210,7 @@ automation = "review"
         let id_a = WorktreeId::from_usize(1);
         let id_b = WorktreeId::from_usize(2);
 
-        let result = effective_active_worktree_id(
-            None,
-            [(id_a, a), (id_b, b)],
-        );
+        let result = effective_active_worktree_id(None, [(id_a, a), (id_b, b)]);
         assert_eq!(result, Some(id_a));
     }
 
@@ -4292,12 +4273,8 @@ automation = "review"
     fn test_resolve_automation_cwd_no_cwd_param_returns_fallback() {
         let entry = make_entry("x", vec![]);
         let fallback = PathBuf::from("/fallback");
-        let cwd = resolve_automation_cwd(
-            &entry,
-            fallback.clone(),
-            Path::new("/cfg"),
-            &HashMap::new(),
-        );
+        let cwd =
+            resolve_automation_cwd(&entry, fallback.clone(), Path::new("/cfg"), &HashMap::new());
         assert_eq!(cwd, fallback);
     }
 
@@ -4404,7 +4381,6 @@ automation = "review"
         );
         assert_eq!(cwd, PathBuf::from("/abs/first"));
     }
-
 }
 
 // ---------------------------------------------------------------------------

@@ -1231,13 +1231,15 @@ impl PickerDelegate for PostProdPickerDelegate {
                                         cx,
                                     )
                                 })
-                                .on_click(cx.listener(move |_, _, _, cx| {
-                                    cx.emit(PostProdPickerEvent::AddToDefaultContext {
-                                        source_path: source_path.clone(),
-                                        automation_id: automation_id.clone(),
-                                        toml_index_to_strip: None,
-                                    });
-                                })),
+                                .on_click(cx.listener(
+                                    move |_, _, _, cx| {
+                                        cx.emit(PostProdPickerEvent::AddToDefaultContext {
+                                            source_path: source_path.clone(),
+                                            automation_id: automation_id.clone(),
+                                            toml_index_to_strip: None,
+                                        });
+                                    },
+                                )),
                             ),
                         )
                         // 10.3: no-op click registers the row as interactive so hover fires.
@@ -1335,8 +1337,7 @@ impl PostProdRules {
         cx: &mut Context<Self>,
     ) -> Self {
         let prompt_files = scan_md_files(&config_root.join("config/prompts"));
-        let default_context_files =
-            scan_md_files(&config_root.join("config/default-context"));
+        let default_context_files = scan_md_files(&config_root.join("config/default-context"));
 
         let scoped_automation = match &mode {
             WindowMode::Scoped(info) => Some(info.clone()),
@@ -1798,10 +1799,7 @@ impl PostProdRules {
     ///   3. Robust when a context entry happens to point at a file under
     ///      `config/prompts/` or `config/default-context/` (where
     ///      `classify_file_role`'s prefix check returns `Prompt`/`DefaultContext`).
-    fn selected_context_source(
-        &self,
-        cx: &App,
-    ) -> Option<(PathBuf, String, Option<usize>)> {
+    fn selected_context_source(&self, cx: &App) -> Option<(PathBuf, String, Option<usize>)> {
         let picker = self.picker.read(cx);
         let entry = picker
             .delegate
@@ -1813,11 +1811,9 @@ impl PostProdRules {
                 c.automation_id.clone(),
                 Some(c.toml_index),
             )),
-            PostProdPickerEntry::FolderChild(c) => Some((
-                c.resolved_path.clone(),
-                c.automation_id.clone(),
-                None,
-            )),
+            PostProdPickerEntry::FolderChild(c) => {
+                Some((c.resolved_path.clone(), c.automation_id.clone(), None))
+            }
             _ => None,
         }
     }
@@ -1833,9 +1829,7 @@ impl PostProdRules {
         let Some((source_path, automation_id, toml_index_to_strip)) =
             self.selected_context_source(cx)
         else {
-            log::warn!(
-                "AddFileToDefaultContext: picker has no ContextSource/FolderChild selected"
-            );
+            log::warn!("AddFileToDefaultContext: picker has no ContextSource/FolderChild selected");
             return;
         };
         self.add_active_file_to_default_context(
@@ -1855,8 +1849,7 @@ impl PostProdRules {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some((source_path, automation_id, Some(toml_index))) =
-            self.selected_context_source(cx)
+        let Some((source_path, automation_id, Some(toml_index))) = self.selected_context_source(cx)
         else {
             log::warn!(
                 "RemoveFileFromAutomationContext: picker has no top-level ContextSource selected"
@@ -3006,10 +2999,8 @@ impl PostProdRules {
                                 )
                             })
                             .on_click(|_, window, cx| {
-                                window.dispatch_action(
-                                    Box::new(RemoveFileFromAutomationContext),
-                                    cx,
-                                );
+                                window
+                                    .dispatch_action(Box::new(RemoveFileFromAutomationContext), cx);
                             }),
                     )
                     .into_any_element(),
@@ -3505,16 +3496,14 @@ impl Render for PostProdRules {
                 .on_action(cx.listener(|this, &ToggleDefaultNote, window, cx| {
                     this.toggle_default_for_active_note(window, cx)
                 }))
-                .on_action(cx.listener(
-                    |this, &AddFileToDefaultContext, window, cx| {
-                        this.add_active_file_to_default_context_action(window, cx)
-                    },
-                ))
-                .on_action(cx.listener(
-                    |this, &RemoveFileFromAutomationContext, window, cx| {
+                .on_action(cx.listener(|this, &AddFileToDefaultContext, window, cx| {
+                    this.add_active_file_to_default_context_action(window, cx)
+                }))
+                .on_action(
+                    cx.listener(|this, &RemoveFileFromAutomationContext, window, cx| {
                         this.remove_active_file_from_automation_context_action(window, cx)
-                    },
-                ))
+                    }),
+                )
                 .size_full()
                 .overflow_hidden()
                 .font(ui_font)

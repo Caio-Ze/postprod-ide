@@ -374,10 +374,7 @@ pub fn render_pipeline_card(
         .size(LabelSize::XSmall);
     let status_element: AnyElement = match failed_reason {
         Some(reason) => h_flex()
-            .id(SharedString::from(format!(
-                "pipeline-failed-{}",
-                entry_id
-            )))
+            .id(SharedString::from(format!("pipeline-failed-{}", entry_id)))
             .items_center()
             .child(status_label)
             .tooltip(Tooltip::text(reason))
@@ -385,155 +382,151 @@ pub fn render_pipeline_card(
         None => status_label.into_any_element(),
     };
 
-    let action_buttons = h_flex()
-        .gap_2()
-        .items_center()
-        .child(status_element)
-        .child(
-            h_flex()
-                .gap_1()
-                .on_mouse_down(MouseButton::Left, |_, window, cx| {
-                    window.prevent_default();
-                    cx.stop_propagation();
-                })
-                .child(
-                    Disclosure::new(
-                        SharedString::from(format!("disc-pipeline-{}", disc_id)),
-                        is_expanded,
-                    )
+    let action_buttons = h_flex().gap_2().items_center().child(status_element).child(
+        h_flex()
+            .gap_1()
+            .on_mouse_down(MouseButton::Left, |_, window, cx| {
+                window.prevent_default();
+                cx.stop_propagation();
+            })
+            .child(
+                Disclosure::new(
+                    SharedString::from(format!("disc-pipeline-{}", disc_id)),
+                    is_expanded,
+                )
+                .on_click(move |_, _, cx| {
+                    disc_entity
+                        .update(cx, |this, cx| {
+                            if this.expanded_automations.contains(&disc_id) {
+                                this.expanded_automations.remove(&disc_id);
+                            } else {
+                                this.expanded_automations.insert(disc_id.clone());
+                            }
+                            cx.notify();
+                        })
+                        .log_err();
+                }),
+            )
+            .child(if is_running {
+                IconButton::new(format!("stop-pipeline-{}", stop_id), IconName::Stop)
+                    .tooltip(Tooltip::text("Stop pipeline"))
                     .on_click(move |_, _, cx| {
-                        disc_entity
+                        stop_entity
                             .update(cx, |this, cx| {
-                                if this.expanded_automations.contains(&disc_id) {
-                                    this.expanded_automations.remove(&disc_id);
-                                } else {
-                                    this.expanded_automations.insert(disc_id.clone());
+                                if let Some(flag) = this.pipeline_cancel_flags.get(&stop_id) {
+                                    flag.store(true, Ordering::Relaxed);
                                 }
                                 cx.notify();
                             })
                             .log_err();
-                    }),
+                    })
+            } else {
+                IconButton::new(format!("run-pipeline-{}", run_id), IconName::PlayFilled)
+                    .disabled(!has_steps)
+                    .tooltip(Tooltip::text(if !has_steps {
+                        "No steps to run"
+                    } else {
+                        "Run pipeline"
+                    }))
+                    .on_click(move |_, _, cx| {
+                        run_entity
+                            .update(cx, |this, cx| {
+                                this.run_pipeline(
+                                    &run_entry,
+                                    &active_folder,
+                                    0,
+                                    task::RevealStrategy::Always,
+                                    cx,
+                                );
+                            })
+                            .log_err();
+                    })
+            })
+            .child(
+                IconButton::new(
+                    format!("sched-toggle-pipeline-{}", sched_id),
+                    IconName::CountdownTimer,
                 )
-                .child(if is_running {
-                    IconButton::new(format!("stop-pipeline-{}", stop_id), IconName::Stop)
-                        .tooltip(Tooltip::text("Stop pipeline"))
-                        .on_click(move |_, _, cx| {
-                            stop_entity
-                                .update(cx, |this, cx| {
-                                    if let Some(flag) = this.pipeline_cancel_flags.get(&stop_id) {
-                                        flag.store(true, Ordering::Relaxed);
-                                    }
-                                    cx.notify();
-                                })
-                                .log_err();
-                        })
+                .icon_size(IconSize::Small)
+                .icon_color(if is_scheduled {
+                    Color::Accent
                 } else {
-                    IconButton::new(format!("run-pipeline-{}", run_id), IconName::PlayFilled)
-                        .disabled(!has_steps)
-                        .tooltip(Tooltip::text(if !has_steps {
-                            "No steps to run"
+                    Color::Muted
+                })
+                .tooltip(Tooltip::text(if is_scheduled {
+                    "Disable schedule"
+                } else {
+                    "Enable schedule"
+                }))
+                .on_click(move |_, _window, cx| {
+                    sched_entity
+                        .update(cx, |this, cx| {
+                            this.toggle_schedule(&sched_id, cx);
+                        })
+                        .log_err();
+                }),
+            )
+            .child(
+                IconButton::new(
+                    format!("edit-pipeline-{}", edit_id),
+                    if is_editing {
+                        IconName::Check
+                    } else {
+                        IconName::Settings
+                    },
+                )
+                .disabled(is_running)
+                .tooltip(Tooltip::text(if is_running {
+                    "Cannot edit while running"
+                } else if is_editing {
+                    "Done editing"
+                } else {
+                    "Edit pipeline"
+                }))
+                .on_click(move |_, _, cx| {
+                    edit_entity
+                        .update(cx, |this, cx| {
+                            if this.pipelines_in_edit_mode.contains(&edit_id) {
+                                this.pipelines_in_edit_mode.remove(&edit_id);
+                                this.pipelines_pending_delete.remove(&edit_id);
+                            } else {
+                                this.pipelines_in_edit_mode.insert(edit_id.clone());
+                                this.expanded_automations.insert(edit_id.clone());
+                            }
+                            cx.notify();
+                        })
+                        .log_err();
+                }),
+            )
+            .when(is_editing, |el| {
+                el.child(
+                    IconButton::new(format!("delete-pipeline-{}", delete_id), IconName::Trash)
+                        .icon_color(if is_pending_delete {
+                            Color::Error
                         } else {
-                            "Run pipeline"
+                            Color::Default
+                        })
+                        .tooltip(Tooltip::text(if is_pending_delete {
+                            "Click again to confirm delete"
+                        } else {
+                            "Delete pipeline"
                         }))
                         .on_click(move |_, _, cx| {
-                            run_entity
+                            delete_entity
                                 .update(cx, |this, cx| {
-                                    this.run_pipeline(
-                                        &run_entry,
-                                        &active_folder,
-                                        0,
-                                        task::RevealStrategy::Always,
-                                        cx,
-                                    );
+                                    if this.pipelines_pending_delete.contains(&delete_id) {
+                                        this.pipelines_pending_delete.remove(&delete_id);
+                                        this.delete_pipeline_toml(&delete_id, cx);
+                                    } else {
+                                        this.pipelines_pending_delete.insert(delete_id.clone());
+                                        cx.notify();
+                                    }
                                 })
                                 .log_err();
-                        })
-                })
-                .child(
-                    IconButton::new(
-                        format!("sched-toggle-pipeline-{}", sched_id),
-                        IconName::CountdownTimer,
-                    )
-                    .icon_size(IconSize::Small)
-                    .icon_color(if is_scheduled {
-                        Color::Accent
-                    } else {
-                        Color::Muted
-                    })
-                    .tooltip(Tooltip::text(if is_scheduled {
-                        "Disable schedule"
-                    } else {
-                        "Enable schedule"
-                    }))
-                    .on_click(move |_, _window, cx| {
-                        sched_entity
-                            .update(cx, |this, cx| {
-                                this.toggle_schedule(&sched_id, cx);
-                            })
-                            .log_err();
-                    }),
+                        }),
                 )
-                .child(
-                    IconButton::new(
-                        format!("edit-pipeline-{}", edit_id),
-                        if is_editing {
-                            IconName::Check
-                        } else {
-                            IconName::Settings
-                        },
-                    )
-                    .disabled(is_running)
-                    .tooltip(Tooltip::text(if is_running {
-                        "Cannot edit while running"
-                    } else if is_editing {
-                        "Done editing"
-                    } else {
-                        "Edit pipeline"
-                    }))
-                    .on_click(move |_, _, cx| {
-                        edit_entity
-                            .update(cx, |this, cx| {
-                                if this.pipelines_in_edit_mode.contains(&edit_id) {
-                                    this.pipelines_in_edit_mode.remove(&edit_id);
-                                    this.pipelines_pending_delete.remove(&edit_id);
-                                } else {
-                                    this.pipelines_in_edit_mode.insert(edit_id.clone());
-                                    this.expanded_automations.insert(edit_id.clone());
-                                }
-                                cx.notify();
-                            })
-                            .log_err();
-                    }),
-                )
-                .when(is_editing, |el| {
-                    el.child(
-                        IconButton::new(format!("delete-pipeline-{}", delete_id), IconName::Trash)
-                            .icon_color(if is_pending_delete {
-                                Color::Error
-                            } else {
-                                Color::Default
-                            })
-                            .tooltip(Tooltip::text(if is_pending_delete {
-                                "Click again to confirm delete"
-                            } else {
-                                "Delete pipeline"
-                            }))
-                            .on_click(move |_, _, cx| {
-                                delete_entity
-                                    .update(cx, |this, cx| {
-                                        if this.pipelines_pending_delete.contains(&delete_id) {
-                                            this.pipelines_pending_delete.remove(&delete_id);
-                                            this.delete_pipeline_toml(&delete_id, cx);
-                                        } else {
-                                            this.pipelines_pending_delete.insert(delete_id.clone());
-                                            cx.notify();
-                                        }
-                                    })
-                                    .log_err();
-                            }),
-                    )
-                }),
-        );
+            }),
+    );
 
     // --- Expanded content (below header) -------------------------------------
 

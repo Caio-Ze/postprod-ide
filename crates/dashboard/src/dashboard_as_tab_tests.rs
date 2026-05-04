@@ -219,8 +219,7 @@ async fn test_state_shared_between_panel_and_tab(cx: &mut TestAppContext) {
 
     dispatch_open_as_tab(&workspace, cx);
 
-    let tab_item =
-        dashboard_item_in_active_pane(&workspace, cx).expect("tab should be present");
+    let tab_item = dashboard_item_in_active_pane(&workspace, cx).expect("tab should be present");
     let value = tab_item.read_with(cx, |item, _| {
         item.param_values
             .get("auto-1")
@@ -289,8 +288,7 @@ async fn test_inner_item_mutation_visible_from_both_surfaces(cx: &mut TestAppCon
     let (workspace, panel, _config_dir, cx) = setup_workspace_with_panel(cx).await;
 
     dispatch_open_as_tab(&workspace, cx);
-    let tab_item =
-        dashboard_item_in_active_pane(&workspace, cx).expect("tab should be present");
+    let tab_item = dashboard_item_in_active_pane(&workspace, cx).expect("tab should be present");
 
     let panel_item_id: EntityId = panel.read_with(cx, |panel, _| panel.item.entity_id());
     assert_eq!(

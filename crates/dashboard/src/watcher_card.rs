@@ -44,13 +44,12 @@ pub fn render_watchers_section(
 
     let is_open = !collapsed_sections.contains(SECTION_KEY);
     let toggle_id = SECTION_KEY.to_string();
-    let disclosure = Disclosure::new(SharedString::from("disc-watchers"), is_open).on_click(
-        move |_, _, cx| {
+    let disclosure =
+        Disclosure::new(SharedString::from("disc-watchers"), is_open).on_click(move |_, _, cx| {
             entity
                 .update(cx, |this, cx| this.toggle_section(&toggle_id, cx))
                 .log_err();
-        },
-    );
+        });
 
     let edit_toml_chip = render_edit_toml_chip(watchers_dir, workspace.clone(), cx);
 
@@ -84,7 +83,11 @@ pub fn render_watchers_section(
         ));
     }
 
-    body = body.child(render_add_tile(config_root.to_path_buf(), workspace.clone(), cx));
+    body = body.child(render_add_tile(
+        config_root.to_path_buf(),
+        workspace.clone(),
+        cx,
+    ));
     body
 }
 
@@ -98,7 +101,11 @@ fn render_edit_toml_chip(
         .child(
             h_flex()
                 .gap_1()
-                .child(Icon::new(IconName::FileToml).color(Color::Muted).size(IconSize::XSmall))
+                .child(
+                    Icon::new(IconName::FileToml)
+                        .color(Color::Muted)
+                        .size(IconSize::XSmall),
+                )
                 .child(
                     Label::new("Edit TOML")
                         .color(Color::Muted)
@@ -148,10 +155,7 @@ fn render_ok_card(
     let status = statuses.get(&id);
     let (status_text, status_color) = match status {
         Some(WatcherStatus::Idle) => ("idle".to_string(), Color::Muted),
-        Some(WatcherStatus::LastEmit(ts)) => (
-            format!("✓ {}", relative_time(*ts)),
-            Color::Success,
-        ),
+        Some(WatcherStatus::LastEmit(ts)) => (format!("✓ {}", relative_time(*ts)), Color::Success),
         Some(WatcherStatus::Error(reason)) => (format!("✗ {reason}"), Color::Error),
         None => {
             if !cfg.enabled {
@@ -172,7 +176,11 @@ fn render_ok_card(
         .py_1()
         .gap_2()
         .items_center()
-        .child(Icon::new(IconName::Folder).color(Color::Muted).size(IconSize::Small))
+        .child(
+            Icon::new(IconName::Folder)
+                .color(Color::Muted)
+                .size(IconSize::Small),
+        )
         .child(
             v_flex()
                 .gap_0p5()
@@ -215,7 +223,11 @@ fn render_err_card(
         .py_1()
         .gap_2()
         .items_center()
-        .child(Icon::new(IconName::FileToml).color(Color::Error).size(IconSize::Small))
+        .child(
+            Icon::new(IconName::FileToml)
+                .color(Color::Error)
+                .size(IconSize::Small),
+        )
         .child(
             v_flex()
                 .gap_0p5()
@@ -266,8 +278,16 @@ fn render_add_tile(
             h_flex()
                 .gap_2()
                 .items_center()
-                .child(Icon::new(IconName::Plus).color(Color::Muted).size(IconSize::Small))
-                .child(Label::new("Add Watcher").color(Color::Muted).size(LabelSize::Small)),
+                .child(
+                    Icon::new(IconName::Plus)
+                        .color(Color::Muted)
+                        .size(IconSize::Small),
+                )
+                .child(
+                    Label::new("Add Watcher")
+                        .color(Color::Muted)
+                        .size(LabelSize::Small),
+                ),
         )
         .tooltip(Tooltip::text(
             "Write a watcher template and open it in the editor",

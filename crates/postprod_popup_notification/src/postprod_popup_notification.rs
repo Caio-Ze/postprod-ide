@@ -194,9 +194,10 @@ impl Render for PopupNotification {
                     .gap_2()
                     .flex_1()
                     .child(
-                        h_flex().h(line_height).justify_center().child(
-                            Icon::new(icon).color(icon_color).size(IconSize::Small),
-                        ),
+                        h_flex()
+                            .h(line_height)
+                            .justify_center()
+                            .child(Icon::new(icon).color(icon_color).size(IconSize::Small)),
                     )
                     .child(
                         v_flex()
@@ -222,15 +223,13 @@ impl Render for PopupNotification {
                             ),
                     ),
             )
-            .child(
-                v_flex().gap_1().items_center().child(
-                    Button::new("dismiss", "Dismiss").full_width().on_click({
-                        cx.listener(move |this, _event, _, cx| {
-                            this.dismiss(cx);
-                        })
-                    }),
-                ),
-            )
+            .child(v_flex().gap_1().items_center().child(
+                Button::new("dismiss", "Dismiss").full_width().on_click({
+                    cx.listener(move |this, _event, _, cx| {
+                        this.dismiss(cx);
+                    })
+                }),
+            ))
     }
 }
 
@@ -278,13 +277,16 @@ mod tests {
             let options_1 = PopupNotification::window_options(display.clone(), 1, cx);
             let options_2 = PopupNotification::window_options(display, 2, cx);
 
-            let WindowBounds::Windowed(bounds_0) = options_0.window_bounds.expect("bounds_0") else {
+            let WindowBounds::Windowed(bounds_0) = options_0.window_bounds.expect("bounds_0")
+            else {
                 panic!("expected Windowed bounds");
             };
-            let WindowBounds::Windowed(bounds_1) = options_1.window_bounds.expect("bounds_1") else {
+            let WindowBounds::Windowed(bounds_1) = options_1.window_bounds.expect("bounds_1")
+            else {
                 panic!("expected Windowed bounds");
             };
-            let WindowBounds::Windowed(bounds_2) = options_2.window_bounds.expect("bounds_2") else {
+            let WindowBounds::Windowed(bounds_2) = options_2.window_bounds.expect("bounds_2")
+            else {
                 panic!("expected Windowed bounds");
             };
 

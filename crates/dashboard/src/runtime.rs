@@ -175,7 +175,9 @@ impl DashboardItem {
                 })
                 .unwrap_or_else(|| fallback_cwd.clone());
             let has_cwd = entry.is_some_and(|e| {
-                e.params.iter().any(|p| p.param_type == dcfg::ParamType::Cwd)
+                e.params
+                    .iter()
+                    .any(|p| p.param_type == dcfg::ParamType::Cwd)
             });
             (all_contexts, profile, cwd, has_cwd)
         };
@@ -184,14 +186,8 @@ impl DashboardItem {
         // effect on Native (Zed agent panel — no `work_dirs` plumbed) or
         // CopyOnly (no spawn at all). Emit a one-shot toast per
         // (entry_id, backend) so users aren't surprised.
-        let is_terminal = !matches!(
-            agent_backend,
-            AgentBackend::Native | AgentBackend::CopyOnly,
-        );
-        if has_cwd_param
-            && !is_terminal
-            && self.mark_cwd_warning_seen(&entry_id, agent_backend)
-        {
+        let is_terminal = !matches!(agent_backend, AgentBackend::Native | AgentBackend::CopyOnly,);
+        if has_cwd_param && !is_terminal && self.mark_cwd_warning_seen(&entry_id, agent_backend) {
             self.workspace
                 .update(cx, |workspace, cx| {
                     workspace.show_toast(
