@@ -13512,13 +13512,13 @@ name = "postprod_dashboard_config"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "dirs",
  "log",
  "postprod_scheduler",
  "serde",
  "tempfile",
  "toml 0.8.23",
  "toml_edit 0.22.27",
+ "util",
 ]
 
 [[package]]
@@ -13604,7 +13604,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "dirs",
  "fs",
  "futures 0.3.32",
  "globset",
@@ -13618,6 +13617,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.17",
  "toml 0.8.23",
+ "util",
 ]
 
 [[package]]

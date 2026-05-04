@@ -209,9 +209,8 @@ fn expand_payload_preserves_unknown_kind_shape() {
 #[test]
 fn resolve_watched_path_expands_tilde() {
     let resolved = resolve_watched_path("~/Downloads");
-    if let Some(home) = dirs::home_dir() {
-        assert_eq!(resolved, home.join("Downloads"));
-    }
+    let home = util::paths::home_dir();
+    assert_eq!(resolved, home.join("Downloads"));
 }
 
 #[test]

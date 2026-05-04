@@ -13,12 +13,13 @@ path = "src/postprod_dashboard_config.rs"
 
 [dependencies]
 anyhow.workspace = true
-dirs.workspace = true
 log.workspace = true
 postprod_scheduler.workspace = true
 serde.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
+util.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+util = { workspace = true, features = ["test-support"] }

@@ -133,15 +133,12 @@ pub fn validate(cfg: &WatcherConfig) -> Result<(), WatcherError> {
 /// process environment. Unknown env vars expand to empty.
 pub fn resolve_watched_path(raw: &str) -> PathBuf {
     let with_home = if let Some(rest) = raw.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            home.join(rest).to_string_lossy().into_owned()
-        } else {
-            raw.to_string()
-        }
+        util::paths::home_dir()
+            .join(rest)
+            .to_string_lossy()
+            .into_owned()
     } else if raw == "~" {
-        dirs::home_dir()
-            .map(|h| h.to_string_lossy().into_owned())
-            .unwrap_or_else(|| raw.to_string())
+        util::paths::home_dir().to_string_lossy().into_owned()
     } else {
         raw.to_string()
     };

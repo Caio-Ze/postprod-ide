@@ -4306,13 +4306,12 @@ automation = "review"
         assert_eq!(cwd, PathBuf::from("/abs/stored"));
     }
 
-    /// Test 7 — resolver expands `~` correctly. Skipped when home_dir is
-    /// unavailable, mirroring `expand_tilde`'s contract.
+    /// Test 7 — resolver expands `~` correctly. Uses `util::paths::home_dir()`
+    /// so the assertion stays apples-to-apples with `expand_tilde`'s
+    /// production-side helper (test-support mode → `/Users/zed`).
     #[test]
     fn test_resolve_automation_cwd_expands_tilde() {
-        let Some(home) = dirs::home_dir() else {
-            return;
-        };
+        let home = util::paths::home_dir();
         let entry = make_entry("x", vec![cwd_param("cwd", "~/sub")]);
         let cwd = resolve_automation_cwd(
             &entry,

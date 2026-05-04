@@ -397,13 +397,11 @@ fn collect_files_by_name(dir: &Path, target_name: &str) -> Vec<PathBuf> {
 }
 
 /// Expand leading `~` to the user's home directory.
-/// Returns the string unchanged if no `~` prefix or if home dir cannot be determined.
+/// Returns the string unchanged if no `~` prefix.
 pub fn expand_tilde(path_str: &str) -> String {
     if path_str.starts_with('~') {
-        match dirs::home_dir() {
-            Some(home) => path_str.replacen('~', &home.to_string_lossy(), 1),
-            None => path_str.to_string(),
-        }
+        let home = util::paths::home_dir();
+        path_str.replacen('~', &home.to_string_lossy(), 1)
     } else {
         path_str.to_string()
     }
@@ -778,11 +776,9 @@ pub fn resolve_context_entry(
         "path" => {
             let raw = entry.path.as_deref().or(Some(entry.label.as_str()))?;
             let path = if let Some(rest) = raw.strip_prefix("~/") {
-                dirs::home_dir()
-                    .unwrap_or_else(|| PathBuf::from("/"))
-                    .join(rest)
+                util::paths::home_dir().join(rest)
             } else if raw == "~" {
-                dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+                util::paths::home_dir().clone()
             } else if Path::new(raw).is_absolute() {
                 PathBuf::from(raw)
             } else {
@@ -1567,18 +1563,26 @@ prompt = "Do the scan"
     }
 
     #[test]
-    fn test_resolve_file_path_tilde() -> Result<(), Box<dyn std::error::Error>> {
-        // Create a file in the home directory's tmp area to test tilde expansion
-        let home = dirs::home_dir().expect("home dir must exist for this test");
-        let test_file = home.join(".postprod-test-resolve-tilde.tmp");
-        std::fs::write(&test_file, "tilde test")?;
-
-        let result = resolve_file_path(Path::new("/unused"), "~/.postprod-test-resolve-tilde.tmp");
-        std::fs::remove_file(&test_file).ok();
-
-        assert!(result.is_ok());
-        assert_eq!(result?, test_file);
-        Ok(())
+    fn test_resolve_file_path_tilde() {
+        // Verify the `~/`-branch via the does-not-exist error path. Picking a
+        // filename that won't exist under any home (real or test-support's
+        // `/Users/zed`) lets us exercise `expand_tilde` + the `Err(...)` shape
+        // without writing to disk — which would fail when `util/test-support`
+        // is unified on (workspace `cargo test`) and home resolves to a path
+        // we have no permission to write under.
+        let result = resolve_file_path(
+            Path::new("/unused"),
+            "~/.postprod-test-resolve-tilde-nonexistent.tmp",
+        );
+        let err = result.expect_err("nonexistent ~/ file must produce does-not-exist error");
+        let expanded = util::paths::home_dir()
+            .join(".postprod-test-resolve-tilde-nonexistent.tmp")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            err.contains(&expanded),
+            "error '{err}' should mention expanded path '{expanded}'"
+        );
     }
 
     #[test]
